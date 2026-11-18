@@ -37,7 +37,7 @@ import {
 type SalesTab = 'invoices' | 'payments' | 'creditMemos' | 'estimates' | 'recurring' | 'collections';
 
 export const InvoicesView: React.FC = () => {
-  const { companyProfile, tableDensity, openDocumentPreview, triggerShortcutNotice } = useAccounting();
+  const { companyProfile, tableDensity, openDocumentPreview, triggerShortcutNotice, setIsStatementOpen } = useAccounting();
   const { activeCompany, hasPermission, authenticated, permissions } = useAuth();
   const currency = companyProfile.currency || 'K';
   const canWrite = hasPermission('invoices:write');
@@ -561,6 +561,227 @@ export const InvoicesView: React.FC = () => {
           await navigator.clipboard?.writeText(inv.invoiceNumber);
           triggerShortcutNotice(`Copied ${inv.invoiceNumber}`);
         },
+      },
+      {
+        id: 'invoice.download-pdf',
+        label: 'Download PDF',
+        icon: <Printer className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'view',
+        groupLabel: 'Document',
+        requiredPermission: 'invoices:read',
+        execute: async () => {
+          await handleOpenPreview(previewKind, inv.id);
+          setTimeout(() => window.print(), 400);
+        },
+      },
+      {
+        id: 'invoice.email',
+        label: 'Email Invoice',
+        icon: <Mail className="w-3.5 h-3.5 text-blue-600" />,
+        group: 'communication',
+        groupLabel: 'Customer communication',
+        requiredPermission: 'invoices:write',
+        isVisible: () => inv.status !== 'voided',
+        execute: async () => {
+          try {
+            await commercialApi.sendInvoiceReminder(inv.id);
+            triggerShortcutNotice(`Logged email delivery for ${inv.invoiceNumber}`);
+            await loadData();
+          } catch (err: any) {
+            setErrorMsg(err?.message || 'Failed to email invoice');
+            throw err;
+          }
+        },
+      },
+      {
+        id: 'invoice.share',
+        label: 'Share Invoice',
+        icon: <Copy className="w-3.5 h-3.5 text-blue-600" />,
+        group: 'communication',
+        groupLabel: 'Customer communication',
+        requiredPermission: 'invoices:read',
+        execute: async () => {
+          const link = `${window.location.origin}/invoices/${inv.id}`;
+          await navigator.clipboard?.writeText(`${inv.invoiceNumber} ${link}`);
+          triggerShortcutNotice(`Copied share link for ${inv.invoiceNumber}`);
+        },
+      },
+      {
+        id: 'invoice.receive-partial',
+        label: 'Receive Partial Payment',
+        icon: <DollarSign className="w-3.5 h-3.5 text-amber-600" />,
+        group: 'process',
+        groupLabel: 'Payments',
+        requiredPermission: 'invoices:write',
+        isVisible: () => canReceivePayment,
+        isEnabled: () => (canReceivePayment ? true : { enabled: false, reason: 'No open balance to receive' }),
+        execute: async () => { openReceivePaymentForInvoice(inv); },
+      },
+      {
+        id: 'invoice.payment-history',
+        label: 'View Payment History',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'view',
+        groupLabel: 'Payments',
+        requiredPermission: 'invoices:read',
+        execute: async () => {
+          const related = payments.filter((p: any) => (p.allocations || []).some((a: any) => a.invoiceNumber === inv.invoiceNumber));
+          if (related.length === 0) {
+            triggerShortcutNotice(`No payments recorded for ${inv.invoiceNumber}`);
+            return;
+          }
+          const summary = related.map((p: any) => `${p.paymentNumber}: ${formatCurrency(p.amount, currency)}`).join('\n');
+          window.alert(`Payment history for ${inv.invoiceNumber}:\n${summary}`);
+        },
+      },
+      {
+        id: 'invoice.customer-statement',
+        label: 'View Customer Statement',
+        icon: <FileText className="w-3.5 h-3.5 text-blue-600" />,
+        group: 'view',
+        groupLabel: 'Customer',
+        requiredPermission: 'invoices:read',
+        execute: async () => { setIsStatementOpen(true); },
+      },
+      {
+        id: 'invoice.create-credit-note',
+        label: 'Create Credit Note',
+        icon: <FileText className="w-3.5 h-3.5 text-amber-600" />,
+        group: 'process',
+        groupLabel: 'Adjustments',
+        requiredPermission: 'invoices:write',
+        execute: async () => {
+          setCmCustomerId(inv.customerId);
+          setIsCreditMemoOpen(true);
+        },
+      },
+      {
+        id: 'invoice.process-refund',
+        label: 'Process Refund',
+        icon: <DollarSign className="w-3.5 h-3.5 text-rose-600" />,
+        group: 'danger',
+        groupLabel: 'Sensitive operations',
+        destructive: true,
+        requiredPermission: 'invoices:write',
+        confirmation: { title: `Refund ${inv.invoiceNumber}`, message: 'Process a refund via credit note / payment reversal workflow.', confirmLabel: 'Proceed', destructive: true },
+        execute: async () => {
+          setCmCustomerId(inv.customerId);
+          setIsCreditMemoOpen(true);
+          triggerShortcutNotice('Opened credit memo for refund processing');
+        },
+      },
+      {
+        id: 'invoice.record-note',
+        label: 'Record Internal Note',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'admin',
+        groupLabel: 'Other',
+        requiredPermission: 'invoices:write',
+        execute: async () => {
+          const note = window.prompt(`Internal note for ${inv.invoiceNumber}:`);
+          if (note === null) return;
+          const trimmed = note.trim();
+          if (!trimmed) return;
+          try {
+            await commercialApi.updateInvoiceNotes(inv.id, trimmed);
+            triggerShortcutNotice(`Recorded internal note on ${inv.invoiceNumber}`);
+            await loadData();
+          } catch (err: any) {
+            setErrorMsg(err?.message || 'Failed to record note');
+            throw err;
+          }
+        },
+      },
+      {
+        id: 'invoice.audit-history',
+        label: 'View Audit History',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'view',
+        groupLabel: 'Audit',
+        requiredPermission: 'audit:read',
+        execute: async () => {
+          try {
+            const res = await fetch(`/api/audit/logs?limit=200`, { credentials: 'include' });
+            const data = await res.json();
+            const logs = (data.logs || []).filter((l: any) => l.tableName === 'invoices' && l.recordId === inv.id);
+            if (logs.length === 0) {
+              triggerShortcutNotice(`No audit entries for ${inv.invoiceNumber}`);
+              return;
+            }
+            const summary = logs.map((l: any) => `${l.occurredAt} ${l.action} by ${l.actorUsername || 'system'}`).join('\n');
+            window.alert(`Audit history for ${inv.invoiceNumber}:\n${summary}`);
+          } catch (err: any) {
+            setErrorMsg(err?.message || 'Failed to load audit history');
+          }
+        },
+      },
+      {
+        id: 'invoice.duplicate',
+        label: 'Duplicate Invoice',
+        icon: <Copy className="w-3.5 h-3.5 text-blue-600" />,
+        group: 'process',
+        groupLabel: 'Document',
+        requiredPermission: 'invoices:write',
+        confirmation: { title: `Duplicate ${inv.invoiceNumber}`, message: 'Create a new draft invoice copying all lines from this document.', confirmLabel: 'Duplicate' },
+        execute: async () => {
+          try {
+            const lines = (inv.lines || []).map((l: any) => ({
+              itemId: l.itemId,
+              description: l.description,
+              quantity: String(l.quantity),
+              rate: String(l.rate),
+              unitCost: String(l.unitCost),
+              taxable: l.taxable,
+            }));
+            const created = await commercialApi.createInvoice({
+              customerId: inv.customerId,
+              invoiceDate: new Date().toISOString().slice(0, 10),
+              isSalesReceipt: inv.isSalesReceipt,
+              taxRate: String(inv.taxRate),
+              currencyCode: inv.currencyCode,
+              exchangeRate: inv.exchangeRate,
+              notes: inv.notes,
+              lines: lines.length ? lines : [{ description: 'Duplicated invoice', quantity: '1', rate: '0', unitCost: '0', taxable: false }],
+            });
+            triggerShortcutNotice(`Duplicated ${inv.invoiceNumber} -> ${created.invoiceNumber}`);
+            await loadData();
+          } catch (err: any) {
+            setErrorMsg(err?.message || 'Failed to duplicate invoice');
+            throw err;
+          }
+        },
+      },
+      {
+        id: 'invoice.edit-draft',
+        label: 'Edit Draft Invoice',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'admin',
+        groupLabel: 'Document',
+        requiredPermission: 'invoices:write',
+        isVisible: () => inv.status === 'draft',
+        isEnabled: () => (inv.status === 'draft' ? true : { enabled: false, reason: 'Only draft invoices can be edited' }),
+        execute: async () => {
+          triggerShortcutNotice('Draft editing backend support is planned; use Duplicate for now', 'warning');
+        },
+      },
+      {
+        id: 'invoice.related-sales-order',
+        label: 'View Related Sales Order',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'view',
+        groupLabel: 'Related',
+        requiredPermission: 'invoices:read',
+        isVisible: () => false,
+        execute: async () => {},
+      },
+      {
+        id: 'invoice.related-job-order',
+        label: 'View Related Job Order',
+        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+        group: 'view',
+        groupLabel: 'Related',
+        requiredPermission: 'invoices:read',
+        execute: async () => { triggerShortcutNotice('Opening Examination module for related job orders'); },
       },
     ];
   };

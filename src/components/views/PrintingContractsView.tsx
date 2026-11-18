@@ -28,6 +28,12 @@ import {
   FileText,
   Paperclip,
   Upload,
+  Pencil,
+  DollarSign,
+  Ban,
+  Repeat,
+  Play,
+  Trash2,
 } from 'lucide-react';
 import {
   buildPaperStockFromInventoryItem,
@@ -539,6 +545,24 @@ export const PrintingContractsView: React.FC = () => {
     if (nextPending) defs.push({ id: 'deduct-next', label: `Complete & Deduct Assessment #${nextPending.assessmentNumber}`, icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Assessment', requiredPermission: 'printing:write', execute: async () => { setDeductionTarget({ contractId: contract.id, milestone: nextPending }); setExamBatchNote(''); } });
     defs.push({ id: 'open-exams', label: 'Open Examination Module', icon: <BookOpen className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setCurrentView('examinations') });
     defs.push({ id: 'copy-contract', label: 'Copy Contract #', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'printing:read', execute: async () => { await navigator.clipboard?.writeText(contract.contractNumber); triggerShortcutNotice(`Copied ${contract.contractNumber}`); } });
+    defs.push({ id: 'contract.view', label: 'View Contract', icon: <Eye className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setSelectedContractId(contract.id) });
+    defs.push({ id: 'contract.view-assessments', label: 'View Covered Assessments', icon: <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setSelectedContractId(contract.id) });
+    defs.push({ id: 'contract.prepaid', label: `View Prepaid Amount (${formatCurrency(contract.totalPrepaidAmount, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Prepaid amount: ${formatCurrency(contract.totalPrepaidAmount, currency)}`) });
+    defs.push({ id: 'contract.remaining', label: `View Remaining Balance (${formatCurrency(contract.remainingBalance, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Remaining balance: ${formatCurrency(contract.remainingBalance, currency)}`) });
+    defs.push({ id: 'contract.production-progress', label: 'View Production Progress', icon: <BookOpen className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Production', requiredPermission: 'printing:read', execute: async () => setCurrentView('examinations') });
+    defs.push({ id: 'contract.wallet-tx', label: 'View Wallet Transactions', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice('Wallet transaction history is available in the contract ledger') });
+    defs.push({ id: 'contract.history', label: 'View Contract History', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Contract ${contract.contractNumber} history: ${contract.status}`) });
+    if (contract.status === 'active') {
+      defs.push({ id: 'contract.amend', label: 'Amend Contract', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => triggerShortcutNotice('Contract amendment backend support is planned', 'warning') });
+      defs.push({ id: 'contract.cancel', label: 'Cancel Contract', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:write', confirmation: { title: `Cancel ${contract.contractNumber}`, message: 'Cancel this contract using the authorized workflow.', confirmLabel: 'Cancel Contract', destructive: true }, execute: async () => triggerShortcutNotice('Contract cancellation backend support is planned', 'warning') });
+    }
+    if (contract.status !== 'active') {
+      defs.push({ id: 'contract.activate', label: 'Activate Contract', icon: <Play className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => triggerShortcutNotice('Contract activation backend support is planned', 'warning') });
+      defs.push({ id: 'contract.renew', label: 'Renew Contract', icon: <Repeat className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => triggerShortcutNotice('Contract renewal backend support is planned', 'warning') });
+    }
+    defs.push({ id: 'contract.edit-draft', label: 'Edit Draft', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', isVisible: () => contract.status !== 'active', execute: async () => triggerShortcutNotice('Draft editing backend support is planned', 'warning') });
+    defs.push({ id: 'contract.add-assessment', label: 'Add Assessment', icon: <Plus className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Assessments', requiredPermission: 'printing:write', execute: async () => triggerShortcutNotice('Assessment management backend support is planned', 'warning') });
+    defs.push({ id: 'contract.remove-assessment', label: 'Remove Eligible Assessment', icon: <Trash2 className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Assessments', destructive: true, requiredPermission: 'printing:write', execute: async () => triggerShortcutNotice('Assessment removal backend support is planned', 'warning') });
     const ctx = buildContractActionContext(contract, null);
     const resolved = resolveActions(defs, ctx);
     if (resolved.length === 0) return null;

@@ -235,6 +235,14 @@ export const commercialApi = {
     emitAccountingUpdated();
     return normalizeInvoice(d.invoice);
   },
+  async updateInvoiceNotes(id: number, note: string) {
+    const d = await requestJson<any>(`/api/invoices/${id}/notes`, {
+      method: 'PATCH',
+      body: JSON.stringify({ note }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
   async voidInvoice(id: number, reason?: string) {
     const d = await requestJson<any>(`/api/invoices/${id}/void`, {
       method: 'POST',

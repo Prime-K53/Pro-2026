@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { writeAuditLog } from '../audit.ts';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
 import { hasPermission } from '../permissions.ts';
@@ -252,6 +253,45 @@ export function createSalesRouter(db: ServerDatabase): Router {
         invoice: { ...result.invoice, invoice_number: result.invoice.invoiceNumber },
         idempotentReplay: result.idempotentReplay,
       });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.patch('/invoices/:id/notes', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+    try {
+      const invoiceId = Number(req.params.id);
+      if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+        return res.status(400).json({ error: 'Invalid invoice id' });
+      }
+      const note = String(req.body?.note ?? req.body?.notes ?? '').trim();
+      if (!note) return res.status(400).json({ error: 'Note is required' });
+      const result = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const found = await tx.query<{ id: number; notes: string | null }>(
+          `SELECT id, notes FROM invoices WHERE company_id = $1 AND id = $2`,
+          [req.auth!.companyId, invoiceId]
+        );
+        if (found.rows.length === 0) return null;
+        const existing = found.rows[0].notes || '';
+        const updated = existing ? `${existing}\n[${new Date().toISOString()}] ${note}` : `[${new Date().toISOString()}] ${note}`;
+        await tx.query(
+          `UPDATE invoices SET notes = $1 WHERE company_id = $2 AND id = $3`,
+          [updated, req.auth!.companyId, invoiceId]
+        );
+        await writeAuditLog(tx, {
+          companyId: req.auth!.companyId,
+          actorUserId: req.auth!.userId ?? null,
+          actorUsername: req.auth!.username ?? null,
+          action: 'invoice.note',
+          tableName: 'invoices',
+          recordId: invoiceId,
+          newValues: { note },
+          source: 'api',
+        });
+        return { ok: true };
+      });
+      if (!result) return res.status(404).json({ error: 'Invoice not found in active company' });
+      return res.json(result);
     } catch (err) {
       return handleSalesError(res, err);
     }
