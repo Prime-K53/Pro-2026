@@ -183,6 +183,12 @@ interface AccountingContextType {
     contractId: string,
     ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
   ) => void;
+  cancelPrintingContract: (contractId: string, reason?: string) => void;
+  activatePrintingContract: (contractId: string) => void;
+  renewPrintingContract: (contractId: string) => void;
+  amendPrintingContract: (contractId: string, updates: Partial<PrintingContract>) => void;
+  addContractAssessment: (contractId: string, milestone: ContractAssessmentMilestone) => void;
+  removeContractAssessment: (contractId: string, assessmentNumber: number) => void;
   completeContractAssessment: (
     contractId: string,
     assessmentNumber: number,
@@ -2181,6 +2187,72 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     );
   };
 
+  const cancelPrintingContract = (contractId: string, reason?: string) => {
+    setPrintingContracts(prev =>
+      prev.map(c =>
+        c.id === contractId
+          ? { ...c, status: 'cancelled', notes: reason ? `${c.notes || ''}\nCancelled: ${reason}`.trim() : c.notes }
+          : c
+      )
+    );
+    logAuditAction('CANCEL_PRINTING_CONTRACT', 'PrintingContract', contractId, reason || 'Cancelled from contract register');
+  };
+
+  const activatePrintingContract = (contractId: string) => {
+    setPrintingContracts(prev =>
+      prev.map(c => (c.id === contractId ? { ...c, status: 'active' } : c))
+    );
+    logAuditAction('ACTIVATE_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Activated from contract register');
+  };
+
+  const renewPrintingContract = (contractId: string) => {
+    const source = printingContracts.find(c => c.id === contractId);
+    if (!source) return;
+    const renewed: PrintingContract = {
+      ...source,
+      id: `ctr-${Date.now()}`,
+      contractNumber: `CTR-${new Date().getFullYear()}-${String(printingContracts.length + 1).padStart(2, '0')}`,
+      status: 'active',
+      remainingBalance: source.totalPrepaidAmount,
+      completedAssessments: 0,
+      assessments: source.assessments.map(a => ({ ...a, status: 'pending', completedDate: undefined, linkedInvoiceId: undefined, backendInvoiceId: undefined, linkedInvoiceNumber: undefined })),
+    };
+    setPrintingContracts(prev => [renewed, ...prev]);
+    logAuditAction('RENEW_PRINTING_CONTRACT', 'PrintingContract', renewed.id, `Renewed from ${source.contractNumber}`);
+  };
+
+  const amendPrintingContract = (contractId: string, updates: Partial<PrintingContract>) => {
+    setPrintingContracts(prev =>
+      prev.map(c => (c.id === contractId ? { ...c, ...updates } : c))
+    );
+    logAuditAction('AMEND_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Amended from contract register');
+  };
+
+  const addContractAssessment = (contractId: string, milestone: ContractAssessmentMilestone) => {
+    setPrintingContracts(prev =>
+      prev.map(c =>
+        c.id === contractId
+          ? { ...c, assessments: [...c.assessments, milestone], totalAssessments: (c.totalAssessments + 1) as 2 | 3 | 4 | 5 }
+          : c
+      )
+    );
+    logAuditAction('ADD_CONTRACT_ASSESSMENT', 'PrintingContract', contractId, `Added assessment #${milestone.assessmentNumber}`);
+  };
+
+  const removeContractAssessment = (contractId: string, assessmentNumber: number) => {
+    setPrintingContracts(prev =>
+      prev.map(c =>
+        c.id === contractId
+          ? {
+              ...c,
+              assessments: c.assessments.filter(a => a.assessmentNumber !== assessmentNumber),
+            }
+          : c
+      )
+    );
+    logAuditAction('REMOVE_CONTRACT_ASSESSMENT', 'PrintingContract', contractId, `Removed assessment #${assessmentNumber}`);
+  };
+
   const linkQuickPrintInvoice = (
     jobId: string,
     ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
@@ -2873,6 +2945,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         updateContractAssessment,
         linkContractDepositInvoice,
         completeContractAssessment,
+        cancelPrintingContract,
+        activatePrintingContract,
+        renewPrintingContract,
+        amendPrintingContract,
+        addContractAssessment,
+        removeContractAssessment,
         getAssessmentActualStats,
         linkQuickPrintInvoice,
         linkExamPapersInvoice,
