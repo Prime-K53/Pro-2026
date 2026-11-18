@@ -1,0 +1,1232 @@
+[
+  {
+    "name": "1920",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "document": {
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "bodyScrollWidth": 1920
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 1920,
+        "top": 0,
+        "width": 1920,
+        "height": 108,
+        "visible": true
+      },
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "primaryHeight": 62,
+      "toolbarHeight": 46,
+      "toolbarScrollWidth": 1920,
+      "toolbarClientWidth": 1920
+    },
+    "nav": [
+      {
+        "text": "File",
+        "active": null,
+        "rect": {
+          "left": 313,
+          "right": 375,
+          "top": 12,
+          "width": 62,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Edit",
+        "active": null,
+        "rect": {
+          "left": 377,
+          "right": 442,
+          "top": 12,
+          "width": 65,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Lists",
+        "active": null,
+        "rect": {
+          "left": 444,
+          "right": 513,
+          "top": 12,
+          "width": 69,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Activities",
+        "active": null,
+        "rect": {
+          "left": 515,
+          "right": 615,
+          "top": 12,
+          "width": 100,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reports",
+        "active": null,
+        "rect": {
+          "left": 617,
+          "right": 708,
+          "top": 12,
+          "width": 91,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Banking",
+        "active": null,
+        "rect": {
+          "left": 710,
+          "right": 801,
+          "top": 12,
+          "width": 92,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Agent",
+        "active": null,
+        "rect": {
+          "left": 803,
+          "right": 916,
+          "top": 12,
+          "width": 113,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Help",
+        "active": null,
+        "rect": {
+          "left": 918,
+          "right": 988,
+          "top": 12,
+          "width": 70,
+          "height": 38,
+          "visible": true
+        }
+      }
+    ],
+    "navCompact": null,
+    "quickButtons": [
+      {
+        "text": "+ Invoice",
+        "menu": null,
+        "rect": {
+          "left": 12,
+          "right": 107,
+          "top": 69,
+          "width": 95,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Receive Payment",
+        "menu": null,
+        "rect": {
+          "left": 111,
+          "right": 252,
+          "top": 69,
+          "width": 142,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Enter Bill",
+        "menu": null,
+        "rect": {
+          "left": 256,
+          "right": 348,
+          "top": 69,
+          "width": 92,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Write Check",
+        "menu": null,
+        "rect": {
+          "left": 352,
+          "right": 465,
+          "top": 69,
+          "width": 113,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Run Payroll",
+        "menu": null,
+        "rect": {
+          "left": 480,
+          "right": 585,
+          "top": 69,
+          "width": 105,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Receipt OCR",
+        "menu": null,
+        "rect": {
+          "left": 589,
+          "right": 720,
+          "top": 69,
+          "width": 131,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reconcile",
+        "menu": null,
+        "rect": {
+          "left": 724,
+          "right": 823,
+          "top": 69,
+          "width": 100,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Journal Entry",
+        "menu": null,
+        "rect": {
+          "left": 827,
+          "right": 943,
+          "top": 69,
+          "width": 115,
+          "height": 32,
+          "visible": true
+        }
+      }
+    ],
+    "quickMenuTrigger": null,
+    "search": {
+      "text": "Search records…SearchCtrl+K",
+      "iconOnly": false
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 1670,
+        "right": 1908,
+        "top": 10,
+        "width": 238,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 1705,
+        "right": 1908,
+        "top": 68,
+        "width": 203,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "document": {
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "bodyScrollWidth": 1440
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 1440,
+        "top": 0,
+        "width": 1440,
+        "height": 108,
+        "visible": true
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "primaryHeight": 62,
+      "toolbarHeight": 46,
+      "toolbarScrollWidth": 1440,
+      "toolbarClientWidth": 1440
+    },
+    "nav": [
+      {
+        "text": "File",
+        "active": null,
+        "rect": {
+          "left": 313,
+          "right": 375,
+          "top": 12,
+          "width": 62,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Edit",
+        "active": null,
+        "rect": {
+          "left": 375,
+          "right": 440,
+          "top": 12,
+          "width": 65,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Lists",
+        "active": null,
+        "rect": {
+          "left": 441,
+          "right": 509,
+          "top": 12,
+          "width": 69,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Activities",
+        "active": null,
+        "rect": {
+          "left": 510,
+          "right": 609,
+          "top": 12,
+          "width": 100,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reports",
+        "active": null,
+        "rect": {
+          "left": 609,
+          "right": 700,
+          "top": 12,
+          "width": 91,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Banking",
+        "active": null,
+        "rect": {
+          "left": 699,
+          "right": 791,
+          "top": 12,
+          "width": 92,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Agent",
+        "active": null,
+        "rect": {
+          "left": 790,
+          "right": 903,
+          "top": 12,
+          "width": 113,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Help",
+        "active": null,
+        "rect": {
+          "left": 902,
+          "right": 972,
+          "top": 12,
+          "width": 70,
+          "height": 38,
+          "visible": true
+        }
+      }
+    ],
+    "navCompact": null,
+    "quickButtons": [
+      {
+        "text": "+ Invoice",
+        "menu": null,
+        "rect": {
+          "left": 12,
+          "right": 107,
+          "top": 69,
+          "width": 95,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Receive Payment",
+        "menu": null,
+        "rect": {
+          "left": 111,
+          "right": 252,
+          "top": 69,
+          "width": 142,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Enter Bill",
+        "menu": null,
+        "rect": {
+          "left": 256,
+          "right": 348,
+          "top": 69,
+          "width": 92,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Write Check",
+        "menu": null,
+        "rect": {
+          "left": 352,
+          "right": 465,
+          "top": 69,
+          "width": 113,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Run Payroll",
+        "menu": null,
+        "rect": {
+          "left": 480,
+          "right": 585,
+          "top": 69,
+          "width": 105,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Receipt OCR",
+        "menu": null,
+        "rect": {
+          "left": 589,
+          "right": 720,
+          "top": 69,
+          "width": 131,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reconcile",
+        "menu": null,
+        "rect": {
+          "left": 724,
+          "right": 823,
+          "top": 69,
+          "width": 100,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Journal Entry",
+        "menu": null,
+        "rect": {
+          "left": 827,
+          "right": 943,
+          "top": 69,
+          "width": 115,
+          "height": 32,
+          "visible": true
+        }
+      }
+    ],
+    "quickMenuTrigger": null,
+    "search": {
+      "text": "Search records…SearchCtrl+K",
+      "iconOnly": false
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 1190,
+        "right": 1428,
+        "top": 10,
+        "width": 238,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 1225,
+        "right": 1428,
+        "top": 68,
+        "width": 203,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "1366",
+    "viewport": {
+      "width": 1366,
+      "height": 768
+    },
+    "document": {
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "bodyScrollWidth": 1366
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 1366,
+        "top": 0,
+        "width": 1366,
+        "height": 108,
+        "visible": true
+      },
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "primaryHeight": 62,
+      "toolbarHeight": 46,
+      "toolbarScrollWidth": 1366,
+      "toolbarClientWidth": 1366
+    },
+    "nav": [
+      {
+        "text": "File",
+        "active": null,
+        "rect": {
+          "left": 313,
+          "right": 354,
+          "top": 12,
+          "width": 41,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Edit",
+        "active": null,
+        "rect": {
+          "left": 356,
+          "right": 400,
+          "top": 12,
+          "width": 44,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Lists",
+        "active": null,
+        "rect": {
+          "left": 402,
+          "right": 450,
+          "top": 12,
+          "width": 48,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Activities",
+        "active": null,
+        "rect": {
+          "left": 452,
+          "right": 531,
+          "top": 12,
+          "width": 79,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reports",
+        "active": null,
+        "rect": {
+          "left": 533,
+          "right": 603,
+          "top": 12,
+          "width": 70,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Banking",
+        "active": null,
+        "rect": {
+          "left": 605,
+          "right": 675,
+          "top": 12,
+          "width": 71,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Agent",
+        "active": null,
+        "rect": {
+          "left": 677,
+          "right": 769,
+          "top": 12,
+          "width": 92,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Help",
+        "active": null,
+        "rect": {
+          "left": 771,
+          "right": 820,
+          "top": 12,
+          "width": 49,
+          "height": 38,
+          "visible": true
+        }
+      }
+    ],
+    "navCompact": null,
+    "quickButtons": [
+      {
+        "text": "+ Invoice",
+        "menu": null,
+        "rect": {
+          "left": 12,
+          "right": 107,
+          "top": 69,
+          "width": 95,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Receive Payment",
+        "menu": null,
+        "rect": {
+          "left": 111,
+          "right": 252,
+          "top": 69,
+          "width": 142,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Enter Bill",
+        "menu": null,
+        "rect": {
+          "left": 256,
+          "right": 348,
+          "top": 69,
+          "width": 92,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Write Check",
+        "menu": null,
+        "rect": {
+          "left": 352,
+          "right": 465,
+          "top": 69,
+          "width": 113,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Run Payroll",
+        "menu": null,
+        "rect": {
+          "left": 480,
+          "right": 585,
+          "top": 69,
+          "width": 105,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "AI Receipt OCR",
+        "menu": null,
+        "rect": {
+          "left": 589,
+          "right": 720,
+          "top": 69,
+          "width": 131,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reconcile",
+        "menu": null,
+        "rect": {
+          "left": 724,
+          "right": 823,
+          "top": 69,
+          "width": 100,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Journal Entry",
+        "menu": null,
+        "rect": {
+          "left": 827,
+          "right": 943,
+          "top": 69,
+          "width": 115,
+          "height": 32,
+          "visible": true
+        }
+      }
+    ],
+    "quickMenuTrigger": null,
+    "search": {
+      "text": "Search records…SearchCtrl+K",
+      "iconOnly": false
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 1116,
+        "right": 1354,
+        "top": 10,
+        "width": 238,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 1151,
+        "right": 1354,
+        "top": 68,
+        "width": 203,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "1024",
+    "viewport": {
+      "width": 1024,
+      "height": 800
+    },
+    "document": {
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "bodyScrollWidth": 1024
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 1024,
+        "top": 0,
+        "width": 1024,
+        "height": 108,
+        "visible": true
+      },
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "primaryHeight": 62,
+      "toolbarHeight": 46,
+      "toolbarScrollWidth": 1024,
+      "toolbarClientWidth": 1024
+    },
+    "nav": [
+      {
+        "text": "File",
+        "active": null,
+        "rect": {
+          "left": 108,
+          "right": 149,
+          "top": 12,
+          "width": 41,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Lists",
+        "active": null,
+        "rect": {
+          "left": 151,
+          "right": 199,
+          "top": 12,
+          "width": 48,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Reports",
+        "active": null,
+        "rect": {
+          "left": 201,
+          "right": 271,
+          "top": 12,
+          "width": 70,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "Banking",
+        "active": null,
+        "rect": {
+          "left": 273,
+          "right": 343,
+          "top": 12,
+          "width": 71,
+          "height": 38,
+          "visible": true
+        }
+      },
+      {
+        "text": "More",
+        "active": null,
+        "rect": {
+          "left": 345,
+          "right": 416,
+          "top": 12,
+          "width": 71,
+          "height": 38,
+          "visible": true
+        }
+      }
+    ],
+    "navCompact": null,
+    "quickButtons": [
+      {
+        "text": "+ Invoice",
+        "menu": null,
+        "rect": {
+          "left": 12,
+          "right": 107,
+          "top": 69,
+          "width": 95,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Receive Payment",
+        "menu": null,
+        "rect": {
+          "left": 111,
+          "right": 252,
+          "top": 69,
+          "width": 142,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Enter Bill",
+        "menu": null,
+        "rect": {
+          "left": 256,
+          "right": 348,
+          "top": 69,
+          "width": 92,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Write Check",
+        "menu": null,
+        "rect": {
+          "left": 352,
+          "right": 465,
+          "top": 69,
+          "width": 113,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "More",
+        "menu": "menu",
+        "rect": {
+          "left": 469,
+          "right": 560,
+          "top": 69,
+          "width": 91,
+          "height": 32,
+          "visible": true
+        }
+      }
+    ],
+    "quickMenuTrigger": null,
+    "search": {
+      "text": "Search records…SearchCtrl+K",
+      "iconOnly": false
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 944,
+        "right": 1012,
+        "top": 10,
+        "width": 68,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 809,
+        "right": 1012,
+        "top": 68,
+        "width": 203,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "768",
+    "viewport": {
+      "width": 768,
+      "height": 1024
+    },
+    "document": {
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "bodyScrollWidth": 768
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 768,
+        "top": 0,
+        "width": 768,
+        "height": 104,
+        "visible": true
+      },
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "primaryHeight": 60,
+      "toolbarHeight": 44,
+      "toolbarScrollWidth": 768,
+      "toolbarClientWidth": 768
+    },
+    "nav": [
+      {
+        "text": "Menu",
+        "active": null,
+        "rect": {
+          "left": 94,
+          "right": 167,
+          "top": 11,
+          "width": 73,
+          "height": 38,
+          "visible": true
+        }
+      }
+    ],
+    "navCompact": "Menu",
+    "quickButtons": [
+      {
+        "text": "+ Invoice",
+        "menu": null,
+        "rect": {
+          "left": 8,
+          "right": 103,
+          "top": 66,
+          "width": 95,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "Receive Payment",
+        "menu": null,
+        "rect": {
+          "left": 107,
+          "right": 248,
+          "top": 66,
+          "width": 142,
+          "height": 32,
+          "visible": true
+        }
+      },
+      {
+        "text": "More",
+        "menu": "menu",
+        "rect": {
+          "left": 252,
+          "right": 343,
+          "top": 66,
+          "width": 91,
+          "height": 32,
+          "visible": true
+        }
+      }
+    ],
+    "quickMenuTrigger": null,
+    "search": {
+      "text": null,
+      "iconOnly": true
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 692,
+        "right": 760,
+        "top": 9,
+        "width": 68,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 557,
+        "right": 760,
+        "top": 65,
+        "width": 203,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "document": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "bodyScrollWidth": 390
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 390,
+        "top": 0,
+        "width": 390,
+        "height": 104,
+        "visible": true
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "primaryHeight": 60,
+      "toolbarHeight": 44,
+      "toolbarScrollWidth": 390,
+      "toolbarClientWidth": 390
+    },
+    "nav": [],
+    "navCompact": null,
+    "quickButtons": [],
+    "quickMenuTrigger": "Quick Actions",
+    "search": {
+      "text": null,
+      "iconOnly": true
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 342,
+        "right": 382,
+        "top": 9,
+        "width": 40,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 242,
+        "right": 382,
+        "top": 65,
+        "width": 140,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  },
+  {
+    "name": "360",
+    "viewport": {
+      "width": 360,
+      "height": 800
+    },
+    "document": {
+      "scrollWidth": 360,
+      "clientWidth": 360,
+      "bodyScrollWidth": 360
+    },
+    "header": {
+      "rect": {
+        "left": 0,
+        "right": 360,
+        "top": 0,
+        "width": 360,
+        "height": 104,
+        "visible": true
+      },
+      "scrollWidth": 360,
+      "clientWidth": 360,
+      "primaryHeight": 60,
+      "toolbarHeight": 44,
+      "toolbarScrollWidth": 360,
+      "toolbarClientWidth": 360
+    },
+    "nav": [],
+    "navCompact": null,
+    "quickButtons": [],
+    "quickMenuTrigger": "Quick Actions",
+    "search": {
+      "text": null,
+      "iconOnly": true
+    },
+    "user": {
+      "label": "Account menu for Chanda Mwansa (Director), Administrator",
+      "name": "Chanda Mwansa (Director)",
+      "role": "Administrator",
+      "nameColor": "rgb(255, 255, 255)",
+      "roleColor": "rgb(200, 214, 228)",
+      "rect": {
+        "left": 312,
+        "right": 352,
+        "top": 9,
+        "width": 40,
+        "height": 42,
+        "visible": true
+      }
+    },
+    "company": {
+      "name": "Prime Educational Press Ltd",
+      "meta": "TPIN 1004829104",
+      "title": "Prime Educational Press Ltd · TPIN 1004829104 · Currency ZMW · Fiscal year starts January",
+      "rect": {
+        "left": 212,
+        "right": 352,
+        "top": 65,
+        "width": 140,
+        "height": 34,
+        "visible": true
+      }
+    },
+    "activeSidebarItem": "Flow Navigator",
+    "headerBackground": "rgb(16, 46, 73)",
+    "toolbarBackground": "rgb(23, 63, 96)",
+    "overflowElements": []
+  }
+]

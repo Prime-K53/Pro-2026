@@ -1,0 +1,92 @@
+import express, { Express, Request, Response, NextFunction } from 'express';
+import { ServerDatabase } from './db.ts';
+import { logger, newCorrelationId } from './logger.ts';
+import { rateLimit } from './rateLimiter.ts';
+import { createAuthRouter } from './routes/authRoutes.ts';
+import { createCompanyRouter } from './routes/companyRoutes.ts';
+import { createUserRouter } from './routes/userRoutes.ts';
+import { createAccountingRouter } from './routes/accountingRoutes.ts';
+import { createSalesRouter } from './routes/salesRoutes.ts';
+import { createPurchasingRouter } from './routes/purchasingRoutes.ts';
+import { createBankingRouter } from './routes/bankingRoutes.ts';
+import { createFinancialManagementRouter } from './routes/financialManagementRoutes.ts';
+import { createApprovalRouter } from './routes/approvalRoutes.ts';
+import { createReportsRouter } from './routes/reportsRoutes.ts';
+import { createBackupRouter } from './routes/backupRoutes.ts';
+import { createReportSchedulingRouter } from './routes/reportSchedulingRoutes.ts';
+import { createPrintingRouter } from './routes/printingRoutes.ts';
+import { createMigrationRouter } from './routes/migrationRoutes.ts';
+import { createDocumentsRouter } from './routes/documentsRoutes.ts';
+import { createProtectedBusinessRouter } from './routes/protectedRoutes.ts';
+
+export function createApiExpressApp(db: ServerDatabase): Express {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '6mb' }));
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const cid = (req.headers['x-request-id'] as string) || newCorrelationId();
+    (req as any).correlationId = cid;
+    res.setHeader('x-request-id', cid);
+    const start = Date.now();
+    res.on('finish', () => {
+      logger.info('http_request', { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - start }, cid);
+    });
+    next();
+  });
+
+  // Expose minimal non-secret client config for Supabase JS signInWithPassword / recovery
+  app.get('/api/health', async (_req: Request, res: Response) => {
+    try {
+      await db.withSystemDb(async (tx: any) => {
+        await tx.query('SELECT 1');
+      });
+      res.json({ status: 'ok', service: 'printing-management-system', database: 'ok' });
+    } catch (err: any) {
+      logger.error('health_db_failure', { error: err?.message || String(err) });
+      res.status(503).json({ status: 'degraded', service: 'printing-management-system', database: 'error', error: err?.message });
+    }
+  });
+
+  app.get('/api/auth/public-config', (_req: Request, res: Response) => {
+    res.json({
+      supabaseUrl: db.config.supabaseUrl || null,
+      supabasePublishableKey: db.config.supabasePublishableKey || null,
+    });
+  });
+
+  if (db.config.isProduction) {
+    app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }), createAuthRouter(db));
+    app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 600 }));
+  } else {
+    app.use('/api/auth', createAuthRouter(db));
+  }
+  app.use('/api/companies', createCompanyRouter(db));
+  app.use('/api', createUserRouter(db));
+  app.use('/api', createAccountingRouter(db));
+  app.use('/api', createSalesRouter(db));
+  app.use('/api', createPurchasingRouter(db));
+  app.use('/api', createBankingRouter(db));
+  app.use('/api', createFinancialManagementRouter(db));
+  app.use('/api', createApprovalRouter(db));
+  app.use('/api', createReportsRouter(db));
+  app.use('/api', createBackupRouter(db));
+  app.use('/api', createReportSchedulingRouter(db));
+  app.use('/api', createPrintingRouter(db));
+  app.use('/api', createMigrationRouter(db));
+  app.use('/api', createDocumentsRouter(db));
+  app.use('/api', createProtectedBusinessRouter(db));
+
+  // Fallthrough 404 for unknown API paths so they never hit Vite SPA HTML fallback
+  app.use('/api', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'API route not found' });
+  });
+
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    const cid = (req as any).correlationId;
+    logger.error('unhandled_error', { path: req.path, method: req.method, error: err?.message || String(err) }, cid);
+    res.status(500).json({ error: 'Internal server error', requestId: cid });
+  });
+
+  return app;
+}
+

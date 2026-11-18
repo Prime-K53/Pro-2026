@@ -1,0 +1,412 @@
+[
+  {
+    "name": "Header renders with 62px primary row",
+    "status": "Passed",
+    "detail": "62px"
+  },
+  {
+    "name": "Header renders with 46px toolbar",
+    "status": "Passed",
+    "detail": "46px"
+  },
+  {
+    "name": "1920 shows full navigation",
+    "status": "Passed",
+    "detail": "8 triggers"
+  },
+  {
+    "name": "1920 shows all quick actions",
+    "status": "Passed",
+    "detail": "8 actions"
+  },
+  {
+    "name": "Company name comes from server",
+    "status": "Passed",
+    "detail": "Prime Educational Press Ltd"
+  },
+  {
+    "name": "Company TPIN comes from server",
+    "status": "Passed",
+    "detail": "TPIN 1004829104"
+  },
+  {
+    "name": "TPIN metadata visible at 1920",
+    "status": "Passed",
+    "detail": "flex"
+  },
+  {
+    "name": "Demo EIN is not rendered",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "User name has readable contrast",
+    "status": "Passed",
+    "detail": "13.92:1"
+  },
+  {
+    "name": "User role has readable contrast",
+    "status": "Passed",
+    "detail": "9.41:1"
+  },
+  {
+    "name": "All header buttons have accessible names",
+    "status": "Passed",
+    "detail": "[]"
+  },
+  {
+    "name": "All nav triggers expose menu semantics",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "File menu opens",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "File menu focuses first item",
+    "status": "Passed",
+    "detail": "{\"tag\":\"button\",\"id\":null,\"role\":\"menuitem\",\"label\":null,\"text\":\"Download Browser Working Copy (.json)\",\"insideDrawer\":false}"
+  },
+  {
+    "name": "ArrowDown moves focus",
+    "status": "Passed",
+    "detail": "Download Browser Working Copy (.json) -> Restore Browser Working Copy"
+  },
+  {
+    "name": "End moves to last item",
+    "status": "Passed",
+    "detail": "Reload Demo Lists in Browser"
+  },
+  {
+    "name": "Home returns to first item",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Escape closes File menu",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Escape restores focus to trigger",
+    "status": "Passed",
+    "detail": "{\"tag\":\"button\",\"id\":\"hdr-nav-file-button\",\"role\":null,\"label\":null,\"text\":\"File\",\"insideDrawer\":false}"
+  },
+  {
+    "name": "File trigger reports collapsed state",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Lists > Customer Center navigates",
+    "status": "Passed",
+    "detail": "Customer Center"
+  },
+  {
+    "name": "Active menu indicator follows view",
+    "status": "Passed",
+    "detail": "true"
+  },
+  {
+    "name": "Reports > Report Center navigates",
+    "status": "Passed",
+    "detail": "Financial Reports"
+  },
+  {
+    "name": "Reports trigger is marked active",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Activities > Create Invoice opens modal",
+    "status": "Passed",
+    "detail": "Create InvoiceBill a customer for printing products or servicesLine ItemsItem / DescriptionQtyRateAmountTax-- Custom line --A4 80gsm White Bond Paper (K0.00)Custom School Exercise Book (K7,000.00)Blue"
+  },
+  {
+    "name": "Invoice modal closes with Escape",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "File > IIF/OFX import opens modal",
+    "status": "Passed",
+    "detail": "QuickBooks IIF & OFX Migration Wizard[Intuit Interchange Format Parser]Select QuickBooks Import Source:Chart of Accounts IIF Export!ACCNT headers & standard balancesCustomer Directory IIF Export!CUST headers with address"
+  },
+  {
+    "name": "AI > Receipt OCR opens modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Edit > General Journal opens modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Banking > Reconcile navigates",
+    "status": "Passed",
+    "detail": "Bank Reconciliation"
+  },
+  {
+    "name": "Banking trigger is marked active",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Search button opens Command Palette",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Command Palette closes with Escape",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Ctrl+K opens Command Palette",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "User menu opens",
+    "status": "Passed",
+    "detail": "[\"Manage Users & Permissions\",\"Company Settings\",\"Command PaletteCtrl+K\",\"Print Current ViewCtrl+P\",\"Sign Out\"]"
+  },
+  {
+    "name": "User menu focuses a menu item",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "User menu retains theme switcher",
+    "status": "Passed",
+    "detail": "[\"Classic Blue\",\"Modern Slate\",\"Midnight Dark\"]"
+  },
+  {
+    "name": "User menu retains account actions",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "User menu retains help shortcuts",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Multi-company login shows company switcher",
+    "status": "Passed",
+    "detail": "2 options"
+  },
+  {
+    "name": "Company switch updates header from server",
+    "status": "Passed",
+    "detail": "{\"name\":\"Copperbelt Printers & Stationery\",\"title\":\"Copperbelt Printers & Stationery · TPIN 2009914451 · Currency ZMW · Fiscal year starts January\"}"
+  },
+  {
+    "name": "Company switch restores original company",
+    "status": "Passed",
+    "detail": "Prime Educational Press Ltd"
+  },
+  {
+    "name": "Midnight theme applies dark class",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Midnight primary uses darker navy",
+    "status": "Passed",
+    "detail": "rgb(10, 27, 43)"
+  },
+  {
+    "name": "Midnight toolbar uses dark navy",
+    "status": "Passed",
+    "detail": "rgb(16, 46, 73)"
+  },
+  {
+    "name": "Slate theme restores navy header",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Classic theme restores light root",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+D toggles Midnight",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+D returns to Classic",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+N opens invoice modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+B opens bill modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+W opens check modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Alt+P opens Payroll Center",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "1024 shows priority menus plus More",
+    "status": "Passed",
+    "detail": "File,Lists,Reports,Banking,More"
+  },
+  {
+    "name": "1024 shows primary actions plus More",
+    "status": "Passed",
+    "detail": "+ Invoice,Receive Payment,Enter Bill,Write Check,More"
+  },
+  {
+    "name": "1024 has no horizontal overflow",
+    "status": "Passed",
+    "detail": "{\"nav\":[\"File\",\"Lists\",\"Reports\",\"Banking\",\"More\"],\"quick\":[\"+ Invoice\",\"Receive Payment\",\"Enter Bill\",\"Write Check\",\"More\"],\"quickMenu\":null,\"doc\":[1024,1024],\"header\":[1024,1024],\"toolbar\":[1024,1024]}"
+  },
+  {
+    "name": "1024 More menu opens with keyboard",
+    "status": "Passed",
+    "detail": "{\"tag\":\"button\",\"id\":null,\"role\":\"menuitem\",\"label\":null,\"text\":\"Company Preferences & EIN\",\"insideDrawer\":false}"
+  },
+  {
+    "name": "More menu contains overflow destinations",
+    "status": "Passed",
+    "detail": "EditCompany Preferences & EINMake General Journal EntriesActivitiesCreate InvoiceAlt+NReceive Customer PaymentsEnter Bil"
+  },
+  {
+    "name": "More menu Escape restores focus",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "768 shows Menu dropdown",
+    "status": "Passed",
+    "detail": "Menu"
+  },
+  {
+    "name": "768 shows two primary actions plus More",
+    "status": "Passed",
+    "detail": "+ Invoice,Receive Payment,More"
+  },
+  {
+    "name": "768 uses icon-only search",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "768 has no horizontal overflow",
+    "status": "Passed",
+    "detail": "{\"nav\":[\"Menu\"],\"quick\":[\"+ Invoice\",\"Receive Payment\",\"More\"],\"searchIconOnly\":true,\"doc\":[768,768],\"header\":[768,768],\"toolbar\":[768,768]}"
+  },
+  {
+    "name": "768 Menu dropdown contains every section",
+    "status": "Passed",
+    "detail": "925 chars"
+  },
+  {
+    "name": "768 quick-action More contains remaining actions",
+    "status": "Passed",
+    "detail": "More actionsEnter Vendor BillAlt+BWrite CheckAlt+WRun PayrollAlt+PAI Receipt OCR ScannerReconcile Bank StatementMake General Journal Entry"
+  },
+  {
+    "name": "390 removes desktop navigation",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "390 shows one Quick Actions menu",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "390 hides TPIN metadata",
+    "status": "Passed",
+    "detail": "none"
+  },
+  {
+    "name": "390 keeps authoritative company name",
+    "status": "Passed",
+    "detail": "Prime Educational Press Ltd"
+  },
+  {
+    "name": "390 header heights stay within tokens",
+    "status": "Passed",
+    "detail": "{\"navCount\":0,\"quickMenu\":\"Quick Actions\",\"quickButtons\":0,\"searchIconOnly\":true,\"company\":\"Prime Educational Press Ltd\",\"companyMetaDisplay\":\"none\",\"primaryHeight\":60,\"toolbarHeight\":44,\"doc\":[390,390],\"header\":[390,390],\"toolbar\":[390,390]}"
+  },
+  {
+    "name": "390 has no horizontal overflow",
+    "status": "Passed",
+    "detail": "{\"navCount\":0,\"quickMenu\":\"Quick Actions\",\"quickButtons\":0,\"searchIconOnly\":true,\"company\":\"Prime Educational Press Ltd\",\"companyMetaDisplay\":\"none\",\"primaryHeight\":60,\"toolbarHeight\":44,\"doc\":[390,390],\"header\":[390,390],\"toolbar\":[390,390]}"
+  },
+  {
+    "name": "390 Quick Actions menu contains all actions",
+    "status": "Passed",
+    "detail": "Quick ActionsCreate InvoiceAlt+NReceive Customer PaymentEnter Vendor BillAlt+BWrite CheckAlt+WRun PayrollAlt+PAI Receipt OCR ScannerReconcile Bank StatementMake General Journal Entry"
+  },
+  {
+    "name": "390 Quick Actions can open invoice modal",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Drawer exposes dialog semantics",
+    "status": "Passed",
+    "detail": "{\"exists\":true,\"role\":\"dialog\",\"modal\":\"true\",\"label\":\"Navigation menu\",\"activeLabel\":\"Close navigation menu\",\"bodyOverflow\":\"hidden\"}"
+  },
+  {
+    "name": "Drawer moves focus to close button",
+    "status": "Passed",
+    "detail": "Close navigation menu"
+  },
+  {
+    "name": "Drawer locks background scroll",
+    "status": "Passed",
+    "detail": "hidden"
+  },
+  {
+    "name": "Drawer Tab focus stays inside",
+    "status": "Passed",
+    "detail": "{\"trappedForward\":{\"tag\":\"button\",\"id\":null,\"role\":null,\"label\":\"Company Settings\",\"text\":\"Company Settings\",\"insideDrawer\":true},\"trappedBackward\":{\"tag\":\"button\",\"id\":null,\"role\":null,\"label\":\"Customer Center\",\"text\":\"Customer Center\",\"insideDrawer\":true}}"
+  },
+  {
+    "name": "Drawer Escape closes",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Drawer focus returns to header toggle",
+    "status": "Passed",
+    "detail": "{\"tag\":\"button\",\"id\":null,\"role\":null,\"label\":\"Open navigation menu\",\"text\":\"\",\"insideDrawer\":false}"
+  },
+  {
+    "name": "1280 shows full navigation and brand text",
+    "status": "Passed",
+    "detail": "{\"navCount\":8,\"brandText\":\"block\",\"userCopy\":\"flex\",\"companyMeta\":\"flex\",\"doc\":[1280,1280],\"header\":[1280,1280],\"toolbar\":[1280,1280],\"overflow\":0}"
+  },
+  {
+    "name": "1280 has no horizontal overflow",
+    "status": "Passed",
+    "detail": "{\"navCount\":8,\"brandText\":\"block\",\"userCopy\":\"flex\",\"companyMeta\":\"flex\",\"doc\":[1280,1280],\"header\":[1280,1280],\"toolbar\":[1280,1280],\"overflow\":0}"
+  },
+  {
+    "name": "Sign Out returns to the authentication portal",
+    "status": "Passed",
+    "detail": "PM Printing Management System Multi-Company Bookkeeping & Print Production Control Sign in with your company credentials. Server-side PostgreSQL Row-Level Security keeps each printing house and accoun"
+  }
+]

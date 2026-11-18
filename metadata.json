@@ -1,0 +1,6 @@
+{
+  "name": "SlowBooks Pro 2026",
+  "description": "Local-first desktop and server accounting suite featuring double-entry bookkeeping, unlimited invoicing, perpetual inventory, US payroll with tax forms, and AI agent integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

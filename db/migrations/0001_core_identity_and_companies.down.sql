@@ -1,0 +1,30 @@
+-- Rollback 0001: Drop Core Identity, Company Management & Isolation Infrastructure
+
+DROP TABLE IF EXISTS qbo_mappings CASCADE;
+DROP TABLE IF EXISTS accountants_copies CASCADE;
+DROP TABLE IF EXISTS backups CASCADE;
+DROP TABLE IF EXISTS txn_classes CASCADE;
+DROP TABLE IF EXISTS payment_terms CASCADE;
+DROP TABLE IF EXISTS request_keys CASCADE;
+DROP TABLE IF EXISTS company_settings CASCADE;
+DROP TABLE IF EXISTS user_preferences CASCADE;
+DROP TABLE IF EXISTS login_attempts CASCADE;
+DROP TABLE IF EXISTS api_tokens CASCADE;
+DROP TABLE IF EXISTS company_memberships CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS companies CASCADE;
+
+DROP FUNCTION IF EXISTS set_updated_at() CASCADE;
+DROP FUNCTION IF EXISTS app_rls_allowed(BIGINT) CASCADE;
+DROP FUNCTION IF EXISTS app_current_company_id() CASCADE;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pms_app_role') THEN
+    REVOKE ALL ON SCHEMA public FROM pms_app_role;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM pms_app_role;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM pms_app_role;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM pms_app_role;
+  END IF;
+END
+$$;

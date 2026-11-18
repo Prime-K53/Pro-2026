@@ -1,0 +1,222 @@
+import fs from 'fs';
+import path from 'path';
+import { Router, Request, Response } from 'express';
+import { ServerDatabase } from '../db.ts';
+import { createAuthMiddleware } from '../middleware/auth.ts';
+import { hasPermission } from '../permissions.ts';
+import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
+import {
+  deleteAttachmentRecord,
+  generateInvoiceFromWorkflow,
+  getAttachmentForServing,
+  getDocumentPreviewPayload,
+  listAttachments,
+  listCompanyDocuments,
+  UnifiedDocumentKind,
+} from '../services/documentsService.ts';
+
+function toActor(req: Request): ActorContext {
+  const auth = req.auth!;
+  return { userId: auth.userId, username: auth.username, role: auth.role };
+}
+
+function handleDocumentsError(res: Response, err: unknown): Response {
+  if (err instanceof AccountingError) {
+    return res.status(err.statusCode).json({ error: err.message, code: err.code });
+  }
+  const pgCode = (err as any)?.code;
+  const msg = (err as any)?.message || 'Documents operation failed';
+  if (pgCode === '23505' || pgCode === '23514' || pgCode === '23001') {
+    return res.status(409).json({ error: msg, code: pgCode });
+  }
+  console.error('[Documents Route Error]', err);
+  return res.status(500).json({ error: msg });
+}
+
+const VALID_KINDS: UnifiedDocumentKind[] = [
+  'invoice',
+  'sales_receipt',
+  'estimate',
+  'credit_memo',
+  'payment_receipt',
+  'bill',
+  'purchase_order',
+  'contract',
+  'exam_batch',
+  'printing_job',
+  'attachment',
+];
+
+export function createDocumentsRouter(db: ServerDatabase): Router {
+  const router = Router();
+  const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
+
+  router.use(requireAuth, rejectCrossCompanyParams);
+
+  // Unified All Documents list across commercial, contracts, exams, jobs, and stored files
+  router.get('/documents', requirePermission('attachments:read'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const includeCosts = hasPermission(auth.role, 'estimates:read_costs');
+      const canReadBills = hasPermission(auth.role, 'bills:read');
+      const data = await db.withCompanyDb(auth.companyId, tx =>
+        listCompanyDocuments(tx, auth.companyId, {
+          category: req.query.category ? String(req.query.category) : undefined,
+          kind: req.query.kind ? String(req.query.kind) : undefined,
+          search: req.query.search ? String(req.query.search) : undefined,
+          includeCosts,
+          canReadBills,
+        })
+      );
+      return res.json({ companyId: auth.companyId, ...data });
+    } catch (err) {
+      return handleDocumentsError(res, err);
+    }
+  });
+
+  // Detailed Document Preview Payload
+  router.get(
+    '/documents/preview/:kind/:id',
+    requirePermission('attachments:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const kind = String(req.params.kind) as UnifiedDocumentKind;
+        const id = Number(req.params.id);
+        if (!VALID_KINDS.includes(kind)) {
+          return res.status(400).json({ error: `Unsupported document kind '${kind}'` });
+        }
+        if (!Number.isInteger(id) || id <= 0) {
+          return res.status(400).json({ error: 'Invalid document id' });
+        }
+        const includeCosts = hasPermission(auth.role, 'estimates:read_costs');
+        const canReadBills = hasPermission(auth.role, 'bills:read');
+
+        const preview = await db.withCompanyDb(auth.companyId, tx =>
+          getDocumentPreviewPayload(tx, auth.companyId, kind, id, {
+            includeCosts,
+            canReadBills,
+            attachmentsDir: db.config.attachmentsDir,
+          })
+        );
+        return res.json({ preview });
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  // Generate a real GL-posted invoice from Contracts, Examination batches, Quick Print, or custom workflow
+  router.post(
+    '/documents/generate-invoice',
+    requirePermission('invoices:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const body = req.body || {};
+        const idempotencyKey =
+          (req.headers['idempotency-key'] as string | undefined) || body.idempotencyKey || null;
+
+        const result = await db.withCompanyDb(auth.companyId, tx =>
+          generateInvoiceFromWorkflow(tx, auth.companyId, toActor(req), {
+            ...body,
+            idempotencyKey,
+          })
+        );
+
+        return res.status(result.idempotentReplay ? 200 : 201).json({
+          invoice: { ...result.invoice, invoice_number: result.invoice.invoiceNumber },
+          idempotentReplay: result.idempotentReplay,
+        });
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  // List stored file attachments in active company
+  router.get('/attachments', requirePermission('attachments:read'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const entityType = req.query.entityType ? String(req.query.entityType) : undefined;
+      const entityId = req.query.entityId ? Number(req.query.entityId) : undefined;
+      const attachments = await db.withCompanyDb(auth.companyId, tx =>
+        listAttachments(tx, auth.companyId, { entityType, entityId })
+      );
+      return res.json({ companyId: auth.companyId, attachments });
+    } catch (err) {
+      return handleDocumentsError(res, err);
+    }
+  });
+
+  // Inline preview endpoint for stored files (PDF, image, text/CSV/JSON)
+  router.get(
+    '/attachments/:id/preview',
+    requirePermission('attachments:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const attachmentId = Number(req.params.id);
+        if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+          return res.status(400).json({ error: 'Invalid attachment id' });
+        }
+
+        const fileRow = await db.withCompanyDb(auth.companyId, tx =>
+          getAttachmentForServing(tx, auth.companyId, attachmentId)
+        );
+        if (!fileRow) {
+          return res.status(404).json({ error: 'Attachment not found in active company' });
+        }
+
+        const filePath = path.join(
+          db.config.attachmentsDir,
+          `company_${auth.companyId}`,
+          path.basename(fileRow.storage_key)
+        );
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: 'Attachment payload missing from company vault' });
+        }
+
+        res.setHeader('Content-Type', fileRow.content_type || 'application/octet-stream');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="${path.basename(fileRow.original_name)}"`
+        );
+        return res.send(fs.readFileSync(filePath));
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  // Delete an uploaded attachment (audited)
+  router.delete(
+    '/attachments/:id',
+    requirePermission('attachments:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const attachmentId = Number(req.params.id);
+        if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+          return res.status(400).json({ error: 'Invalid attachment id' });
+        }
+
+        const result = await db.withCompanyDb(auth.companyId, tx =>
+          deleteAttachmentRecord(
+            tx,
+            auth.companyId,
+            toActor(req),
+            attachmentId,
+            db.config.attachmentsDir
+          )
+        );
+        return res.json(result);
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  return router;
+}

@@ -1,0 +1,605 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAccounting } from '../../context/AccountingContext';
+import { useAuth } from '../../context/AuthContext';
+import { ACCOUNTING_UPDATED_EVENT } from '../../services/accountingApi';
+import { ApiBankTransaction, commercialApi } from '../../services/commercialApi';
+import { financeControlsApi } from '../../services/financeControlsApi';
+import type { DashboardAlerts } from '../../services/financeControlsApi';
+import { MonthlyCashflowChart, ExpenseBreakdownDonut } from '../charts/FinancialCharts';
+import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
+import {
+  TrendingUp,
+  DollarSign,
+  FileText,
+  Receipt,
+  ArrowUpRight,
+  ArrowDownRight,
+  CheckCircle2,
+  Landmark,
+  BarChart3,
+  PieChart,
+  Loader2,
+  Bell,
+  AlertTriangle,
+  RefreshCw,
+} from 'lucide-react';
+
+export const DashboardView: React.FC = () => {
+  const {
+    companyProfile,
+    setCurrentView,
+    setIsNewInvoiceOpen,
+    setIsEnterBillOpen,
+  } = useAccounting();
+  const { activeCompany, hasPermission } = useAuth();
+  const currency = getCurrencySymbol(companyProfile.currency);
+  const canReadReports = hasPermission('reports:read');
+
+  const [overview, setOverview] = useState<any | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [recentBankTxns, setRecentBankTxns] = useState<ApiBankTransaction[]>([]);
+  const [alerts, setAlerts] = useState<DashboardAlerts | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setAlertsError(null);
+    try {
+      const [ov, txns, alertFeed] = await Promise.all([
+        commercialApi.getAnalyticsOverview().catch(err => { setOverviewError(err?.message || 'Dashboard data unavailable'); return null; }),
+        commercialApi.listBankTransactions({ status: 'posted' }).catch(() => []),
+        canReadReports
+          ? financeControlsApi.dashboardAlerts().catch(err => {
+              setAlertsError(err?.message || 'Operational alerts unavailable');
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+      if (ov) { setOverview(ov); setOverviewError(null); }
+      setRecentBankTxns(txns.slice(0, 6));
+      setAlerts(alertFeed);
+      setLastUpdated(new Date().toLocaleTimeString());
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCompany?.id, canReadReports]);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const onUpdated = () => loadDashboard();
+    window.addEventListener(ACCOUNTING_UPDATED_EVENT, onUpdated);
+    return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, onUpdated);
+  }, [loadDashboard]);
+
+  const kpis = overview?.kpis || {
+    ytdRevenue: 0,
+    ytdCogs: 0,
+    ytdExpenses: 0,
+    ytdNetIncome: 0,
+    netProfitMarginPct: 0,
+    totalBankCash: 0,
+    creditCardDebt: 0,
+    netLiquidCash: 0,
+    totalArOutstanding: 0,
+    totalApOutstanding: 0,
+  };
+
+  const totalIncome = Number(kpis.ytdRevenue || 0);
+  const totalCogs = Number(kpis.ytdCogs || 0);
+  const totalExpenses = Number(kpis.ytdExpenses || 0);
+  const grossProfit = totalIncome - totalCogs;
+  const netIncome = Number(kpis.ytdNetIncome || 0);
+  const netMargin = Number(kpis.netProfitMarginPct || 0);
+  const totalCash = Number(kpis.totalBankCash || 0);
+  const totalAr = Number(kpis.totalArOutstanding || 0);
+  const totalAp = Number(kpis.totalApOutstanding || 0);
+
+  const expenseSlices = [
+    {
+      label: 'Cost of Goods Sold',
+      amount: totalCogs || 1,
+      color: '#2563eb',
+      strokeClass: 'stroke-blue-600',
+      dotClass: 'bg-blue-600',
+    },
+    {
+      label: 'Operating Expenses',
+      amount: totalExpenses || 1,
+      color: '#10b981',
+      strokeClass: 'stroke-emerald-500',
+      dotClass: 'bg-emerald-500',
+    },
+    {
+      label: 'Credit Card & Short-Term Debt',
+      amount: Math.max(0, Number(kpis.creditCardDebt || 0)),
+      color: '#f59e0b',
+      strokeClass: 'stroke-amber-500',
+      dotClass: 'bg-amber-500',
+    },
+  ].filter(s => s.amount > 0);
+
+  const topDebtors: Array<{ customerId: number; name: string; balance: number }> = overview?.topDebtors || [];
+  const topCreditors: Array<{ vendorId: number; name: string; balance: number }> = overview?.topCreditors || [];
+
+  return (
+    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      {/* View Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
+            <span className="bg-gradient-to-r from-brand-700 to-brand-500 bg-clip-text text-transparent">Executive Financial Dashboard</span>
+            {loading && <Loader2 className="w-4 h-4 animate-spin text-brand-600" />}
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Live PostgreSQL double-entry metrics · {activeCompany?.name || companyProfile.name} · Accrual Basis
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {lastUpdated && (
+            <span className="hidden sm:inline text-[11px] text-slate-400 font-mono">Updated {lastUpdated}</span>
+          )}
+          <button
+            onClick={loadDashboard}
+            disabled={loading}
+            className="btn btn-secondary !p-2"
+            title="Refresh dashboard"
+            aria-label="Refresh dashboard"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => setIsNewInvoiceOpen(true)}
+            className="btn btn-primary !text-xs"
+          >
+            + Create Invoice
+          </button>
+          <button
+            onClick={() => setIsEnterBillOpen(true)}
+            className="btn !bg-slate-900 !text-white hover:!bg-slate-800 !text-xs dark:!bg-white dark:!text-slate-900 dark:hover:!bg-slate-200"
+          >
+            + Enter Bill
+          </button>
+        </div>
+      </div>
+
+      {/* KPI Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="surface surface-hover p-5 overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-400 to-emerald-600" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Total Revenue (YTD)</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+              <TrendingUp className="w-4 h-4" />
+            </span>
+          </div>
+          {loading && !overview ? (
+            <div className="skeleton h-7 w-32 mt-3" />
+          ) : (
+            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
+              {formatCurrency(totalIncome, currency)}
+            </div>
+          )}
+          <div className="mt-2 text-xs text-slate-500 flex items-center gap-1.5">
+            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Gross Margin</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums">
+              {totalIncome > 0 ? ((grossProfit / totalIncome) * 100).toFixed(1) : '0.0'}%
+            </span>
+          </div>
+        </div>
+
+        <div className="surface surface-hover p-5 overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Cost of Goods Sold</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400">
+              <Receipt className="w-4 h-4" />
+            </span>
+          </div>
+          {loading && !overview ? (
+            <div className="skeleton h-7 w-32 mt-3" />
+          ) : (
+            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
+              {formatCurrency(totalCogs, currency)}
+            </div>
+          )}
+          <div className="mt-2 text-xs text-slate-500">
+            Perpetual inventory &amp; BOM consumption
+          </div>
+        </div>
+
+        <div className="surface surface-hover p-5 overflow-hidden">
+          <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${netIncome >= 0 ? 'from-brand-400 to-brand-600' : 'from-rose-400 to-rose-600'}`} />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Net Operating Income</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
+              <DollarSign className="w-4 h-4" />
+            </span>
+          </div>
+          {loading && !overview ? (
+            <div className="skeleton h-7 w-32 mt-3" />
+          ) : (
+            <div
+              className={`mt-2 font-mono text-2xl font-bold tabular-nums ${
+                netIncome >= 0 ? 'text-brand-600 dark:text-brand-400' : 'text-rose-600 dark:text-rose-400'
+              }`}
+            >
+              {formatCurrency(netIncome, currency)}
+            </div>
+          )}
+          <div className="mt-2 text-xs text-slate-500 flex items-center gap-1.5">
+            <span>Net Margin</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800 dark:text-slate-200">
+              {netMargin.toFixed(1)}%
+            </span>
+          </div>
+        </div>
+
+        <div className="surface surface-hover p-5 overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-slate-400 to-slate-600" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">Liquid Bank Cash</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-400">
+              <Landmark className="w-4 h-4" />
+            </span>
+          </div>
+          {loading && !overview ? (
+            <div className="skeleton h-7 w-32 mt-3" />
+          ) : (
+            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
+              {formatCurrency(totalCash, currency)}
+            </div>
+          )}
+          <div className="mt-2 text-xs text-slate-500">
+            Net Liquid: <span className="font-mono font-semibold">{formatCurrency(kpis.netLiquidCash, currency)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Operational alert feed from /api/dashboard/alerts */}
+      {alertsError && (
+        <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start justify-between gap-2">
+          <span className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{alertsError}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => loadDashboard()}
+            disabled={loading}
+            className="shrink-0 underline font-semibold disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {overviewError && (
+        <div
+          role="alert"
+          className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start justify-between gap-2"
+        >
+          <span className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              {overviewError} — the figures below are shown as zero rather than a partial total.
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => loadDashboard()}
+            disabled={loading}
+            className="shrink-0 underline font-semibold disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {alerts && alerts.alerts.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+              <Bell className="w-4 h-4 text-amber-600" />
+              <span>Operational Alerts</span>
+              <span className="text-[11px] font-mono text-slate-400">
+                {alerts.alerts.length} active
+              </span>
+            </h2>
+            <button
+              onClick={() => setCurrentView('finance-controls')}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Open alert center →
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {alerts.alerts.slice(0, 6).map(a => {
+              const key = String(a.key || '').toLowerCase();
+              const target = key.includes('pay')
+                ? 'bills'
+                : key.includes('receiv') || key.includes('invoice')
+                ? 'invoices'
+                : key.includes('stock') || key.includes('inventory')
+                ? 'inventory'
+                : key.includes('bank') || key.includes('recon')
+                ? 'reconciliation'
+                : 'reports';
+              const critical = a.severity === 'critical';
+              const warning = a.severity === 'warning';
+              return (
+                <button
+                  key={a.key}
+                  onClick={() => setCurrentView(target)}
+                  className={`text-left p-4 rounded-xl border bg-white dark:bg-slate-900 transition-colors hover:border-slate-400 dark:hover:border-slate-600 ${
+                    critical
+                      ? 'border-rose-300 dark:border-rose-900'
+                      : warning
+                      ? 'border-amber-300 dark:border-amber-900'
+                      : 'border-slate-200 dark:border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        critical ? 'text-rose-500' : warning ? 'text-amber-500' : 'text-blue-500'
+                      }`}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{a.title}</div>
+                      {a.detail && (
+                        <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{a.detail}</div>
+                      )}
+                      <div className="mt-1.5 flex items-center gap-2 text-[11px] font-mono text-slate-500">
+                        {typeof a.count === 'number' && <span>{a.count} item(s)</span>}
+                        {a.amount && <span className="font-bold">{formatCurrency(Number(a.amount), currency)}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {alerts && alerts.alerts.length === 0 && (
+        <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/20 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>No operational alerts. Receivables, payables, stock and period controls are clear.</span>
+        </div>
+      )}
+
+      {/* Primary Interactive Financial Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        <div className="lg:col-span-7 surface p-6 flex flex-col justify-between space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-blue-600" />
+              <h2 className="font-bold text-sm text-slate-900 dark:text-white">
+                Revenue, Expenses &amp; Cashflow Trend
+              </h2>
+            </div>
+            <button
+              onClick={() => setCurrentView('reports')}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0"
+            >
+              Open P&amp;L Report →
+            </button>
+          </div>
+
+          <MonthlyCashflowChart
+            totalIncome={totalIncome}
+            totalOutflows={totalCogs + totalExpenses}
+            currency={currency}
+          />
+        </div>
+
+        <div className="lg:col-span-5 surface p-6 flex flex-col justify-between space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <PieChart className="w-4 h-4 text-emerald-600" />
+              <h2 className="font-bold text-sm text-slate-900 dark:text-white">
+                Cost &amp; Operating Expense Mix
+              </h2>
+            </div>
+            <span className="text-[11px] font-mono text-slate-400">YTD GL</span>
+          </div>
+
+          <ExpenseBreakdownDonut slices={expenseSlices} currency={currency} />
+        </div>
+      </div>
+
+      {/* Two-Column Operational Ledger Split */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="surface p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+            <h2 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+              <FileText className="w-4 h-4 text-blue-600" />
+              <span>Receivables (A/R) vs Payables (A/P)</span>
+            </h2>
+            <button
+              onClick={() => setCurrentView('reports')}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+            >
+              Full Aging Report →
+            </button>
+          </div>
+
+          <div className="space-y-4 text-xs font-mono">
+            <div>
+              <div className="flex justify-between font-semibold mb-1.5">
+                <span className="text-slate-700 dark:text-slate-300 font-sans">
+                  Open Receivables Owed by Customers
+                </span>
+                <span className="text-blue-600 dark:text-blue-400 font-bold tabular-nums">
+                  {formatCurrency(totalAr, currency)}
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 rounded transition-all duration-300"
+                  style={{ width: `${Math.min(100, (totalAr / (totalAr + totalAp || 1)) * 100)}%` }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between font-semibold mb-1.5">
+                <span className="text-slate-700 dark:text-slate-300 font-sans">
+                  Open Payables Owed to Suppliers
+                </span>
+                <span className="text-rose-600 dark:text-rose-400 font-bold tabular-nums">
+                  {formatCurrency(totalAp, currency)}
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
+                <div
+                  className="h-full bg-rose-500 rounded transition-all duration-300"
+                  style={{ width: `${Math.min(100, (totalAp / (totalAr + totalAp || 1)) * 100)}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between font-sans">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-semibold">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Net AR − AP Working Capital Delta</span>
+              </div>
+              <span className="font-mono font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+                {formatCurrency(totalAr - totalAp, currency, { showSign: true })}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div>
+              <div className="text-xs font-semibold text-slate-500 mb-2">Top Debtors (AR)</div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                {topDebtors.length === 0 ? (
+                  <div className="text-slate-400 py-2">No open receivables</div>
+                ) : (
+                  topDebtors.map(c => (
+                    <div key={c.customerId} className="py-1.5 flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-slate-800 dark:text-slate-200">{c.name}</span>
+                      <span className="font-mono font-bold text-blue-600 tabular-nums shrink-0">
+                        {formatCurrency(c.balance, currency)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-semibold text-slate-500 mb-2">Top Creditors (AP)</div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                {topCreditors.length === 0 ? (
+                  <div className="text-slate-400 py-2">No open payables</div>
+                ) : (
+                  topCreditors.map(v => (
+                    <div key={v.vendorId} className="py-1.5 flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-slate-800 dark:text-slate-200">{v.name}</span>
+                      <span className="font-mono font-bold text-rose-600 tabular-nums shrink-0">
+                        {formatCurrency(v.balance, currency)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Recent Bank Register Feed */}
+        <div className="surface p-6 space-y-5 flex flex-col justify-between">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <h2 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-emerald-600" />
+                <span>Recent Check Register &amp; Bank Feed</span>
+              </h2>
+              <button
+                onClick={() => setCurrentView('banking')}
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline whitespace-nowrap"
+              >
+                Open Register →
+              </button>
+            </div>
+
+            <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+              {recentBankTxns.length === 0 ? (
+                <div className="py-8 text-center text-slate-400">
+                  No posted bank transactions yet. Record checks, deposits, or payments in Banking.
+                </div>
+              ) : (
+                recentBankTxns.map(tx => (
+                  <div key={tx.id} className="py-2.5 first:pt-0 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                          tx.amount > 0
+                            ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400'
+                            : 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400'
+                        }`}
+                      >
+                        {tx.amount > 0 ? <ArrowDownRight className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200 truncate">{tx.payee}</div>
+                        <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                          <span className="font-mono">{tx.date}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono truncate">{tx.refNumber || tx.type}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div
+                        className={`font-mono font-bold tabular-nums ${
+                          tx.amount > 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-slate-900 dark:text-white'
+                        }`}
+                      >
+                        {formatCurrency(tx.amount, currency, { showSign: true })}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {tx.cleared ? 'Cleared ✓' : 'Uncleared'}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-slate-800 dark:text-slate-200">Cash Accounts Summary</div>
+              <div className="text-[11px] text-slate-500 truncate">
+                {(overview?.cashAccounts || []).length} active cash/card GL accounts tracked
+              </div>
+            </div>
+            <button
+              onClick={() => setCurrentView('reconciliation')}
+              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-colors whitespace-nowrap shrink-0"
+            >
+              Reconcile Bank
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+

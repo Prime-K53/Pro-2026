@@ -1,0 +1,32 @@
+[
+  {
+    "name": "File > Download triggers the working-copy export",
+    "status": "Passed",
+    "detail": "PMS_working-copy_Prime_Educational_Press_Ltd_2026-11-18.json"
+  },
+  {
+    "name": "Export shows its confirmation notice",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Exported working copy is tagged and populated",
+    "status": "Passed",
+    "detail": "Printing-Management-System-2026-v2, 4 invoices, 4 customers"
+  },
+  {
+    "name": "Restore command targets the hidden file input",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "Restore reads the working-copy file and confirms",
+    "status": "Passed",
+    "detail": ""
+  },
+  {
+    "name": "File > Reload Demo Lists runs behind its confirmation",
+    "status": "Passed",
+    "detail": ""
+  }
+]

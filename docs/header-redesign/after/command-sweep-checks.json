@@ -1,0 +1,42 @@
+[
+  {
+    "name": "File > Print View invokes the print dialog",
+    "status": "Passed",
+    "detail": "1 call(s)"
+  },
+  {
+    "name": "Edit > Company Preferences navigates to settings",
+    "status": "Passed",
+    "detail": "Company Settings"
+  },
+  {
+    "name": "Lists > Employee Directory navigates to payroll",
+    "status": "Passed",
+    "detail": "Payroll Center"
+  },
+  {
+    "name": "Activities > Customer Statements opens its dialog",
+    "status": "Passed",
+    "detail": "Customer Billing StatementPrint StatementCustomer:St. Xavier Secondary School (Due: K14,850.00)Kamuzu Ridge High School (Due: K12,150.00)Chisombezi Mission Acad"
+  },
+  {
+    "name": "Activities > Pay Bills opens its dialog",
+    "status": "Passed",
+    "detail": "Pay Bills (Batch Disbursement)Payment Account1010 - Operating CheckingPayment DateMethodCheckACH / Electronic TransferCredit CardSelect All (1)Clear SelectionPA"
+  },
+  {
+    "name": "Banking > Check Register navigates to the register",
+    "status": "Passed",
+    "detail": "Check Register"
+  },
+  {
+    "name": "AI > Ledger Anomaly Auditor navigates to the agent",
+    "status": "Passed",
+    "detail": "AI Agent & 835-Op API"
+  },
+  {
+    "name": "Help menu exposes the shortcut sheet",
+    "status": "Passed",
+    "detail": "Printing Management SystemServer-backed, multi-company accounting suiteNew Invoi"
+  }
+]
