@@ -1,0 +1,178 @@
+﻿=== CAPTURED ===
+2026-11-19T16:14:29.7740432+02:00
+
+=== BRANCH BEFORE ===
+main
+
+=== BRANCH AFTER ===
+fix/printing-contracts-99
+
+=== COMMIT ===
+933bcf32b9e570f97ef9d2f864274fd64c6d6e08
+Implement full advanced options for Invoices and Printing Contracts
+Codebuff
+Wed Nov 18 05:51:37 2026 +0200
+
+=== STATUS COUNT ===
+137
+
+=== FULL STATUS ===
+ M .env.example
+ M PHASE2_ACCUMULATED_DEPRECIATION_CORRECTION_PLAN.md
+ M PHASE2_ACCUMULATED_DEPRECIATION_CORRECTION_REPORT.md
+ M PHASE3_FINANCIAL_FRONTEND_BACKEND_AUDIT_REPORT.md
+ M PHASE4A_LEGACY_TRANSACTION_MIGRATION_REPORT.md
+ M PHASE4A_LOCALSTORAGE_FINANCIAL_DATA_RECONCILIATION_REPORT.md
+ M PHASE4_LEGACY_TRANSACTION_BACKEND_MIGRATION_REPORT.md
+ M PHASE5_FINANCIAL_INTEGRITY_CERTIFICATION_REPORT.md
+ M PHASE6B_DATABASE_HEALTH_MONITORING_REPORT.md
+ M PHASE6C_PRODUCTION_SECURITY_RATE_LIMITING_REPORT.md
+ M PHASE6D_DEPLOYMENT_OPERATIONS_RUNBOOK.md
+ M PHASE6E_PRODUCTION_ACCEPTANCE_UAT_REPORT.md
+ M PHASE6_PRODUCTION_DEPLOYMENT_READINESS_REPORT.md
+ M db/migrations/0016_accumulated_depreciation_contra.down.sql
+ M db/migrations/0016_accumulated_depreciation_contra.up.sql
+ M docs/accounting/test-execution-report.md
+ M docs/advanced-actions/PHASE_2A1_VERIFICATION_REPORT.md
+ M docs/advanced-actions/PHASE_2A_IMPLEMENTATION_REPORT.md
+ M docs/advanced-actions/PRIME_ERP_ACTION_STATUS_PERMISSION_MATRIX.md
+ M docs/advanced-actions/PRIME_ERP_ADVANCED_ACTIONS_ARCHITECTURE.md
+ M docs/advanced-actions/PRIME_ERP_ADVANCED_ACTIONS_AUDIT_REPORT.md
+ M docs/advanced-actions/PRIME_ERP_ADVANCED_ACTIONS_IMPLEMENTATION_PLAN.md
+ M docs/advanced-actions/PRIME_ERP_ADVANCED_ACTIONS_MATRIX.md
+ M docs/advanced-actions/PRIME_ERP_EXISTING_ACTIONS_AUDIT.md
+ M docs/advanced-actions/PRIME_ERP_MODULE_INVENTORY.md
+ M docs/commercial/test-execution-report.md
+ M docs/commercial/workflow-documentation.md
+ M docs/database/test-execution-report.md
+ M docs/migration/phase10-migration-reconciliation-report.md
+ M docs/security/permission-matrix.md
+ M docs/security/security-test-report.md
+ M docs/workflows/phase9-dependency-and-test-report.md
+ M index.html
+ M package.json
+ M server.ts
+ M src/App.tsx
+ M src/actions/evaluateActions.ts
+ M src/actions/executeAction.ts
+ M src/actions/idempotency.ts
+ M src/actions/index.ts
+ M src/actions/registry.ts
+ M src/actions/registry/index.ts
+ M src/actions/types.ts
+ M src/components/actions/AdvancedActionsMenu.tsx
+ M src/components/actions/index.ts
+ M src/components/auth/AuthPortal.tsx
+ M src/components/common/RowActionMenu.tsx
+ M src/components/layout/AppHeader.tsx
+ M src/components/layout/SidebarNavigator.tsx
+ M src/components/layout/StatusBar.tsx
+ M src/components/layout/TopMenuToolbar.tsx
+ M src/components/modals/CommandPalette.tsx
+ M src/components/modals/CustomerStatementModal.tsx
+ M src/components/modals/EnterBillModal.tsx
+ M src/components/modals/IifImportModal.tsx
+ M src/components/modals/JournalEntryModal.tsx
+ M src/components/modals/NewCustomerModal.tsx
+ M src/components/modals/NewEmployeeModal.tsx
+ M src/components/modals/NewInvoiceModal.tsx
+ M src/components/modals/NewItemModal.tsx
+ M src/components/modals/NewVendorModal.tsx
+ M src/components/modals/OcrReceiptModal.tsx
+ M src/components/modals/PayBillsModal.tsx
+ M src/components/modals/ReceivePaymentModal.tsx
+ M src/components/modals/WriteCheckModal.tsx
+ M src/components/views/AiAgentView.tsx
+ M src/components/views/AllDocumentsView.tsx
+ M src/components/views/BankingRegisterView.tsx
+ M src/components/views/BillsView.tsx
+ M src/components/views/ChartOfAccountsView.tsx
+ M src/components/views/CustomersView.tsx
+ M src/components/views/DashboardView.tsx
+ M src/components/views/ExaminationView.tsx
+ M src/components/views/HomeWorkflowView.tsx
+ M src/components/views/InventoryView.tsx
+ M src/components/views/InvoicesView.tsx
+ M src/components/views/PayrollView.tsx
+ M src/components/views/PrintingContractsView.tsx
+ M src/components/views/QuickPrintView.tsx
+ M src/components/views/ReportsView.tsx
+ M src/components/views/SettingsView.tsx
+ M src/components/views/VendorsView.tsx
+ M src/config/featureFlags.ts
+ M src/config/navigation.ts
+ M src/context/AccountingContext.tsx
+ M src/context/AuthContext.tsx
+ M src/index.css
+ M src/server/app.ts
+ M src/server/config.ts
+ M src/server/db.ts
+ M src/server/logger.ts
+ M src/server/middleware/auth.ts
+ M src/server/permissions.ts
+ M src/server/rateLimiter.ts
+ M src/server/routes/accountingRoutes.ts
+ M src/server/routes/authRoutes.ts
+ M src/server/routes/backupRoutes.ts
+ M src/server/routes/printingRoutes.ts
+ M src/server/routes/protectedRoutes.ts
+ M src/server/routes/purchasingRoutes.ts
+ M src/server/routes/salesRoutes.ts
+ M src/server/services/accountingEngine.ts
+ M src/server/services/backupService.ts
+ M src/server/services/bankingService.ts
+ M src/server/services/commercialHelpers.ts
+ M src/server/services/financialManagementService.ts
+ M src/server/services/financialReports.ts
+ M src/server/services/inventoryService.ts
+ M src/server/services/payrollService.ts
+ M src/server/services/printingRecordsService.ts
+ M src/server/services/purchasingService.ts
+ M src/server/services/salesService.ts
+ M src/server/services/slowbooksMigrationService.ts
+ M src/server/services/slowbooksReconciliationService.ts
+ M src/services/accountingApi.ts
+ M src/services/commercialApi.ts
+ M src/services/documentsApi.ts
+ M src/services/printingApi.ts
+ M src/types/accounting.ts
+ M tests/advanced-actions/phase2a-advanced-actions.test.ts
+ M tests/db/migration-suite.ts
+ M tests/printing/paper-toner-calc.test.ts
+ M vite.config.ts
+?? PRINTING_CONTRACT_MODULE_AUDIT_REPORT.md
+?? PRINTING_CONTRACT_MODULE_REMEDIATION_PLAN.md
+?? db/migrations/0019_smart_operations_and_pos.down.sql
+?? db/migrations/0019_smart_operations_and_pos.up.sql
+?? docs/printing-contracts-remediation/
+?? src/components/modals/ContractActionModals.tsx
+?? src/components/modals/PosModal.tsx
+?? src/components/views/SmartOperationsView.tsx
+?? src/components/views/smart-ops/
+?? src/server/routes/smartOpsRoutes.ts
+?? src/server/services/posService.ts
+?? src/server/services/smartOpsService.ts
+?? src/services/smartOpsApi.ts
+?? tests/smart-ops/
+
+=== UNTRACKED ===
+PRINTING_CONTRACT_MODULE_AUDIT_REPORT.md
+PRINTING_CONTRACT_MODULE_REMEDIATION_PLAN.md
+db/migrations/0019_smart_operations_and_pos.down.sql
+db/migrations/0019_smart_operations_and_pos.up.sql
+docs/printing-contracts-remediation/00-repository-verification.md
+src/components/modals/ContractActionModals.tsx
+src/components/modals/PosModal.tsx
+src/components/views/SmartOperationsView.tsx
+src/components/views/smart-ops/MarketingMessagesTab.tsx
+src/components/views/smart-ops/PriceCardsTab.tsx
+src/components/views/smart-ops/PromotionsTab.tsx
+src/components/views/smart-ops/ReferralsTab.tsx
+src/server/routes/smartOpsRoutes.ts
+src/server/services/posService.ts
+src/server/services/smartOpsService.ts
+src/services/smartOpsApi.ts
+tests/smart-ops/smart-ops-pos.test.ts
+
+=== NOTE ===
+No changes were discarded, reset, stashed, overwritten, or committed. The branch was created from the same commit with the working tree carried forward.

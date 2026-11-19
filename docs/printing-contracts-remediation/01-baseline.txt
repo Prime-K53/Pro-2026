@@ -1,0 +1,162 @@
+PRIME ERP — PRINTING CONTRACTS
+PHASE 0 BASELINE RECORD (WP-00.2)
+
+Generated:        2026-11-19T16:18:13.5390692+02:00
+Branch:           fix/printing-contracts-99
+Commit:           933bcf32b9e570f97ef9d2f864274fd64c6d6e08
+Commit subject:   Implement full advanced options for Invoices and Printing Contracts
+Working tree:     137 entries (all pre-existing user modifications/untracked files; preserved)
+Node:             v24.22.1
+NPM:              11.19.1
+OS:               Windows (win32)
+Shell:            PowerShell 5.1
+
+================================================================================
+1. COMMAND RESULTS
+================================================================================
+
+| # | Command                  | Exit code | Result summary                                  | Full log |
+|---|--------------------------|-----------|-------------------------------------------------|----------|
+| 1 | npm run lint             | 0         | PASS — tsc --noEmit, no errors                  | logs/01-lint.log |
+| 2 | npm run test:printing    | 1         | 17/18 passed, 1 failed (pre-existing SKU collision) | logs/02-test-printing.log |
+| 3 | npm run test:documents   | 0         | PASS — 7/7 passed                               | logs/03-test-documents.log |
+| 4 | npm run test:workflows   | 0         | PASS — 7/7 passed                               | logs/04-test-workflows.log |
+| 5 | npm run test:db          | 0         | PASS — 8/8 passed                               | logs/05-test-db.log |
+| 6 | npm run build            | 0         | PASS — 1754 modules, chunk-size warning only    | logs/06-build.log |
+
+All commands were executed from the repository root. No production code was modified
+to make any command pass.
+
+================================================================================
+2. DETAILS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 npm run lint — EXIT 0
+--------------------------------------------------------------------------------
+Command: tsc --noEmit
+Result:  PASS
+Output:
+  > react-example@0.0.0 lint
+  > tsc --noEmit
+  (no diagnostics)
+
+--------------------------------------------------------------------------------
+2.2 npm run test:printing — EXIT 1
+--------------------------------------------------------------------------------
+Suite: tests/printing/paper-toner-calc.test.ts
+Result: 17/18 passed, 1 failed.
+Failed test:
+  Integration :: 17. PostgreSQL lookup + single BOM deduction & single GL posting
+  on invoice creation
+Error:
+  duplicate key value violates unique constraint
+  "uq_inventory_items_company_sku_lower"
+
+Root cause (verified, pre-existing, unrelated to printing contracts):
+  - The demo seed inserts inventory item SKU 'RM-TONER-K':
+      src/server/db.ts:300
+  - Integration test 17 inserts the same SKU 'RM-TONER-K':
+      tests/printing/paper-toner-calc.test.ts:960-962
+  - The test runs with seedDemo enabled, so the second insert violates the
+    per-company lower(SKU) unique constraint.
+  - The failing test exercises paper/BOM/GL integration, not the printing
+    contract lifecycle. No contract code is involved.
+
+Classification: PRE-EXISTING TEST-DATA COLLISION (test isolation defect).
+Recommended future fix (NOT part of Phase 0; no code changed here):
+  - Use a unique test-only SKU (e.g., 'RM-TONER-K-IT17') or delete/isolate the
+    seeded row inside the test transaction.
+  - This is a test-hardening item, not a production defect.
+
+Full output: logs/02-test-printing.log
+
+--------------------------------------------------------------------------------
+2.3 npm run test:documents — EXIT 0
+--------------------------------------------------------------------------------
+Suite: tests/documents/documents-and-invoicing.test.ts
+Result: 7/7 passed.
+Key coverage observed:
+  - Contract preview, exam batch preview, printing job preview.
+  - Contract retainer invoice generation + idempotent replay (200) + conflict (409).
+  - Contract milestone invoice generation with GL posting (journal 11).
+  - RBAC: ProductionManager blocked from vendor bills; Accountant cost redaction.
+  - Attachment upload/preview/download/delete + multi-company isolation.
+  - Trial Balance balanced (318214.0000).
+Full output: logs/03-test-documents.log
+
+--------------------------------------------------------------------------------
+2.4 npm run test:workflows — EXIT 0
+--------------------------------------------------------------------------------
+Suite: tests/workflows/phase9-e2e-workflows.test.ts
+Result: 7/7 passed.
+Coverage includes:
+  - Quotation -> job -> budget -> material issue -> operations -> QC -> delivery.
+  - Duplicate-safe invoices, WIP COGS relief, profitability.
+  - Controlled reprint, cancellation, sunk WIP write-off.
+  - Payments, undeposited funds, batch deposit, bank reconciliation.
+  - Cross-company isolation.
+Full output: logs/04-test-workflows.log
+
+--------------------------------------------------------------------------------
+2.5 npm run test:db — EXIT 0
+--------------------------------------------------------------------------------
+Suite: tests/db/migration-suite.ts
+Result: 8/8 passed in 15482ms.
+Coverage includes:
+  - Empty DB migration 0001 -> latest (137 tables, 0 floating-point columns).
+  - Idempotent re-run, incremental upgrade, full rollback latest -> 0000, re-apply.
+  - Decimal precision, FK/domain constraints, unique constraints.
+  - Company isolation / RLS / composite FK.
+  - Transaction rollback, unbalanced journal rejection, posted-entry immutability.
+  - Concurrent stock & contract milestone deductions with zero race corruption.
+Full output: logs/05-test-db.log
+
+--------------------------------------------------------------------------------
+2.6 npm run build — EXIT 0
+--------------------------------------------------------------------------------
+Command: vite build
+Result: PASS (exit 0).
+Output:
+  ✓ 1754 modules transformed.
+  dist/index.html                 1.41 kB
+  dist/assets/index-*.css       191.29 kB
+  dist/assets/index-*.js      1,181.82 kB (gzip 265.68 kB)
+  ✓ built in 5.63s
+Warning:
+  Some chunks are larger than 500 kB after minification. This is a non-blocking
+  Vite advisory, not a build failure.
+Full output: logs/06-build.log
+
+================================================================================
+3. WORKING-TREE IMPACT OF BASELINE RUNS
+================================================================================
+
+The working tree remains at 137 entries, the same count captured before the runs.
+The test suites write report artifacts (pre-existing behaviour, not production code):
+
+  M docs/accounting/test-execution-report.md       (already modified before Phase 0)
+  M docs/commercial/test-execution-report.md       (already modified before Phase 0)
+  M docs/database/test-execution-report.md         (rewritten by test:db)
+  M docs/workflows/phase9-dependency-and-test-report.md (rewritten by test:workflows)
+
+Build output:
+  dist/ is git-ignored (.gitignore:3), so it does not appear in git status.
+
+No source, schema, migration, or test file was edited by this Phase 0 work.
+
+================================================================================
+4. BASELINE CONCLUSION
+================================================================================
+
+- Lint: PASS.
+- Documents: PASS (7/7).
+- Workflows: PASS (7/7).
+- DB migrations: PASS (8/8).
+- Build: PASS (non-blocking chunk-size warning).
+- Printing paper/toner: 17/18 PASS; the single failure is a pre-existing
+  test-data SKU collision (seed 'RM-TONER-K' vs test 'RM-TONER-K'), unrelated to
+  the printing-contract module.
+
+Baseline status: RECORDED. One pre-existing, non-contract test failure is
+documented and classified. No production code was changed to make it pass.

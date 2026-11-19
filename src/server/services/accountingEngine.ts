@@ -161,6 +161,7 @@ export type JournalSourceType =
   | 'manual'
   | 'invoice'
   | 'sales_receipt'
+  | 'pos_sale'
   | 'payment'
   | 'credit_memo'
   | 'bill'
@@ -181,6 +182,8 @@ export type JournalSourceType =
   | 'printing_contract'
   | 'quick_print'
   | 'exam_production'
+  | 'referral_reward'
+  | 'marketing_expense'
   | 'opening_balance'
   | 'reversal'
   | 'closing_entry'
@@ -188,7 +191,8 @@ export type JournalSourceType =
   | 'goods_receipt'
   | 'production_wip'
   | 'production_cogs'
-  | 'production_variance';
+  | 'production_variance'
+  | 'customer_wallet';
 
 export type LedgerBasis = 'both' | 'accrual' | 'cash';
 

@@ -21,8 +21,10 @@ import {
   Server,
   Settings,
   Shield,
+  ShoppingCart,
   Sparkles,
   Users,
+  Zap,
 } from 'lucide-react';
 
 /**
@@ -62,6 +64,8 @@ export type HeaderActionId =
   | 'activities.write-check'
   | 'activities.statements'
   | 'activities.payroll'
+  | 'activities.pos'
+  | 'smart-ops.open'
   | 'reports.open'
   | 'banking.register'
   | 'banking.reconcile'
@@ -246,6 +250,21 @@ export const HEADER_MENUS: HeaderMenuDefinition[] = [
         action: 'activities.statements',
       },
       {
+        id: 'activities-pos',
+        label: 'Open POS Counter Terminal',
+        icon: ShoppingCart,
+        action: 'activities.pos',
+        emphasis: true,
+        separatorBefore: true,
+      },
+      {
+        id: 'activities-smart-ops',
+        label: 'Smart Operations Hub',
+        icon: Zap,
+        action: 'smart-ops.open',
+        targetView: 'smart-operations',
+      },
+      {
         id: 'activities-payroll',
         label: 'Pay Employees / Run Payroll',
         icon: Users,
@@ -386,6 +405,14 @@ export interface QuickActionDefinition {
 
 export const QUICK_ACTIONS: QuickActionDefinition[] = [
   {
+    id: 'pos',
+    label: 'Open Full POS Terminal',
+    shortLabel: 'POS Checkout',
+    icon: ShoppingCart,
+    action: 'activities.pos',
+    tone: 'emerald',
+  },
+  {
     id: 'invoice',
     label: 'Create Invoice',
     shortLabel: '+ Invoice',
@@ -400,7 +427,7 @@ export const QUICK_ACTIONS: QuickActionDefinition[] = [
     shortLabel: 'Receive Payment',
     icon: DollarSign,
     action: 'activities.receive-payment',
-    tone: 'emerald',
+    tone: 'default',
   },
   {
     id: 'enter-bill',
@@ -456,10 +483,10 @@ export const QUICK_ACTIONS: QuickActionDefinition[] = [
 ];
 
 /** Four primary actions shown at the tablet breakpoint. */
-export const PRIMARY_QUICK_ACTION_IDS = ['invoice', 'receive-payment', 'enter-bill', 'write-check'];
+export const PRIMARY_QUICK_ACTION_IDS = ['pos', 'invoice', 'receive-payment', 'enter-bill'];
 
 /** Two primary actions shown in the compact navigation breakpoint. */
-export const COMPACT_QUICK_ACTION_IDS = ['invoice', 'receive-payment'];
+export const COMPACT_QUICK_ACTION_IDS = ['pos', 'invoice'];
 
 export interface HelpShortcut {
   label: string;

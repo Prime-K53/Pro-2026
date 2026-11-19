@@ -15,11 +15,24 @@ import {
 import { recordLoginAttempt, writeAuditLog } from '../audit.ts';
 import { SqlExecutor } from '../../../db/migrator.ts';
 
-function setCookie(res: Response, name: string, value: string, maxAgeSec: number, isProduction: boolean) {
+function isHttpsRequest(req: Request): boolean {
+  const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  return req.secure || proto.includes('https');
+}
+
+function setCookie(
+  req: Request,
+  res: Response,
+  name: string,
+  value: string,
+  maxAgeSec: number,
+  isProduction: boolean
+) {
+  const https = isHttpsRequest(req) || isProduction;
   res.cookie(name, value, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: isProduction,
+    sameSite: https ? 'none' : 'lax',
+    secure: https,
     maxAge: maxAgeSec * 1000,
     path: '/',
   });
@@ -68,7 +81,7 @@ async function issueServerSession(
   );
 
   const signedCookie = signSessionCookieValue(rawToken, db.config.authSessionSecret);
-  setCookie(res, db.config.cookieName, signedCookie, ttlSec, db.config.isProduction);
+  setCookie(req, res, db.config.cookieName, signedCookie, ttlSec, db.config.isProduction);
   return Number(sessionRes.rows[0].id);
 }
 
@@ -270,19 +283,22 @@ export function createAuthRouter(db: ServerDatabase): Router {
       return res.status(400).json({ error: 'Username/email and password are required' });
     }
 
+    type UserRow = {
+      id: number;
+      username: string;
+      email: string;
+      display_name: string;
+      password_hash: string;
+      supabase_uid: string | null;
+      is_active: boolean;
+      expires_on: string | null;
+      session_version: number;
+      must_change_password: boolean;
+    };
+
     const result = await db.withSystemDb(async tx => {
-      const userRes = await tx.query<{
-        id: number;
-        username: string;
-        email: string;
-        display_name: string;
-        password_hash: string;
-        supabase_uid: string | null;
-        is_active: boolean;
-        expires_on: string | null;
-        session_version: number;
-        must_change_password: boolean;
-      }>(
+      const today = new Date().toISOString().slice(0, 10);
+      const userRes = await tx.query<UserRow>(
         `SELECT id, username, email, display_name, password_hash, supabase_uid::text,
                 is_active, expires_on::text, session_version, must_change_password
            FROM users
@@ -291,37 +307,96 @@ export function createAuthRouter(db: ServerDatabase): Router {
         [identifier]
       );
 
-      if (userRes.rows.length === 0) {
-        await recordLoginAttempt(tx, { username: identifier, ipAddress: ip, userAgent: ua, success: false });
-        return { ok: false as const, status: 401, error: 'Invalid username/email or password' };
-      }
+      let u: UserRow | undefined = userRes.rows[0];
+      let supabaseSub: string | null = u?.supabase_uid ?? null;
+      let validPassword = false;
 
-      const u = userRes.rows[0];
-      const today = new Date().toISOString().slice(0, 10);
-      if (!u.is_active || (u.expires_on && u.expires_on.slice(0, 10) < today)) {
-        await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
-        return { ok: false as const, status: 403, error: 'Account is deactivated or expired' };
-      }
-
-      let validPassword = verifyPassword(password, u.password_hash);
-      let supabaseSub = u.supabase_uid;
-
-      if (!validPassword) {
-        // Fallback check against Supabase Auth if user password was updated directly in Supabase
-        const sbLogin = await authenticateWithSupabasePassword(db.config, u.email, password);
-        if (sbLogin) {
-          validPassword = true;
-          supabaseSub = sbLogin.supabaseUid;
-          await tx.query(
-            `UPDATE users SET password_hash = $1, supabase_uid = COALESCE(supabase_uid, $2::uuid) WHERE id = $3`,
-            [hashPassword(password), sbLogin.supabaseUid, u.id]
-          );
+      if (!u) {
+        // No local profile. The account may still be a valid Supabase Auth user
+        // (e.g. created directly in the Supabase dashboard, or provisioned by a
+        // different tool). Verify the credentials against Supabase and, on
+        // success, provision the local profile + an isolated company so the user
+        // can sign in. This mirrors self-service registration and is why a user
+        // that "exists in Supabase" no longer fails with "Invalid username/email
+        // or password".
+        const sbLogin = await authenticateWithSupabasePassword(db.config, identifier, password);
+        if (!sbLogin) {
+          await recordLoginAttempt(tx, { username: identifier, ipAddress: ip, userAgent: ua, success: false });
+          return { ok: false as const, status: 401, error: 'Invalid username/email or password' };
         }
-      }
 
-      if (!validPassword) {
-        await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
-        return { ok: false as const, status: 401, error: 'Invalid username/email or password' };
+        const email = identifier.includes('@')
+          ? identifier.trim().toLowerCase()
+          : `${identifier.trim().toLowerCase()}@users.noreply.local`;
+        const username = email.split('@')[0] || 'user';
+        const displayName = username;
+        const passwordHash = hashPassword(password);
+
+        const prov = await tx.query<{ id: number; session_version: number }>(
+          `INSERT INTO users (username, email, display_name, password_hash, supabase_uid, is_active)
+           VALUES ($1, $2, $3, $4, $5::uuid, TRUE)
+           RETURNING id, session_version`,
+          [username, email, displayName, passwordHash, sbLogin.supabaseUid]
+        );
+        const newUserId = Number(prov.rows[0].id);
+        const companyName = `${displayName}'s Company`;
+        const comp = await createCompanyInTx(tx, {
+          name: companyName,
+          legalName: companyName,
+          ownerUserId: newUserId,
+          ownerUsername: username,
+          makeDefault: true,
+        });
+
+        u = {
+          id: newUserId,
+          username,
+          email,
+          display_name: displayName,
+          password_hash: passwordHash,
+          supabase_uid: sbLogin.supabaseUid,
+          is_active: true,
+          expires_on: null,
+          session_version: Number(prov.rows[0].session_version),
+          must_change_password: false,
+        };
+        supabaseSub = sbLogin.supabaseUid;
+        validPassword = true;
+
+        await writeAuditLog(tx, {
+          companyId: comp.companyId,
+          actorUserId: newUserId,
+          actorUsername: username,
+          action: 'SUPABASE_USER_PROVISIONED',
+          tableName: 'users',
+          recordId: newUserId,
+          newValues: { email, supabaseUid: sbLogin.supabaseUid, companyId: comp.companyId },
+        });
+      } else {
+        if (!u.is_active || (u.expires_on && u.expires_on.slice(0, 10) < today)) {
+          await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
+          return { ok: false as const, status: 403, error: 'Account is deactivated or expired' };
+        }
+
+        validPassword = verifyPassword(password, u.password_hash);
+
+        if (!validPassword) {
+          // Fallback check against Supabase Auth if user password was updated directly in Supabase
+          const sbLogin = await authenticateWithSupabasePassword(db.config, u.email, password);
+          if (sbLogin) {
+            validPassword = true;
+            supabaseSub = sbLogin.supabaseUid;
+            await tx.query(
+              `UPDATE users SET password_hash = $1, supabase_uid = COALESCE(supabase_uid, $2::uuid) WHERE id = $3`,
+              [hashPassword(password), sbLogin.supabaseUid, u.id]
+            );
+          }
+        }
+
+        if (!validPassword) {
+          await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
+          return { ok: false as const, status: 401, error: 'Invalid username/email or password' };
+        }
       }
 
       const memRes = await tx.query<{
@@ -551,7 +626,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
       });
     });
 
-    clearSessionCookie(res, db.config.cookieName);
+    clearSessionCookie(res, db.config.cookieName, req);
     return res.json({ ok: true });
   });
 

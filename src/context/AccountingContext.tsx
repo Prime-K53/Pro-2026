@@ -59,6 +59,7 @@ import type { DocumentPreviewModel, GenerateWorkflowInvoicePayload } from '../ty
 import type { ToastNotice, ToastTone } from '../types/toast';
 import { documentsApi } from '../services/documentsApi';
 import { commercialApi, type ApiInvoice } from '../services/commercialApi';
+import { printingApi } from '../services/printingApi';
 
 const WORKSPACE_PRESS_CAPABILITY: TonerMachineSpec = {
   machineId: 'workspace-digital-press',
@@ -161,7 +162,7 @@ interface AccountingContextType {
       ExamPaper,
       'id' | 'jobNumber' | 'totalAmount' | 'sheetsUsed' | 'impressionsUsed' | 'paperCost' | 'tonerCost' | 'materialCost'
     >[]
-  ) => ExamPaper[];
+  ) => Promise<ExamPaper[]>;
   updateExamPaper: (paperId: string, updates: Partial<ExamPaper>) => void;
   updateExamPaperStatus: (paperId: string, status: ExamPaperStatus) => Promise<void>;
   deleteExamPaper: (paperId: string) => void;
@@ -285,6 +286,8 @@ interface AccountingContextType {
   setIsStatementOpen: (open: boolean) => void;
   isCommandPaletteOpen: boolean;
   setIsCommandPaletteOpen: (open: boolean) => void;
+  isPosModalOpen: boolean;
+  setIsPosModalOpen: (open: boolean) => void;
   previewDocument: DocumentPreviewModel | null;
   openDocumentPreview: (doc: DocumentPreviewModel) => void;
   closeDocumentPreview: () => void;
@@ -331,6 +334,14 @@ const migrateItemType = (rawType: string): InventoryItem['type'] => {
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
+
+// Coerce a local/demo id (e.g. "cust-123", "inv-PP-EXBOOK-A4") into a positive
+// numeric backend id, or null when it is not a real server record.
+const toBackendId = (v?: string | number | null): number | null => {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   /**
@@ -581,6 +592,144 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     }))
   );
 
+  // ---------------------------------------------------------------------------
+  // Backend loaders — customers, printing contracts and examination papers.
+  // Mirrors the accounts/inventory pattern: the server is the source of truth;
+  // bundled demo data is only a fallback while the backend is empty/unreachable.
+  // ---------------------------------------------------------------------------
+  const mapApiCustomer = (r: any): Customer => ({
+    id: String(r.id),
+    name: r.name || '',
+    companyName: r.companyName || r.name || '',
+    email: r.email || '',
+    phone: r.phone || '',
+    billingAddress: r.billingAddress || '',
+    terms: (r.terms as Customer['terms']) || 'Net 30',
+    balance: Number(r.balance ?? 0),
+    customerType: r.customerType,
+  });
+
+  const mapApiContract = (b: any): PrintingContract => ({
+    id: String(b.backendId ?? b.id),
+    backendId: Number(b.backendId ?? b.id),
+    contractNumber: b.contractNumber,
+    schoolCustomerId: String(b.schoolCustomerId),
+    title: b.title,
+    academicYear: b.academicYear,
+    startDate: b.startDate,
+    endDate: b.endDate,
+    totalPrepaidAmount: Number(b.totalPrepaidAmount ?? 0),
+    totalAssessments: Number(b.totalAssessments ?? 2) as 2 | 3 | 4 | 5,
+    remainingBalance: Number(b.remainingBalance ?? 0),
+    completedAssessments: Number(b.completedAssessments ?? 0),
+    depositBankAccountId: String(b.depositBankAccountId ?? ''),
+    status: (b.status ?? 'active') as PrintingContract['status'],
+    notes: b.notes ?? undefined,
+    assessments: (b.assessments || []).map((a: any) => ({
+      assessmentNumber: Number(a.assessmentNumber),
+      label: a.label,
+      scheduledDate: a.scheduledDate,
+      agreedAmount: Number(a.agreedAmount ?? 0),
+      rawPaperItemId: a.rawPaperItemId != null ? String(a.rawPaperItemId) : undefined,
+      rawTonerItemId: a.rawTonerItemId != null ? String(a.rawTonerItemId) : undefined,
+      estimatedSheets: Number(a.estimatedSheets ?? 0),
+      estimatedImpressions: Number(a.estimatedImpressions ?? 0),
+      paperCost: Number(a.paperCost ?? 0),
+      tonerCost: Number(a.tonerCost ?? 0),
+      totalCost: Number(a.totalCost ?? 0),
+      profit: Number(a.profit ?? 0),
+      status: (a.status ?? 'pending') as ContractAssessmentMilestone['status'],
+      completedDate: a.completedDate ?? undefined,
+      examBatchNote: a.examBatchNote ?? undefined,
+      backendInvoiceId: a.backendInvoiceId != null ? Number(a.backendInvoiceId) : undefined,
+    })),
+  });
+
+  const mapApiExamPaper = (p: any): ExamPaper => ({
+    id: String(p.backendId ?? p.id),
+    backendId: Number(p.backendId ?? p.id),
+    jobNumber: p.jobNumber,
+    schoolCustomerId: String(p.schoolCustomerId),
+    assessmentName: p.assessmentName,
+    className: p.className,
+    learnersCount: Number(p.learnersCount ?? 0),
+    pricePerLearner: Number(p.pricePerLearner ?? 0),
+    subjectName: p.subjectName,
+    pages: Number(p.pages ?? 0),
+    copies: Number(p.copies ?? 0),
+    paperSize: (p.paperSize ?? 'A4') as ExamPaper['paperSize'],
+    printSide: (p.printSide ?? 'Single-Sided') as ExamPaper['printSide'],
+    bindingType: (p.bindingType ?? 'Stapled') as ExamPaper['bindingType'],
+    printingItemId: p.printingItemId != null ? String(p.printingItemId) : undefined,
+    rawPaperItemId: p.rawPaperItemId != null ? String(p.rawPaperItemId) : undefined,
+    rawTonerItemId: p.rawTonerItemId != null ? String(p.rawTonerItemId) : undefined,
+    ratePerPage: Number(p.ratePerPage ?? 0),
+    totalAmount: Number(p.totalAmount ?? 0),
+    sheetsUsed: Number(p.sheetsUsed ?? 0),
+    impressionsUsed: Number(p.impressionsUsed ?? 0),
+    paperCost: Number(p.paperCost ?? 0),
+    tonerCost: Number(p.tonerCost ?? 0),
+    materialCost: Number(p.materialCost ?? 0),
+    status: (p.status ?? 'queued') as ExamPaperStatus,
+    productionDate: p.productionDate,
+    contractId: p.contractId != null ? String(p.contractId) : undefined,
+    assessmentNumber: p.assessmentNumber != null ? Number(p.assessmentNumber) : undefined,
+    notes: p.notes ?? undefined,
+  });
+
+  const refreshCustomersFromBackend = async () => {
+    try {
+      const list = await commercialApi.listCustomers();
+      if (!list || list.length === 0) return;
+      const backendCustomers = list.map(mapApiCustomer);
+      // Merge with the bundled demo customers (which back the legacy demo
+      // invoices) so existing customer-name lookups keep resolving, while the
+      // real backend customers are added for contracts/exams to reference.
+      setCustomers(prev => {
+        const byId = new Map<string, Customer>();
+        for (const c of prev) byId.set(c.id, c);
+        for (const c of backendCustomers) byId.set(c.id, c);
+        return Array.from(byId.values());
+      });
+    } catch {
+      // Keep bundled demo customers when the backend is unreachable.
+    }
+  };
+
+  const refreshPrintingContractsFromBackend = async () => {
+    try {
+      const list = await printingApi.listContracts();
+      if (!list || list.length === 0) return;
+      setPrintingContracts(list.map(mapApiContract));
+    } catch {
+      // Keep bundled demo contracts when the backend is unreachable.
+    }
+  };
+
+  const refreshExamPapersFromBackend = async () => {
+    try {
+      const list = await printingApi.listExamPapers();
+      if (!list || list.length === 0) return;
+      setExamPapers(list.map(mapApiExamPaper));
+    } catch {
+      // Keep bundled demo exam papers when the backend is unreachable.
+    }
+  };
+
+  useEffect(() => {
+    refreshCustomersFromBackend();
+    refreshPrintingContractsFromBackend();
+    refreshExamPapersFromBackend();
+    const handler = () => {
+      refreshCustomersFromBackend();
+      refreshPrintingContractsFromBackend();
+      refreshExamPapersFromBackend();
+    };
+    window.addEventListener(ACCOUNTING_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
   const [estimates, setEstimates] = useState<Estimate[]>(INITIAL_ESTIMATES);
   const [paymentsReceived, setPaymentsReceived] = useState<PaymentReceived[]>([]);
@@ -610,6 +759,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   const [isIifImportOpen, setIsIifImportOpen] = useState(false);
   const [isStatementOpen, setIsStatementOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isPosModalOpen, setIsPosModalOpen] = useState(false);
   const [previewDocument, setPreviewDocument] = useState<DocumentPreviewModel | null>(null);
   const openDocumentPreview = (doc: DocumentPreviewModel) => setPreviewDocument(doc);
   const closeDocumentPreview = () => setPreviewDocument(null);
@@ -695,6 +845,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       setIsIifImportOpen(false);
       setIsStatementOpen(false);
       setIsCommandPaletteOpen(false);
+      setIsPosModalOpen(false);
       setPreviewDocument(null);
       setIsMobileDrawerOpen(false);
     };
@@ -1602,14 +1753,71 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     return newPaper;
   };
 
-  const addExamPapersBatch = (
+  const addExamPapersBatch = async (
     papersData: Omit<
       ExamPaper,
       'id' | 'jobNumber' | 'totalAmount' | 'sheetsUsed' | 'impressionsUsed' | 'paperCost' | 'tonerCost' | 'materialCost'
     >[]
-  ): ExamPaper[] => {
+  ): Promise<ExamPaper[]> => {
     const year = new Date().getFullYear();
     const baseIdx = 100 + examPapers.length;
+
+    // Attempt server-side creation first when every referenced id is a real
+    // backend record (numeric). The server assigns authoritative job numbers
+    // and ids, which we then adopt for the local rows.
+    const backendCustomerId = toBackendId(papersData[0]?.schoolCustomerId);
+    const allServerIds =
+      papersData.length > 0 &&
+      papersData.every(p => toBackendId(p.rawPaperItemId) && toBackendId(p.rawTonerItemId));
+    if (backendCustomerId && allServerIds) {
+      const sample = papersData[0];
+      try {
+        const res = await printingApi.createExamBatch({
+          schoolCustomerId: backendCustomerId,
+          assessmentName: sample.assessmentName,
+          className: sample.className,
+          learnersCount: sample.learnersCount,
+          pricePerLearner: sample.pricePerLearner,
+          contractId: toBackendId(sample.contractId),
+          assessmentNumber: sample.assessmentNumber ?? null,
+          papers: papersData.map(p => ({
+            subjectName: p.subjectName,
+            pages: p.pages,
+            copies: p.copies,
+            rawPaperItemId: toBackendId(p.rawPaperItemId)!,
+            rawTonerItemId: toBackendId(p.rawTonerItemId)!,
+            printSide: p.printSide,
+            bindingType: p.bindingType,
+            productionDate: p.productionDate,
+            notes: p.notes ?? null,
+          })),
+        });
+        const serverPapers: any[] = res?.papers || [];
+        const created: ExamPaper[] = papersData.map((paperData, idx) => {
+          const computed = buildExamPaperComputedFields(paperData);
+          const sp = serverPapers[idx];
+          return {
+            ...paperData,
+            ...computed,
+            id: sp?.id != null ? String(sp.id) : `exm-${Date.now()}-${idx}`,
+            backendId: sp?.id != null ? Number(sp.id) : undefined,
+            jobNumber: sp?.jobNumber || `EXM-${year}-${baseIdx + idx + 1}`,
+          };
+        });
+        setExamPapers(prev => [...created.slice().reverse(), ...prev]);
+        await logAuditAction(
+          'BATCH_EXAM_JOBS',
+          'ExamPaper',
+          created[0]?.id || 'batch',
+          `Added ${created.length} class/subject examination print jobs`
+        );
+        return created;
+      } catch {
+        // Fall through to local-only creation below.
+      }
+    }
+
+    // Local-only (bundled demo) path.
     const created: ExamPaper[] = papersData.map((paperData, idx) => {
       const computed = buildExamPaperComputedFields(paperData);
       return {
@@ -1619,9 +1827,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         jobNumber: `EXM-${year}-${baseIdx + idx + 1}`,
       };
     });
-
-    setExamPapers(prev => [...created.reverse(), ...prev]);
-    logAuditAction(
+    setExamPapers(prev => [...created.slice().reverse(), ...prev]);
+    await logAuditAction(
       'BATCH_EXAM_JOBS',
       'ExamPaper',
       created[0]?.id || 'batch',
@@ -1699,10 +1906,22 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       paperId,
       `Exam job ${target.jobNumber} (${target.className} · ${target.subjectName}) marked ${nextStatus}`
     );
+
+    if (target.backendId && (nextStatus === 'queued' || nextStatus === 'printing' || nextStatus === 'completed')) {
+      printingApi.updateExamPaperStatus(target.backendId, nextStatus).catch(() => {
+        /* keep local fallback */
+      });
+    }
   };
 
   const deleteExamPaper = (paperId: string) => {
+    const target = examPapers.find(p => p.id === paperId);
     setExamPapers(prev => prev.filter(p => p.id !== paperId));
+    if (target?.backendId) {
+      printingApi.deleteExamPaper(target.backendId).catch(() => {
+        /* keep local fallback */
+      });
+    }
   };
 
   const createConsolidatedSchoolInvoice = async (
@@ -1947,11 +2166,53 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       };
     });
 
+    // Attempt server-side creation first when the customer and deposit account
+    // are real backend records (numeric ids). The backend posts the deposit
+    // journal itself, so local ledger mutations are skipped in that case.
+    const backendCustomerId = toBackendId(contractData.schoolCustomerId);
+    const backendBankAccountId = toBackendId(contractData.depositBankAccountId);
+    let backendId: number | undefined;
+    let effectiveNumber = ctrNum;
+    if (backendCustomerId && backendBankAccountId) {
+      try {
+        const res = await printingApi.createContract({
+          schoolCustomerId: backendCustomerId,
+          title: contractData.title,
+          academicYear: contractData.academicYear,
+          startDate: contractData.startDate,
+          endDate: contractData.endDate,
+          totalPrepaidAmount: contractData.totalPrepaidAmount,
+          totalAssessments: contractData.totalAssessments,
+          depositBankAccountId: backendBankAccountId,
+          notes: contractData.notes ?? null,
+          assessments: enrichedAssessments.map(a => ({
+            assessmentNumber: a.assessmentNumber,
+            label: a.label,
+            scheduledDate: a.scheduledDate,
+            agreedAmount: a.agreedAmount,
+            rawPaperItemId: toBackendId(a.rawPaperItemId),
+            rawTonerItemId: toBackendId(a.rawTonerItemId),
+            estimatedSheets: a.estimatedSheets,
+            estimatedImpressions: a.estimatedImpressions,
+            paperCost: a.paperCost,
+            tonerCost: a.tonerCost,
+          })),
+        });
+        if (res?.contractId) {
+          backendId = Number(res.contractId);
+          effectiveNumber = res.contractNumber || ctrNum;
+        }
+      } catch {
+        // Fall back to local-only creation below when the backend is unreachable.
+      }
+    }
+
     const newContract: PrintingContract = {
       ...contractData,
       assessments: enrichedAssessments,
-      id: `ctr-${Date.now()}`,
-      contractNumber: ctrNum,
+      id: backendId ? `ctr-${backendId}` : `ctr-${Date.now()}`,
+      backendId,
+      contractNumber: effectiveNumber,
       remainingBalance: contractData.totalPrepaidAmount,
       completedAssessments: 0,
       status: 'active',
@@ -1959,40 +2220,43 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
 
     setPrintingContracts(prev => [newContract, ...prev]);
 
-    // Debit Bank Account (+totalPrepaidAmount), Credit 2250 Unearned Contract Revenue (+totalPrepaidAmount)
-    setAccounts(prev =>
-      prev.map(acc => {
-        if (acc.id === newContract.depositBankAccountId) {
-          return { ...acc, balance: round2(acc.balance + newContract.totalPrepaidAmount) };
-        }
-        if (acc.code === '2250') {
-          return { ...acc, balance: round2(acc.balance + newContract.totalPrepaidAmount) };
-        }
-        return acc;
-      })
-    );
+    if (!backendId) {
+      // Local-only (bundled demo) path: mirror the deposit in local ledger state.
+      // Debit Bank Account (+totalPrepaidAmount), Credit 2250 Unearned Contract Revenue.
+      setAccounts(prev =>
+        prev.map(acc => {
+          if (acc.id === newContract.depositBankAccountId) {
+            return { ...acc, balance: round2(acc.balance + newContract.totalPrepaidAmount) };
+          }
+          if (acc.code === '2250') {
+            return { ...acc, balance: round2(acc.balance + newContract.totalPrepaidAmount) };
+          }
+          return acc;
+        })
+      );
 
-    const school = customers.find(c => c.id === newContract.schoolCustomerId);
-    const bankTx: BankTransaction = {
-      id: `tx-${Date.now()}`,
-      accountId: newContract.depositBankAccountId,
-      date: newContract.startDate,
-      payee: school?.companyName || 'School Retainer Deposit',
-      type: 'Deposit',
-      refNumber: ctrNum,
-      memo: `Prepaid printing retainer (${newContract.totalAssessments} assessments): ${newContract.title}`,
-      amount: newContract.totalPrepaidAmount,
-      balance: 0,
-      isCleared: true,
-      category: 'Unearned Contract Revenue',
-    };
-    setBankTransactions(prev => [bankTx, ...prev]);
+      const school = customers.find(c => c.id === newContract.schoolCustomerId);
+      const bankTx: BankTransaction = {
+        id: `tx-${Date.now()}`,
+        accountId: newContract.depositBankAccountId,
+        date: newContract.startDate,
+        payee: school?.companyName || 'School Retainer Deposit',
+        type: 'Deposit',
+        refNumber: effectiveNumber,
+        memo: `Prepaid printing retainer (${newContract.totalAssessments} assessments): ${newContract.title}`,
+        amount: newContract.totalPrepaidAmount,
+        balance: 0,
+        isCleared: true,
+        category: 'Unearned Contract Revenue',
+      };
+      setBankTransactions(prev => [bankTx, ...prev]);
+    }
 
     await logAuditAction(
       'CREATE_PRINTING_CONTRACT',
       'PrintingContract',
       newContract.id,
-      `Created prepaid contract ${ctrNum} with ${school?.companyName} for ${getCurrencySymbol(companyProfile.currency)}${newContract.totalPrepaidAmount.toFixed(2)} (${newContract.totalAssessments} assessments)`
+      `Created prepaid contract ${effectiveNumber} with ${customers.find(c => c.id === newContract.schoolCustomerId)?.companyName || 'school'} for ${getCurrencySymbol(companyProfile.currency)}${newContract.totalPrepaidAmount.toFixed(2)} (${newContract.totalAssessments} assessments)`
     );
 
     return newContract;
@@ -2047,6 +2311,27 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         };
       })
     );
+
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      const current = ctr.assessments.find(a => a.assessmentNumber === assessmentNumber);
+      const merged = { ...current, ...updates } as ContractAssessmentMilestone;
+      printingApi
+        .updateContractAssessment(ctr.backendId, assessmentNumber, {
+          label: merged.label,
+          scheduledDate: merged.scheduledDate,
+          agreedAmount: merged.agreedAmount,
+          rawPaperItemId: toBackendId(merged.rawPaperItemId),
+          rawTonerItemId: toBackendId(merged.rawTonerItemId),
+          estimatedSheets: merged.estimatedSheets,
+          estimatedImpressions: merged.estimatedImpressions,
+          paperCost: merged.paperCost,
+          tonerCost: merged.tonerCost,
+        })
+        .catch(() => {
+          /* keep local fallback */
+        });
+    }
   };
 
   const getAssessmentActualStats = (
@@ -2117,48 +2402,61 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     // Recognize Revenue from Prepaid Retainer:
     // Debit 2250 Unearned Contract Revenue (-deduction)
     // Credit 4010 Printing & Exam Production Sales (+deduction)
-    const unearnedAcc = accounts.find(a => a.code === '2250');
-    const incomeAcc = accounts.find(a => a.code === '4010');
+    if (targetContract.backendId) {
+      // The backend owns the double-entry posting for server-backed contracts.
+      // Posting again locally would double-count the revenue.
+      printingApi
+        .completeContractAssessment(targetContract.backendId, assessmentNumber, {
+          examBatchNote: examBatchNote || null,
+          linkedInvoiceId: toBackendId(linkedInvoiceId),
+        })
+        .catch(() => {
+          /* keep local fallback */
+        });
+    } else {
+      const unearnedAcc = accounts.find(a => a.code === '2250');
+      const incomeAcc = accounts.find(a => a.code === '4010');
 
-    setAccounts(prev =>
-      prev.map(acc => {
-        if (acc.code === '2250') {
-          return { ...acc, balance: Math.max(0, round2(acc.balance - deduction)) };
-        }
-        if (acc.code === '4010') {
-          return { ...acc, balance: round2(acc.balance + deduction) };
-        }
-        return acc;
-      })
-    );
+      setAccounts(prev =>
+        prev.map(acc => {
+          if (acc.code === '2250') {
+            return { ...acc, balance: Math.max(0, round2(acc.balance - deduction)) };
+          }
+          if (acc.code === '4010') {
+            return { ...acc, balance: round2(acc.balance + deduction) };
+          }
+          return acc;
+        })
+      );
 
-    if (unearnedAcc && incomeAcc) {
-      const jeNum = `JE-${5000 + journalEntries.length + 1}`;
-      const recognitionJe: JournalEntry = {
-        id: `je-${Date.now()}`,
-        entryNumber: jeNum,
-        date: today,
-        memo: `Contract ${targetContract.contractNumber} — ${milestone.label} deduction & revenue recognition`,
-        source: 'contract',
-        sourceRefId: targetContract.id,
-        lines: [
-          {
-            id: `jl-${Date.now()}-1`,
-            accountId: unearnedAcc.id,
-            description: `Deduct prepaid retainer for Assessment #${assessmentNumber}`,
-            debit: deduction,
-            credit: 0,
-          },
-          {
-            id: `jl-${Date.now()}-2`,
-            accountId: incomeAcc.id,
-            description: `Recognize earned assessment printing revenue`,
-            debit: 0,
-            credit: deduction,
-          },
-        ],
-      };
-      setJournalEntries(prev => [recognitionJe, ...prev]);
+      if (unearnedAcc && incomeAcc) {
+        const jeNum = `JE-${5000 + journalEntries.length + 1}`;
+        const recognitionJe: JournalEntry = {
+          id: `je-${Date.now()}`,
+          entryNumber: jeNum,
+          date: today,
+          memo: `Contract ${targetContract.contractNumber} — ${milestone.label} deduction & revenue recognition`,
+          source: 'contract',
+          sourceRefId: targetContract.id,
+          lines: [
+            {
+              id: `jl-${Date.now()}-1`,
+              accountId: unearnedAcc.id,
+              description: `Deduct prepaid retainer for Assessment #${assessmentNumber}`,
+              debit: deduction,
+              credit: 0,
+            },
+            {
+              id: `jl-${Date.now()}-2`,
+              accountId: incomeAcc.id,
+              description: `Recognize earned assessment printing revenue`,
+              debit: 0,
+              credit: deduction,
+            },
+          ],
+        };
+        setJournalEntries(prev => [recognitionJe, ...prev]);
+      }
     }
 
     await logAuditAction(
@@ -2195,6 +2493,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           : c
       )
     );
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      printingApi.cancelContract(ctr.backendId, reason).catch(() => {
+        /* keep local fallback */
+      });
+    }
     logAuditAction('CANCEL_PRINTING_CONTRACT', 'PrintingContract', contractId, reason || 'Cancelled from contract register');
   };
 
@@ -2202,6 +2506,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     setPrintingContracts(prev =>
       prev.map(c => (c.id === contractId ? { ...c, status: 'active' } : c))
     );
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      printingApi.activateContract(ctr.backendId).catch(() => {
+        /* keep local fallback */
+      });
+    }
     logAuditAction('ACTIVATE_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Activated from contract register');
   };
 
@@ -2218,6 +2528,24 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       assessments: source.assessments.map(a => ({ ...a, status: 'pending', completedDate: undefined, linkedInvoiceId: undefined, backendInvoiceId: undefined, linkedInvoiceNumber: undefined })),
     };
     setPrintingContracts(prev => [renewed, ...prev]);
+    if (source.backendId) {
+      printingApi
+        .renewContract(source.backendId)
+        .then(res => {
+          if (res?.contractId) {
+            setPrintingContracts(prev =>
+              prev.map(c =>
+                c.id === renewed.id
+                  ? { ...c, backendId: Number(res.contractId), contractNumber: res.contractNumber || c.contractNumber }
+                  : c
+              )
+            );
+          }
+        })
+        .catch(() => {
+          /* keep local fallback */
+        });
+    }
     logAuditAction('RENEW_PRINTING_CONTRACT', 'PrintingContract', renewed.id, `Renewed from ${source.contractNumber}`);
   };
 
@@ -2225,6 +2553,21 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     setPrintingContracts(prev =>
       prev.map(c => (c.id === contractId ? { ...c, ...updates } : c))
     );
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      const merged = { ...ctr, ...updates };
+      printingApi
+        .amendContract(ctr.backendId, {
+          title: merged.title,
+          academicYear: merged.academicYear,
+          startDate: merged.startDate,
+          endDate: merged.endDate,
+          notes: merged.notes ?? null,
+        })
+        .catch(() => {
+          /* keep local fallback */
+        });
+    }
     logAuditAction('AMEND_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Amended from contract register');
   };
 
@@ -2236,6 +2579,26 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           : c
       )
     );
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      printingApi
+        .addContractAssessment(ctr.backendId, {
+          assessmentNumber: milestone.assessmentNumber,
+          label: milestone.label,
+          scheduledDate: milestone.scheduledDate,
+          agreedAmount: milestone.agreedAmount,
+          rawPaperItemId: toBackendId(milestone.rawPaperItemId),
+          rawTonerItemId: toBackendId(milestone.rawTonerItemId),
+          estimatedSheets: milestone.estimatedSheets,
+          estimatedImpressions: milestone.estimatedImpressions,
+          paperCost: milestone.paperCost,
+          tonerCost: milestone.tonerCost,
+          examBatchNote: milestone.examBatchNote ?? null,
+        })
+        .catch(() => {
+          /* keep local fallback */
+        });
+    }
     logAuditAction('ADD_CONTRACT_ASSESSMENT', 'PrintingContract', contractId, `Added assessment #${milestone.assessmentNumber}`);
   };
 
@@ -2250,6 +2613,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           : c
       )
     );
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId) {
+      printingApi.removeContractAssessment(ctr.backendId, assessmentNumber).catch(() => {
+        /* keep local fallback */
+      });
+    }
     logAuditAction('REMOVE_CONTRACT_ASSESSMENT', 'PrintingContract', contractId, `Removed assessment #${assessmentNumber}`);
   };
 
@@ -3013,6 +3382,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         setIsStatementOpen,
         isCommandPaletteOpen,
         setIsCommandPaletteOpen,
+        isPosModalOpen,
+        setIsPosModalOpen,
         previewDocument,
         openDocumentPreview,
         closeDocumentPreview,

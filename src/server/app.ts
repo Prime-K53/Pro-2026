@@ -15,9 +15,11 @@ import { createReportsRouter } from './routes/reportsRoutes.ts';
 import { createBackupRouter } from './routes/backupRoutes.ts';
 import { createReportSchedulingRouter } from './routes/reportSchedulingRoutes.ts';
 import { createPrintingRouter } from './routes/printingRoutes.ts';
+import { createWalletRouter } from './routes/walletRoutes.ts';
 import { createMigrationRouter } from './routes/migrationRoutes.ts';
 import { createDocumentsRouter } from './routes/documentsRoutes.ts';
 import { createProtectedBusinessRouter } from './routes/protectedRoutes.ts';
+import { createSmartOpsRouter } from './routes/smartOpsRoutes.ts';
 
 export function createApiExpressApp(db: ServerDatabase): Express {
   const app = express();
@@ -72,8 +74,10 @@ export function createApiExpressApp(db: ServerDatabase): Express {
   app.use('/api', createBackupRouter(db));
   app.use('/api', createReportSchedulingRouter(db));
   app.use('/api', createPrintingRouter(db));
+  app.use('/api', createWalletRouter(db));
   app.use('/api', createMigrationRouter(db));
   app.use('/api', createDocumentsRouter(db));
+  app.use('/api', createSmartOpsRouter(db));
   app.use('/api', createProtectedBusinessRouter(db));
 
   // Fallthrough 404 for unknown API paths so they never hit Vite SPA HTML fallback

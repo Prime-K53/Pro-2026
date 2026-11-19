@@ -13,6 +13,12 @@ import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
 import {
+  AmendContractModal,
+  AddAssessmentModal,
+  RemoveAssessmentModal,
+  ContractInfoModal,
+} from '../modals/ContractActionModals';
+import {
   FileSpreadsheet,
   Plus,
   CheckCircle2,
@@ -102,6 +108,18 @@ export const PrintingContractsView: React.FC = () => {
   const [selectedContractId, setSelectedContractId] = useState<string>(
     printingContracts[0]?.id || ''
   );
+
+  // Contract action modal (amend / add / remove / financials / wallet / history / progress)
+  type ContractModalState =
+    | {
+        type: 'amend' | 'add' | 'remove' | 'financials' | 'wallet' | 'history' | 'progress';
+        contractId: string;
+      }
+    | null;
+  const [activeModal, setActiveModal] = useState<ContractModalState>(null);
+  const activeContract = activeModal
+    ? printingContracts.find(c => c.id === activeModal.contractId) || null
+    : null;
 
   // Create Contract Modal State
   const [isNewContractOpen, setIsNewContractOpen] = useState(false);
@@ -554,55 +572,22 @@ export const PrintingContractsView: React.FC = () => {
     defs.push({ id: 'copy-contract', label: 'Copy Contract #', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'printing:read', execute: async () => { await navigator.clipboard?.writeText(contract.contractNumber); triggerShortcutNotice(`Copied ${contract.contractNumber}`); } });
     defs.push({ id: 'contract.view', label: 'View Contract', icon: <Eye className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setSelectedContractId(contract.id) });
     defs.push({ id: 'contract.view-assessments', label: 'View Covered Assessments', icon: <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setSelectedContractId(contract.id) });
-    defs.push({ id: 'contract.prepaid', label: `View Prepaid Amount (${formatCurrency(contract.totalPrepaidAmount, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Prepaid amount: ${formatCurrency(contract.totalPrepaidAmount, currency)}`) });
-    defs.push({ id: 'contract.remaining', label: `View Remaining Balance (${formatCurrency(contract.remainingBalance, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Remaining balance: ${formatCurrency(contract.remainingBalance, currency)}`) });
-    defs.push({ id: 'contract.production-progress', label: 'View Production Progress', icon: <BookOpen className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Production', requiredPermission: 'printing:read', execute: async () => setCurrentView('examinations') });
-    defs.push({ id: 'contract.wallet-tx', label: 'View Wallet Transactions', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => {
-      const txs = (bankTransactions || []).filter((t: any) => t.refNumber === contract.contractNumber);
-      if (txs.length === 0) { triggerShortcutNotice(`No wallet transactions for ${contract.contractNumber}`); return; }
-      const summary = txs.map((t: any) => `${t.date} ${t.type} ${formatCurrency(t.amount, currency)}`).join('\n');
-      window.alert(`Wallet transactions for ${contract.contractNumber}:\n${summary}`);
-    } });
-    defs.push({ id: 'contract.history', label: 'View Contract History', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => triggerShortcutNotice(`Contract ${contract.contractNumber} history: ${contract.status}`) });
+    defs.push({ id: 'contract.prepaid', label: `View Prepaid Amount (${formatCurrency(contract.totalPrepaidAmount, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'financials', contractId: contract.id }) });
+    defs.push({ id: 'contract.remaining', label: `View Remaining Balance (${formatCurrency(contract.remainingBalance, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'financials', contractId: contract.id }) });
+    defs.push({ id: 'contract.production-progress', label: 'View Production Progress', icon: <BookOpen className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Production', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'progress', contractId: contract.id }) });
+    defs.push({ id: 'contract.wallet-tx', label: 'View Wallet Transactions', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'wallet', contractId: contract.id }) });
+    defs.push({ id: 'contract.history', label: 'View Contract History', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'history', contractId: contract.id }) });
     if (contract.status === 'active') {
-      defs.push({ id: 'contract.amend', label: 'Amend Contract', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => {
-        const title = window.prompt('New contract title:', contract.title);
-        if (title === null) return;
-        amendPrintingContract(contract.id, { title: title || contract.title });
-        triggerShortcutNotice(`Amended ${contract.contractNumber}`);
-      } });
+      defs.push({ id: 'contract.amend', label: 'Amend Contract', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => setActiveModal({ type: 'amend', contractId: contract.id }) });
       defs.push({ id: 'contract.cancel', label: 'Cancel Contract', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:write', confirmation: { title: `Cancel ${contract.contractNumber}`, message: 'Cancel this contract.', confirmLabel: 'Cancel Contract', destructive: true }, execute: async () => { cancelPrintingContract(contract.id, 'Cancelled from contract register'); triggerShortcutNotice(`Cancelled ${contract.contractNumber}`); } });
     }
     if (contract.status !== 'active') {
       defs.push({ id: 'contract.activate', label: 'Activate Contract', icon: <Play className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => { activatePrintingContract(contract.id); triggerShortcutNotice(`Activated ${contract.contractNumber}`); } });
       defs.push({ id: 'contract.renew', label: 'Renew Contract', icon: <Repeat className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:write', execute: async () => { renewPrintingContract(contract.id); triggerShortcutNotice(`Renewed ${contract.contractNumber}`); } });
     }
-    defs.push({ id: 'contract.edit-draft', label: 'Edit Draft', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', isVisible: () => contract.status !== 'active', execute: async () => {
-      const title = window.prompt('Edit contract title:', contract.title);
-      if (title === null) return;
-      amendPrintingContract(contract.id, { title: title || contract.title });
-      triggerShortcutNotice(`Updated ${contract.contractNumber}`);
-    } });
-    defs.push({ id: 'contract.add-assessment', label: 'Add Assessment', icon: <Plus className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Assessments', requiredPermission: 'printing:write', execute: async () => {
-      const label = window.prompt('Assessment label:');
-      if (!label) return;
-      const amountStr = window.prompt('Agreed amount:');
-      const amount = Number(amountStr || 0);
-      const date = window.prompt('Scheduled date (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
-      if (!date) return;
-      const nextNum = (contract.assessments?.length || 0) + 1;
-      addContractAssessment(contract.id, { assessmentNumber: nextNum, label, scheduledDate: date, agreedAmount: amount, estimatedSheets: 0, estimatedImpressions: 0, paperCost: 0, tonerCost: 0, totalCost: 0, profit: amount, status: 'pending' });
-      triggerShortcutNotice(`Added assessment #${nextNum}`);
-    } });
-    defs.push({ id: 'contract.remove-assessment', label: 'Remove Eligible Assessment', icon: <Trash2 className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Assessments', destructive: true, requiredPermission: 'printing:write', execute: async () => {
-      const pending = (contract.assessments || []).filter((a: any) => a.status === 'pending');
-      if (pending.length === 0) { triggerShortcutNotice('No eligible (pending) assessments to remove'); return; }
-      const choice = window.prompt(`Enter assessment number to remove: ${pending.map((a: any) => a.assessmentNumber).join(', ')}`);
-      const num = Number(choice);
-      if (!num) return;
-      removeContractAssessment(contract.id, num);
-      triggerShortcutNotice(`Removed assessment #${num}`);
-    } });
+    defs.push({ id: 'contract.edit-draft', label: 'Edit Draft', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:write', isVisible: () => contract.status !== 'active', execute: async () => setActiveModal({ type: 'amend', contractId: contract.id }) });
+    defs.push({ id: 'contract.add-assessment', label: 'Add Assessment', icon: <Plus className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Assessments', requiredPermission: 'printing:write', execute: async () => setActiveModal({ type: 'add', contractId: contract.id }) });
+    defs.push({ id: 'contract.remove-assessment', label: 'Remove Eligible Assessment', icon: <Trash2 className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Assessments', destructive: true, requiredPermission: 'printing:write', execute: async () => setActiveModal({ type: 'remove', contractId: contract.id }) });
     const ctx = buildContractActionContext(contract, null);
     const resolved = resolveActions(defs, ctx);
     if (resolved.length === 0) return null;
@@ -1670,6 +1655,29 @@ export const PrintingContractsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Contract action modals (ERP-grade) */}
+      {activeModal?.type === 'amend' && activeContract && (
+        <AmendContractModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'add' && activeContract && (
+        <AddAssessmentModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'remove' && activeContract && (
+        <RemoveAssessmentModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeContract &&
+        activeModal &&
+        (activeModal.type === 'financials' ||
+          activeModal.type === 'wallet' ||
+          activeModal.type === 'history' ||
+          activeModal.type === 'progress') && (
+          <ContractInfoModal
+            mode={activeModal.type}
+            contract={activeContract}
+            onClose={() => setActiveModal(null)}
+          />
+        )}
     </div>
   );
 };

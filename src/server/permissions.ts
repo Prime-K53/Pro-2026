@@ -59,6 +59,17 @@ export type Permission =
   | 'inventory:deactivate'
   | 'printing:read'
   | 'printing:write'
+  | 'printing:contracts:manage'
+  | 'wallet:read'
+  | 'wallet:transactions:read'
+  | 'wallet:deposit'
+  | 'wallet:allocate'
+  | 'wallet:apply'
+  | 'wallet:refund'
+  | 'wallet:reverse'
+  | 'wallet:adjust'
+  | 'wallet:reconcile'
+  | 'wallet:configure'
   | 'employees:read'
   | 'employees:read_sensitive'
   | 'employees:write'
@@ -67,7 +78,11 @@ export type Permission =
   | 'reports:read'
   | 'reports:export'
   | 'attachments:read'
-  | 'attachments:write';
+  | 'attachments:write'
+  | 'smart_ops:read'
+  | 'smart_ops:write'
+  | 'pos:read'
+  | 'pos:write';
 
 export interface RoleDefinition {
   role: CompanyRole;
@@ -125,6 +140,17 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:deactivate',
       'printing:read',
       'printing:write',
+      'printing:contracts:manage',
+      'wallet:read',
+      'wallet:transactions:read',
+      'wallet:deposit',
+      'wallet:allocate',
+      'wallet:apply',
+      'wallet:refund',
+      'wallet:reverse',
+      'wallet:adjust',
+      'wallet:reconcile',
+      'wallet:configure',
       'employees:read',
       'employees:read_sensitive',
       'employees:write',
@@ -134,6 +160,10 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'reports:export',
       'attachments:read',
       'attachments:write',
+      'smart_ops:read',
+      'smart_ops:write',
+      'pos:read',
+      'pos:write',
     ],
   },
   Bookkeeper: {
@@ -169,11 +199,17 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:damage',
       'printing:read',
       'printing:write',
+      'wallet:read',
+      'wallet:transactions:read',
       'employees:read', // Redacted directory only (no payRate, SSN, bank accounts)
       'reports:read',
       'reports:export',
       'attachments:read',
       'attachments:write',
+      'smart_ops:read',
+      'smart_ops:write',
+      'pos:read',
+      'pos:write',
     ],
   },
   Accountant: {
@@ -204,9 +240,22 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'tax:write',
       'inventory:read',
       'printing:read',
+      'printing:contracts:manage',
+      'wallet:read',
+      'wallet:transactions:read',
+      'wallet:deposit',
+      'wallet:allocate',
+      'wallet:apply',
+      'wallet:refund',
+      'wallet:reverse',
+      'wallet:adjust',
+      'wallet:reconcile',
+      'wallet:configure',
       'reports:read',
       'reports:export',
       'attachments:read',
+      'smart_ops:read',
+      'pos:read',
     ],
   },
   ProductionManager: {
@@ -232,9 +281,15 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:deactivate',
       'printing:read',
       'printing:write',
+      'wallet:read',
+      'wallet:transactions:read',
       'reports:read',
       'attachments:read',
       'attachments:write',
+      'smart_ops:read',
+      'smart_ops:write',
+      'pos:read',
+      'pos:write',
     ],
   },
   'Read-Only': {
@@ -255,9 +310,13 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'tax:read',
       'inventory:read',
       'printing:read',
+      'wallet:read',
+      'wallet:transactions:read',
       'employees:read', // Redacted directory only
       'reports:read',
       'attachments:read',
+      'smart_ops:read',
+      'pos:read',
     ],
   },
 };

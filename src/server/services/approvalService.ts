@@ -22,6 +22,16 @@ export const APPROVAL_ACTION_TYPES = [
   'credit_memo',
   'estimate_conversion',
   'po_receive',
+  'wallet_refund',
+  'wallet_reversal',
+  'wallet_adjustment',
+  'wallet_writeoff',
+  'contract_cancel',
+  'contract_refund',
+  'contract_forfeit',
+  'contract_assessment_change',
+  'contract_activation',
+  'contract_amendment',
 ] as const;
 
 export type ApprovalActionType = (typeof APPROVAL_ACTION_TYPES)[number];

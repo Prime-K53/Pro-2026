@@ -35,7 +35,9 @@ export function loadServerConfig(): ServerConfig {
   const isProduction = nodeEnv === 'production';
 
   return {
-    port: parsePositiveInt(process.env.PORT, 3000),
+    port: isProduction
+      ? parsePositiveInt(process.env.PMS_PORT || process.env.PORT, 3000)
+      : parsePositiveInt(process.env.PMS_PORT, 3000),
     nodeEnv,
     appUrl: (process.env.APP_URL || 'http://localhost:3000').trim(),
     dbDataDir: (process.env.PMS_PG_DATA_DIR || path.resolve(process.cwd(), '.data', 'pms-pg')).trim(),

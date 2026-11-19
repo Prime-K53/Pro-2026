@@ -43,6 +43,9 @@ const ExaminationView = lazy(() =>
 const AllDocumentsView = lazy(() =>
   import('./components/views/AllDocumentsView').then(m => ({ default: m.AllDocumentsView }))
 );
+const SmartOperationsView = lazy(() =>
+  import('./components/views/SmartOperationsView').then(m => ({ default: m.SmartOperationsView }))
+);
 
 // Modals
 import { CommandPalette } from './components/modals/CommandPalette';
@@ -60,6 +63,7 @@ import { PayBillsModal } from './components/modals/PayBillsModal';
 import { IifImportModal } from './components/modals/IifImportModal';
 import { CustomerStatementModal } from './components/modals/CustomerStatementModal';
 import { DocumentPreviewModal } from './components/modals/DocumentPreviewModal';
+import { PosModal } from './components/modals/PosModal';
 
 class AppErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -201,6 +205,8 @@ const AppContent: React.FC = () => {
         return <AccessControlView />;
       case 'documents':
         return <AllDocumentsView />;
+      case 'smart-operations':
+        return <SmartOperationsView />;
       default:
         return <HomeWorkflowView />;
     }
@@ -294,6 +300,7 @@ const AppContent: React.FC = () => {
       <IifImportModal />
       <CustomerStatementModal />
       <DocumentPreviewModal />
+      <PosModal />
     </div>
   );
 };

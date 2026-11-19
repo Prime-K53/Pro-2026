@@ -24,6 +24,7 @@ import {
   Calculator,
   FolderOpen,
   ClipboardCheck,
+  Zap,
   X,
 } from 'lucide-react';
 
@@ -144,6 +145,7 @@ export const SidebarNavigator: React.FC = () => {
           countTone: 'text-blue-600 dark:text-blue-400',
         },
         { id: 'customers', label: 'Customer Center', icon: Users },
+        { id: 'smart-operations', label: 'Smart Operations', icon: Zap },
       ],
     },
     {

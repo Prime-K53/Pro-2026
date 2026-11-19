@@ -34,6 +34,7 @@ export const AppHeader: React.FC = () => {
     setIsIifImportOpen,
     setIsStatementOpen,
     setIsCommandPaletteOpen,
+    setIsPosModalOpen,
     resetToDemoData,
     exportDataToJson,
     importDataFromJson,
@@ -149,6 +150,12 @@ export const AppHeader: React.FC = () => {
         return;
       case 'activities.payroll':
         setCurrentView('payroll');
+        return;
+      case 'activities.pos':
+        setIsPosModalOpen(true);
+        return;
+      case 'smart-ops.open':
+        setCurrentView('smart-operations');
         return;
       case 'reports.open':
         setCurrentView('reports');

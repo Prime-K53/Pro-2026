@@ -156,4 +156,170 @@ export const printingApi = {
     });
     return d.batch;
   },
+
+  // ---- Printing Contracts: read + lifecycle (advanced options) ----
+
+  /** List all printing contracts (with assessment schedules) for the active company. */
+  async listContracts(): Promise<any[]> {
+    const d = await requestJson<{ contracts: any[] }>('/api/printing/contracts');
+    return d.contracts || [];
+  },
+
+  /** Fetch a single printing contract with its assessment milestones. */
+  async getContract(id: number): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}`);
+    return d.contract;
+  },
+
+  /** Amend contract metadata (title, academic year, dates, notes). */
+  async amendContract(
+    id: number,
+    payload: { title?: string; academicYear?: string; startDate?: string; endDate?: string; notes?: string | null }
+  ): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Activate a previously cancelled contract. */
+  async activateContract(id: number): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/activate`, {
+      method: 'POST',
+      body: '{}',
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Cancel an active contract. */
+  async cancelContract(id: number, reason?: string): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Renew a contract into a fresh retainer period (posts a new deposit journal). */
+  async renewContract(id: number): Promise<any> {
+    const d = await requestJson<any>(`/api/printing/contracts/${id}/renew`, {
+      method: 'POST',
+      body: '{}',
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+
+  /** Add an assessment milestone to an active contract. */
+  async addContractAssessment(
+    id: number,
+    payload: {
+      assessmentNumber: number;
+      label: string;
+      scheduledDate: string;
+      agreedAmount: string | number;
+      rawPaperItemId?: number | null;
+      rawTonerItemId?: number | null;
+      estimatedSheets?: string | number | null;
+      estimatedImpressions?: string | number | null;
+      paperCost?: string | number | null;
+      tonerCost?: string | number | null;
+      examBatchNote?: string | null;
+    }
+  ): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/assessments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Update a pending assessment milestone (label, date, agreed amount, costs). */
+  async updateContractAssessment(
+    id: number,
+    assessmentNumber: number,
+    payload: {
+      label?: string;
+      scheduledDate?: string;
+      agreedAmount?: string | number;
+      rawPaperItemId?: number | null;
+      rawTonerItemId?: number | null;
+      estimatedSheets?: string | number | null;
+      estimatedImpressions?: string | number | null;
+      paperCost?: string | number | null;
+      tonerCost?: string | number | null;
+    }
+  ): Promise<any> {
+    const d = await requestJson<{ contract: any }>(
+      `/api/printing/contracts/${id}/assessments/${assessmentNumber}`,
+      { method: 'PATCH', body: JSON.stringify(payload) }
+    );
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Remove a pending assessment milestone from a contract. */
+  async removeContractAssessment(id: number, assessmentNumber: number): Promise<any> {
+    const d = await requestJson<{ contract: any }>(
+      `/api/printing/contracts/${id}/assessments/${assessmentNumber}`,
+      { method: 'DELETE' }
+    );
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /**
+   * Complete a pending assessment: deducts the agreed amount from the prepaid
+   * retainer and recognizes the revenue through the general ledger.
+   */
+  async completeContractAssessment(
+    id: number,
+    assessmentNumber: number,
+    payload: { examBatchNote?: string | null; linkedInvoiceId?: number | null } = {}
+  ): Promise<any> {
+    const d = await requestJson<{ contract: any }>(
+      `/api/printing/contracts/${id}/assessments/${assessmentNumber}/complete`,
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Bank/wallet transactions recorded against a contract number. */
+  async getContractWalletTransactions(id: number): Promise<any[]> {
+    const d = await requestJson<{ transactions: any[] }>(
+      `/api/printing/contracts/${id}/wallet-transactions`
+    );
+    return d.transactions || [];
+  },
+
+  // ---- Examination papers: read + status + removal ----
+
+  /** List examination print papers for the active company. */
+  async listExamPapers(): Promise<any[]> {
+    const d = await requestJson<{ papers: any[] }>('/api/printing/exam-papers');
+    return d.papers || [];
+  },
+
+  /** Move an examination paper through queued → printing → completed. */
+  async updateExamPaperStatus(id: number, status: 'queued' | 'printing' | 'completed'): Promise<any> {
+    const d = await requestJson<any>(`/api/printing/exam-papers/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+
+  /** Remove an uninvoiced, incomplete examination paper. */
+  async deleteExamPaper(id: number): Promise<any> {
+    const d = await requestJson<any>(`/api/printing/exam-papers/${id}`, { method: 'DELETE' });
+    emitAccountingUpdated();
+    return d;
+  },
 };

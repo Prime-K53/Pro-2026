@@ -375,7 +375,7 @@ export interface CreateInvoiceInput {
   lines: InvoiceLineInput[];
 }
 
-async function consumeLineInventory(
+export async function consumeLineInventory(
   tx: Transaction,
   companyId: number,
   sourceType: 'invoice' | 'sales_receipt',

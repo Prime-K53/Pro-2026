@@ -25,8 +25,29 @@ import {
   returnUnusedMaterials,
 } from '../services/productionService.ts';
 import {
+  addContractAssessment,
+  amendPrintingContract,
+  approveContractAmendment,
+  completeContractAssessment,
   createExamBatch,
   createPrintingContract,
+  deleteExamPaper,
+  getPrintingContract,
+  listContractAmendments,
+  listContractWalletTransactions,
+  listExamPapers,
+  listPrintingContracts,
+  recordContractAcceptance,
+  rejectContractAmendment,
+  removeContractAssessment,
+  renewPrintingContract,
+  requestAssessmentChangeApproval,
+  requestContractAmendment,
+  resumeContract,
+  setPrintingContractStatus,
+  suspendContract,
+  updateContractAssessment,
+  updateExamPaperStatus,
 } from '../services/printingRecordsService.ts';
 
 function toActor(req: Request): ActorContext {
@@ -312,7 +333,7 @@ export function createPrintingRouter(db: ServerDatabase): Router {
   });
 
   // Prepaid school printing retainer. Posts the cash-in / unearned-revenue entry.
-  router.post('/printing/contracts', requirePermission('printing:write'), async (req: Request, res: Response) => {
+  router.post('/printing/contracts', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
     try {
       const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
         createPrintingContract(tx, req.auth!.companyId, toActor(req), {
@@ -375,6 +396,410 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         getInventoryValuationReport(tx, req.auth!.companyId)
       );
       return res.json({ companyId: req.auth!.companyId, valuation });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  /* ================================================================
+   * Printing Contracts — read + lifecycle (advanced options)
+   * ================================================================ */
+
+  router.get('/printing/contracts', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const contracts = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listPrintingContracts(tx, req.auth!.companyId)
+      );
+      return res.json({ companyId: req.auth!.companyId, contracts });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.get('/printing/contracts/:id', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getPrintingContract(tx, req.auth!.companyId, id)
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.patch('/printing/contracts/:id', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        amendPrintingContract(tx, req.auth!.companyId, toActor(req), id, {
+          title: req.body?.title,
+          academicYear: req.body?.academicYear,
+          startDate: req.body?.startDate,
+          endDate: req.body?.endDate,
+          notes: req.body?.notes,
+        })
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/activate', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        setPrintingContractStatus(tx, req.auth!.companyId, toActor(req), id, 'activate')
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/cancel', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        setPrintingContractStatus(tx, req.auth!.companyId, toActor(req), id, 'cancel', req.body?.reason ?? null, {
+          settlementMode: req.body?.settlementMode ?? null,
+          refundBankAccountId:
+            req.body?.refundBankAccountId != null ? Number(req.body.refundBankAccountId) : null,
+        })
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/renew', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        renewPrintingContract(tx, req.auth!.companyId, toActor(req), id, req.body ?? undefined)
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/suspend', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        suspendContract(tx, req.auth!.companyId, toActor(req), id, String(req.body?.reason || ''))
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/resume', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        resumeContract(tx, req.auth!.companyId, toActor(req), id)
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/acceptances', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const body = req.body || {};
+      const method = String(body.method || '');
+      if (!['drawn', 'otp', 'upload'].includes(method)) {
+        return res.status(400).json({ error: 'Invalid acceptance method' });
+      }
+      const acceptance = await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordContractAcceptance(tx, req.auth!.companyId, toActor(req), id, {
+          method: method as 'drawn' | 'otp' | 'upload',
+          signerName: String(body.signerName || ''),
+          signerEmail: body.signerEmail ?? null,
+          signerPhone: body.signerPhone ?? null,
+          documentVersion: String(body.documentVersion || ''),
+          evidenceFileId: body.evidenceFileId != null ? Number(body.evidenceFileId) : null,
+          otpVerified: body.otpVerified === true,
+          outcome: body.outcome === 'rejected' ? 'rejected' : 'accepted',
+          ipAddress: body.ipAddress ?? null,
+        })
+      );
+      return res.status(201).json({ acceptance });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/amendments', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const body = req.body || {};
+      const amendment = await db.withCompanyDb(req.auth!.companyId, tx =>
+        requestContractAmendment(tx, req.auth!.companyId, toActor(req), id, {
+          amendmentType: String(body.amendmentType || 'terms') as 'terms' | 'schedule' | 'amount',
+          reason: String(body.reason || ''),
+          title: body.title,
+          academicYear: body.academicYear,
+          startDate: body.startDate,
+          endDate: body.endDate,
+          notes: body.notes ?? null,
+          assessments: Array.isArray(body.assessments) ? body.assessments : undefined,
+        })
+      );
+      return res.status(201).json({ amendment });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.get('/printing/contracts/:id/amendments', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const amendments = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listContractAmendments(tx, req.auth!.companyId, id)
+      );
+      return res.json({ amendments });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/amendments/:amendmentId/approve', requirePermission('approvals:decide'), async (req: Request, res: Response) => {
+    try {
+      const amendmentId = Number(req.params.amendmentId);
+      if (!Number.isInteger(amendmentId) || amendmentId <= 0) {
+        return res.status(400).json({ error: 'Invalid amendment id' });
+      }
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        approveContractAmendment(
+          tx,
+          req.auth!.companyId,
+          toActor(req),
+          amendmentId,
+          req.body?.approvalRequestId != null ? Number(req.body.approvalRequestId) : null
+        )
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/amendments/:amendmentId/reject', requirePermission('approvals:decide'), async (req: Request, res: Response) => {
+    try {
+      const amendmentId = Number(req.params.amendmentId);
+      if (!Number.isInteger(amendmentId) || amendmentId <= 0) {
+        return res.status(400).json({ error: 'Invalid amendment id' });
+      }
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        rejectContractAmendment(tx, req.auth!.companyId, toActor(req), amendmentId, String(req.body?.reason || ''))
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/assessment-changes', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const body = req.body || {};
+      const request = await db.withCompanyDb(req.auth!.companyId, tx =>
+        requestAssessmentChangeApproval(tx, req.auth!.companyId, toActor(req), id, {
+          reason: String(body.reason || ''),
+          amount: body.amount,
+          payload: body.payload,
+        })
+      );
+      return res.status(201).json({ request });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/assessments', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        addContractAssessment(tx, req.auth!.companyId, toActor(req), id, {
+          assessmentNumber: Number(req.body?.assessmentNumber),
+          label: req.body?.label,
+          scheduledDate: req.body?.scheduledDate,
+          agreedAmount: req.body?.agreedAmount,
+          rawPaperItemId: req.body?.rawPaperItemId ?? null,
+          rawTonerItemId: req.body?.rawTonerItemId ?? null,
+          estimatedSheets: req.body?.estimatedSheets ?? null,
+          estimatedImpressions: req.body?.estimatedImpressions ?? null,
+          paperCost: req.body?.paperCost ?? null,
+          tonerCost: req.body?.tonerCost ?? null,
+          examBatchNote: req.body?.examBatchNote ?? null,
+        })
+      );
+      return res.status(201).json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.patch(
+    '/printing/contracts/:id/assessments/:assessmentNumber',
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        const assessmentNumber = Number(req.params.assessmentNumber);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        if (!Number.isInteger(assessmentNumber) || assessmentNumber <= 0) {
+          return res.status(400).json({ error: 'Invalid assessment number' });
+        }
+        const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+          updateContractAssessment(tx, req.auth!.companyId, toActor(req), id, assessmentNumber, {
+            assessmentNumber,
+            label: req.body?.label,
+            scheduledDate: req.body?.scheduledDate,
+            agreedAmount: req.body?.agreedAmount,
+            rawPaperItemId: req.body?.rawPaperItemId,
+            rawTonerItemId: req.body?.rawTonerItemId,
+            estimatedSheets: req.body?.estimatedSheets,
+            estimatedImpressions: req.body?.estimatedImpressions,
+            paperCost: req.body?.paperCost,
+            tonerCost: req.body?.tonerCost,
+          })
+        );
+        return res.json({ contract });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  router.delete(
+    '/printing/contracts/:id/assessments/:assessmentNumber',
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        const assessmentNumber = Number(req.params.assessmentNumber);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        if (!Number.isInteger(assessmentNumber) || assessmentNumber <= 0) {
+          return res.status(400).json({ error: 'Invalid assessment number' });
+        }
+        const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+          removeContractAssessment(tx, req.auth!.companyId, toActor(req), id, assessmentNumber)
+        );
+        return res.json({ contract });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  router.post(
+    '/printing/contracts/:id/assessments/:assessmentNumber/complete',
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        const assessmentNumber = Number(req.params.assessmentNumber);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        if (!Number.isInteger(assessmentNumber) || assessmentNumber <= 0) {
+          return res.status(400).json({ error: 'Invalid assessment number' });
+        }
+        const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+          completeContractAssessment(tx, req.auth!.companyId, toActor(req), id, assessmentNumber, {
+            examBatchNote: req.body?.examBatchNote ?? null,
+            linkedInvoiceId: req.body?.linkedInvoiceId != null ? Number(req.body.linkedInvoiceId) : null,
+          })
+        );
+        return res.json({ contract });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  router.get(
+    '/printing/contracts/:id/wallet-transactions',
+    requirePermission('printing:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        const result = await db.withCompanyDb(req.auth!.companyId, async tx => {
+          const contract = await getPrintingContract(tx, req.auth!.companyId, id);
+          const transactions = await listContractWalletTransactions(
+            tx,
+            req.auth!.companyId,
+            contract.contractNumber
+          );
+          return { contractNumber: contract.contractNumber, transactions };
+        });
+        return res.json(result);
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  /* ================================================================
+   * Examination papers — read + status transitions + removal
+   * ================================================================ */
+
+  router.get('/printing/exam-papers', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const papers = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listExamPapers(tx, req.auth!.companyId)
+      );
+      return res.json({ companyId: req.auth!.companyId, papers });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.patch('/printing/exam-papers/:id/status', requirePermission('printing:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const status = String(req.body?.status || '').trim();
+      if (!['queued', 'printing', 'completed'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid exam paper status' });
+      }
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        updateExamPaperStatus(tx, req.auth!.companyId, toActor(req), id, status as 'queued' | 'printing' | 'completed')
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.delete('/printing/exam-papers/:id', requirePermission('printing:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        deleteExamPaper(tx, req.auth!.companyId, toActor(req), id)
+      );
+      return res.json(result);
     } catch (err) {
       return handlePrintingError(res, err);
     }

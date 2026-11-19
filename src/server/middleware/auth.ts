@@ -42,10 +42,13 @@ export function getClientIp(req: Request): string {
   return req.socket?.remoteAddress || '127.0.0.1';
 }
 
-export function clearSessionCookie(res: Response, cookieName: string) {
+export function clearSessionCookie(res: Response, cookieName: string, req?: Request) {
+  const proto = String(req?.headers?.['x-forwarded-proto'] || '').toLowerCase();
+  const https = Boolean(req?.secure || proto.includes('https') || process.env.NODE_ENV === 'production');
   res.clearCookie(cookieName, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: https ? 'none' : 'lax',
+    secure: https,
     path: '/',
   });
 }
@@ -98,7 +101,7 @@ export function createAuthMiddleware(db: ServerDatabase) {
       if (rawCookie) {
         const rawToken = verifySignedSessionCookieValue(rawCookie, db.config.authSessionSecret);
         if (!rawToken) {
-          clearSessionCookie(res, db.config.cookieName);
+          clearSessionCookie(res, db.config.cookieName, req);
           return res.status(401).json({ error: 'Invalid session signature' });
         }
 
@@ -211,7 +214,7 @@ export function createAuthMiddleware(db: ServerDatabase) {
         });
 
         if (!validation.ok) {
-          clearSessionCookie(res, db.config.cookieName);
+          clearSessionCookie(res, db.config.cookieName, req);
           return res.status(validation.status).json({ error: validation.error });
         }
 

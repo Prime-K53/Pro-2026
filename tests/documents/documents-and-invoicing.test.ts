@@ -181,8 +181,8 @@ async function main() {
           `INSERT INTO printing_contracts (
              company_id, contract_number, school_customer_id, title, academic_year,
              start_date, end_date, total_prepaid_amount, total_assessments, completed_assessments,
-             remaining_balance, deposit_bank_account_id, liability_account_id, status, notes
-           ) VALUES ($1, 'CTR-DOC-001', $2, '2026 Examination Retainer', '2026', '2026-01-10', '2026-12-10', 40000.0000, 2, 0, 40000.0000, $3, $4, 'active', '2 assessment cycles')
+             remaining_balance, deposit_bank_account_id, liability_account_id, status, notes, activated_at
+           ) VALUES ($1, 'CTR-DOC-001', $2, '2026 Examination Retainer', '2026', '2026-01-10', '2026-12-10', 40000.0000, 2, 0, 40000.0000, $3, $4, 'active', '2 assessment cycles', NOW())
            RETURNING id`,
           [companyAId, seededCustomerId, bankAcct.id, liabAcct.id]
         );

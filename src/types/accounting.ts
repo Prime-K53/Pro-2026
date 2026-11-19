@@ -142,6 +142,7 @@ export type ExamPaperStatus = 'queued' | 'printing' | 'completed' | 'invoiced';
 
 export interface ExamPaper {
   id: string;
+  backendId?: number;
   jobNumber: string;
   schoolCustomerId: string;
   assessmentName: string;
@@ -197,6 +198,7 @@ export interface ContractAssessmentMilestone {
 
 export interface PrintingContract {
   id: string;
+  backendId?: number;
   contractNumber: string;
   schoolCustomerId: string;
   title: string;
@@ -208,7 +210,18 @@ export interface PrintingContract {
   remainingBalance: number;
   completedAssessments: number;
   depositBankAccountId: string;
-  status: 'active' | 'exhausted' | 'cancelled';
+  status: 'draft' | 'active' | 'suspended' | 'completed' | 'exhausted' | 'cancelled';
+  activatedAt?: string;
+  activatedBy?: number;
+  completedAt?: string;
+  completedBy?: number;
+  suspendedAt?: string;
+  suspendedBy?: number;
+  suspensionReason?: string;
+  resumedAt?: string;
+  resumedBy?: number;
+  renewalOfContractId?: number;
+  customerAcceptanceId?: number;
   assessments: ContractAssessmentMilestone[];
   depositInvoiceId?: string;
   depositBackendInvoiceId?: number;

@@ -18,6 +18,8 @@ import {
   FileSpreadsheet,
   Calculator,
   FolderOpen,
+  ShoppingCart,
+  Zap,
 } from 'lucide-react';
 
 export const CommandPalette: React.FC = () => {
@@ -30,6 +32,7 @@ export const CommandPalette: React.FC = () => {
     setIsWriteCheckOpen,
     setIsReceivePaymentOpen,
     setIsOcrScannerOpen,
+    setIsPosModalOpen,
     invoices,
     customers,
     vendors,
@@ -55,6 +58,26 @@ export const CommandPalette: React.FC = () => {
 
   // Filter actions
   const actions = [
+    {
+      id: 'act-pos',
+      title: 'Open Full POS Terminal',
+      subtitle: 'Point-of-Sale checkout with live inventory, promo codes, referrals & multi-tender',
+      icon: ShoppingCart,
+      handler: () => {
+        setIsPosModalOpen(true);
+        setIsCommandPaletteOpen(false);
+      },
+    },
+    {
+      id: 'act-smart-ops',
+      title: 'Open Smart Operations Hub',
+      subtitle: 'Marketing messages, WhatsApp price cards, referrals & promotions',
+      icon: Zap,
+      handler: () => {
+        setCurrentView('smart-operations');
+        setIsCommandPaletteOpen(false);
+      },
+    },
     {
       id: 'act-invoice',
       title: 'Create New Invoice',

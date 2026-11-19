@@ -7,6 +7,7 @@ import { CompanyRole } from './permissions.ts';
 import { hashPassword } from './supabaseAuth.ts';
 import { writeAuditLog } from './audit.ts';
 import { postJournalEntry, postOpeningBalances } from './services/accountingEngine.ts';
+import { createExamBatch, createPrintingContract } from './services/printingRecordsService.ts';
 
 export interface ServerDatabase {
   pg: PGlite;
@@ -296,11 +297,23 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
          purchase_unit, usage_unit, conversion_factor, asset_account_id, cogs_account_id, income_account_id
        ) VALUES
          ($1, 'RM-A4-80G', 'A4 80gsm White Bond Paper', 'raw_material', 'Internal press paper ream', 145.000000, 0.0000, 120.000000, 25.000000, 'Ream', 'Sheet', 500.000000, $2, $3, $4),
+         ($1, 'RM-TONER-K', 'Kyocera TK-1124 Toner Cartridge', 'raw_material', 'Black toner cartridge for press', 320.000000, 0.0000, 40.000000, 8.000000, 'Cartridge', 'Cartridge', 1.000000, $2, $3, $4),
          ($1, 'PP-EXBOOK-A4', 'Custom School Exercise Book', 'printed_product', 'Non-stocked BOM printed item', 6.400000, 14.0000, 0.000000, 0.000000, 'Book', 'Book', 1.000000, $2, $3, $4),
          ($1, 'ST-PEN-BOX', 'Blue Ballpoint Pen Box (12s)', 'stationery', 'Stocked retail stationery', 18.000000, 32.0000, 48.000000, 10.000000, 'Box', 'Box', 1.000000, $2, $3, $4),
          ($1, 'PS-DUPLEX-EXAM', 'Duplex Exam Printing Service', 'printing_service', 'Automated duplex press service', 0.390000, 1.2500, 0.000000, 0.000000, 'Page', 'Page', 1.000000, $2, $3, $4)`,
       [compA.companyId, compA.accountsByCode['1200'], compA.accountsByCode['5000'], compA.accountsByCode['4000']]
     );
+
+    const paperItemRes = await tx.query<{ id: number }>(
+      `SELECT id FROM inventory_items WHERE company_id = $1 AND sku = 'RM-A4-80G'`,
+      [compA.companyId]
+    );
+    const tonerItemRes = await tx.query<{ id: number }>(
+      `SELECT id FROM inventory_items WHERE company_id = $1 AND sku = 'RM-TONER-K'`,
+      [compA.companyId]
+    );
+    const seedPaperItemId = paperItemRes.rows[0] ? Number(paperItemRes.rows[0].id) : 0;
+    const seedTonerItemId = tonerItemRes.rows[0] ? Number(tonerItemRes.rows[0].id) : 0;
 
     await tx.query(
       `INSERT INTO employees (
@@ -360,6 +373,43 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
         { accountId: acA['1010'], debit: '0.0000', credit: '1850.0000', description: 'Paid via Operating Checking' },
       ],
     });
+
+    // Seed a prepaid printing contract + examination batch for Company A so the
+    // Printing Contracts and Examination modules load and round-trip through the
+    // backend instead of relying only on bundled demo state.
+    if (seedPaperItemId && seedTonerItemId) {
+      const seedContract = await createPrintingContract(tx, compA.companyId, adminActor, {
+        schoolCustomerId: custAId,
+        title: 'Grade 12 Mock & Final Examination Retainer',
+        academicYear: '2026',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        totalPrepaidAmount: '3000.0000',
+        totalAssessments: 3,
+        depositBankAccountId: acA['1010'],
+        notes: 'Annual school examination printing retainer (3 assessments)',
+        assessments: [
+          { assessmentNumber: 1, label: 'Term 1 Mock', scheduledDate: '2026-03-15', agreedAmount: '1000.0000', rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, estimatedSheets: '5000.000000', estimatedImpressions: '10000.000000', paperCost: '450.0000', tonerCost: '120.0000' },
+          { assessmentNumber: 2, label: 'Mid-Year Mock', scheduledDate: '2026-07-15', agreedAmount: '1000.0000', rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, estimatedSheets: '5000.000000', estimatedImpressions: '10000.000000', paperCost: '450.0000', tonerCost: '120.0000' },
+          { assessmentNumber: 3, label: 'Final Examination', scheduledDate: '2026-11-15', agreedAmount: '1000.0000', rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, estimatedSheets: '5000.000000', estimatedImpressions: '10000.000000', paperCost: '450.0000', tonerCost: '120.0000' },
+        ],
+        activate: true,
+      });
+
+      await createExamBatch(tx, compA.companyId, adminActor, {
+        schoolCustomerId: custAId,
+        assessmentName: 'Grade 12 Mock Examination',
+        className: 'Grade 12',
+        learnersCount: 120,
+        pricePerLearner: '30.0000',
+        contractId: seedContract.contractId,
+        assessmentNumber: 1,
+        papers: [
+          { subjectName: 'Mathematics', pages: 8, copies: 120, rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, printSide: 'Duplex', bindingType: 'Stapled', sheetsUsed: '480.000000', impressionsUsed: '960.000000', paperCost: '43.2000', tonerCost: '9.6000', productionDate: '2026-03-10', notes: 'Seed batch' },
+          { subjectName: 'English', pages: 6, copies: 120, rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, printSide: 'Duplex', bindingType: 'Stapled', sheetsUsed: '360.000000', impressionsUsed: '720.000000', paperCost: '32.4000', tonerCost: '7.2000', productionDate: '2026-03-10', notes: 'Seed batch' },
+        ],
+      });
+    }
 
     // Mirror seeded check & vendor/template commercial defaults in Company A
     const bank1010Res = await tx.query<{ id: number }>(
