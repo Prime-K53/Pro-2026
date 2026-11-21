@@ -85,6 +85,9 @@ export const documentsApi = {
       '/api/documents/generate-invoice',
       {
         method: 'POST',
+        headers: payload.idempotencyKey
+          ? { 'idempotency-key': payload.idempotencyKey }
+          : undefined,
         body: JSON.stringify(payload),
       }
     );

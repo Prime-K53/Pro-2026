@@ -27,6 +27,12 @@ import {
   AlertCircle,
   TrendingUp,
   Eye,
+  Truck,
+  History,
+  RotateCcw,
+  Ban,
+  ShieldCheck,
+  Package,
 } from 'lucide-react';
 import {
   buildPaperStockFromInventoryItem,
@@ -63,7 +69,12 @@ export const ExaminationView: React.FC = () => {
     printingContracts,
     addExamPapersBatch,
     updateExamPaperStatus,
+    deliverExamPaper,
     deleteExamPaper,
+    cancelExamPaper,
+    reprintExamPaper,
+    getExamPaperEvents,
+    getExamReconciliation,
     createConsolidatedSchoolInvoice,
     linkExamPapersInvoice,
     getRawUsageUnitCost,
@@ -104,6 +115,9 @@ export const ExaminationView: React.FC = () => {
 
   // Batch / New Exam Job Modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [batchSubmissionId, setBatchSubmissionId] = useState(
+    () => `exam-sub-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
   const [schoolCustomerId, setSchoolCustomerId] = useState(
     customers.find(c => c.customerType === 'school')?.id || customers[0]?.id || ''
   );
@@ -135,6 +149,19 @@ export const ExaminationView: React.FC = () => {
       bindingType: 'Saddle-Stitched',
     },
   ]);
+
+  // Production timeline, cancellation, reprint and reconciliation modals
+  const [timelinePaper, setTimelinePaper] = useState<ExamPaper | null>(null);
+  const [timelineEvents, setTimelineEvents] = useState<any[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<ExamPaper | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [reprintTarget, setReprintTarget] = useState<ExamPaper | null>(null);
+  const [reprintReason, setReprintReason] = useState('');
+  const [reprintCopies, setReprintCopies] = useState(0);
+  const [examActionBusy, setExamActionBusy] = useState(false);
+  const [reconciliation, setReconciliation] = useState<any>(null);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
 
   // Consolidated Invoice Confirmation Modal
   const [isInvoiceReviewOpen, setIsInvoiceReviewOpen] = useState(false);
@@ -295,23 +322,22 @@ export const ExaminationView: React.FC = () => {
   }, [printingContracts, activeConsolidatedSchoolId]);
 
   const togglePaperSelection = (paper: ExamPaper) => {
-    if (paper.status === 'invoiced') return;
+    if (paper.status !== 'delivered') return;
     setSelectedPaperIds(prev =>
       prev.includes(paper.id) ? prev.filter(id => id !== paper.id) : [...prev, paper.id]
     );
   };
 
   const handleSelectReadyForSchool = (schoolId: string) => {
-    const readyIds = examPapers
-      .filter(p => p.schoolCustomerId === schoolId && p.status === 'completed')
+    const deliveredIds = examPapers
+      .filter(p => p.schoolCustomerId === schoolId && p.status === 'delivered')
       .map(p => p.id);
-    if (readyIds.length === 0) {
-      const uninvoicedIds = examPapers
-        .filter(p => p.schoolCustomerId === schoolId && p.status !== 'invoiced')
-        .map(p => p.id);
-      setSelectedPaperIds(uninvoicedIds);
-    } else {
-      setSelectedPaperIds(readyIds);
+    setSelectedPaperIds(deliveredIds);
+    if (deliveredIds.length === 0) {
+      triggerShortcutNotice(
+        'No delivered, uninvoiced examination papers are ready for this school.',
+        'warning'
+      );
     }
   };
 
@@ -422,36 +448,106 @@ export const ExaminationView: React.FC = () => {
     };
   }, [batchRows, printSide, selectedPaperMat, selectedTonerMat, assessmentName]);
 
-  const handleSubmitExamBatch = (e: React.FormEvent) => {
+  const handleSubmitExamBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     const validRows = batchRows.filter(r => r.className.trim() && r.subjectName.trim());
     if (!schoolCustomerId || validRows.length === 0) return;
 
-    addExamPapersBatch(
-      validRows.map(row => ({
-        schoolCustomerId,
-        assessmentName,
-        className: row.className.trim(),
-        learnersCount: Math.max(1, row.learnersCount),
-        pricePerLearner: Math.max(0, row.pricePerLearner),
-        subjectName: row.subjectName.trim(),
-        pages: Math.max(1, row.pages),
-        copies: Math.max(1, row.copies),
-        paperSize,
-        printSide,
-        bindingType: row.bindingType,
-        printingItemId,
-        rawPaperItemId: rawPaperItemId || undefined,
-        rawTonerItemId: rawTonerItemId || undefined,
-        ratePerPage: 0,
-        status: 'queued',
-        productionDate,
-        notes,
-      }))
-    );
+    try {
+      const created = await addExamPapersBatch(
+        validRows.map(row => ({
+          schoolCustomerId,
+          assessmentName,
+          className: row.className.trim(),
+          learnersCount: Math.max(1, row.learnersCount),
+          pricePerLearner: Math.max(0, row.pricePerLearner),
+          subjectName: row.subjectName.trim(),
+          pages: Math.max(1, row.pages),
+          copies: Math.max(1, row.copies),
+          paperSize,
+          printSide,
+          bindingType: row.bindingType,
+          printingItemId,
+          rawPaperItemId: rawPaperItemId || undefined,
+          rawTonerItemId: rawTonerItemId || undefined,
+          ratePerPage: 0,
+          status: 'queued',
+          productionDate,
+          notes,
+        })),
+        { submissionId: batchSubmissionId }
+      );
+      triggerShortcutNotice(
+        `Server confirmed ${created.length} examination print job(s) in the production queue.`
+      );
+      setIsAddModalOpen(false);
+    } catch (err: any) {
+      triggerShortcutNotice(
+        err?.message || 'The server rejected the examination batch. Nothing was created.',
+        'error'
+      );
+    }
+  };
 
-    triggerShortcutNotice(`Added ${validRows.length} examination print job(s) to production queue!`);
-    setIsAddModalOpen(false);
+  const openExamTimeline = async (paper: ExamPaper) => {
+    setTimelinePaper(paper);
+    setTimelineEvents([]);
+    setTimelineLoading(true);
+    try {
+      setTimelineEvents(await getExamPaperEvents(paper.id));
+    } catch (err: any) {
+      triggerShortcutNotice(err?.message || 'Could not load the production timeline.', 'error');
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+
+  const openExamReconciliation = async () => {
+    setReconciliationOpen(true);
+    setReconciliation(null);
+    try {
+      setReconciliation(await getExamReconciliation());
+    } catch (err: any) {
+      triggerShortcutNotice(err?.message || 'Could not load the reconciliation report.', 'error');
+    }
+  };
+
+  const handleCancelExamPaper = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelTarget || !cancelReason.trim()) return;
+    setExamActionBusy(true);
+    try {
+      await cancelExamPaper(cancelTarget.id, { reason: cancelReason.trim() });
+      triggerShortcutNotice(`Cancelled ${cancelTarget.jobNumber} and released its commitments.`);
+      setCancelTarget(null);
+      setCancelReason('');
+    } catch (err: any) {
+      triggerShortcutNotice(err?.message || 'The server rejected the cancellation.', 'error');
+    } finally {
+      setExamActionBusy(false);
+    }
+  };
+
+  const handleReprintExamPaper = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reprintTarget || !reprintReason.trim()) return;
+    setExamActionBusy(true);
+    try {
+      const created = await reprintExamPaper(reprintTarget.id, {
+        reason: reprintReason.trim(),
+        copies: reprintCopies > 0 ? reprintCopies : undefined,
+      });
+      triggerShortcutNotice(
+        `Created controlled reprint ${created?.jobNumber || ''} for ${reprintTarget.jobNumber}.`
+      );
+      setReprintTarget(null);
+      setReprintReason('');
+      setReprintCopies(0);
+    } catch (err: any) {
+      triggerShortcutNotice(err?.message || 'The server rejected the reprint.', 'error');
+    } finally {
+      setExamActionBusy(false);
+    }
   };
 
   const handleOpenConsolidatedReview = (paperIdsOverride?: string[]) => {
@@ -523,18 +619,27 @@ export const ExaminationView: React.FC = () => {
     e.preventDefault();
     if (selectedPapers.length === 0 || hasMultipleSchoolsSelected) return;
 
-    const created = await createConsolidatedSchoolInvoice(
-      selectedPapers.map(p => p.id),
-      {
-        includeTax: invoiceIncludeTax,
-        notes: invoiceNotes || undefined,
-        contractId: selectedContractId || undefined,
-        assessmentNumber:
-          selectedContractId && selectedAssessmentNumber !== ''
-            ? Number(selectedAssessmentNumber)
-            : undefined,
-      }
-    );
+    let created: Awaited<ReturnType<typeof createConsolidatedSchoolInvoice>> = null;
+    try {
+      created = await createConsolidatedSchoolInvoice(
+        selectedPapers.map(p => p.id),
+        {
+          includeTax: invoiceIncludeTax,
+          notes: invoiceNotes || undefined,
+          contractId: selectedContractId || undefined,
+          assessmentNumber:
+            selectedContractId && selectedAssessmentNumber !== ''
+              ? Number(selectedAssessmentNumber)
+              : undefined,
+        }
+      );
+    } catch (err: any) {
+      triggerShortcutNotice(
+        err?.message || 'Invoice generation failed. No invoice was posted.',
+        'error'
+      );
+      return;
+    }
 
     if (created) {
       setSelectedPaperIds([]);
@@ -567,11 +672,11 @@ export const ExaminationView: React.FC = () => {
   const queuedOrPrintingCount = examPapers.filter(
     p => p.status === 'queued' || p.status === 'printing'
   ).length;
-  const readyToInvoiceCount = examPapers.filter(p => p.status === 'completed').length;
+  const readyToInvoiceCount = examPapers.filter(p => p.status === 'delivered').length;
   const readyClassRevenue = useMemo(() => {
     const m = new Map<string, number>();
     examPapers
-      .filter(p => p.status === 'completed')
+      .filter(p => p.status === 'delivered')
       .forEach(p => {
         const k = `${p.schoolCustomerId}__${p.assessmentName}__${p.className}`;
         if (!m.has(k)) m.set(k, p.learnersCount * p.pricePerLearner);
@@ -620,7 +725,7 @@ export const ExaminationView: React.FC = () => {
         icon: <Eye className="w-3.5 h-3.5 text-slate-700" />,
         group: 'view',
         groupLabel: 'Document',
-        requiredPermission: 'printing:read',
+        requiredPermission: 'exams:view',
         execute: async () => openExamSheetPreview(cls.papers),
       },
     ];
@@ -631,7 +736,7 @@ export const ExaminationView: React.FC = () => {
         icon: <Layers className="w-3.5 h-3.5 text-blue-600" />,
         group: 'process',
         groupLabel: 'Actions',
-        requiredPermission: 'printing:read',
+        requiredPermission: 'exams:view',
         execute: async () => setSelectedPaperIds(uninvoicedIds),
       });
       defs.push({
@@ -640,7 +745,7 @@ export const ExaminationView: React.FC = () => {
         icon: <FileText className="w-3.5 h-3.5 text-emerald-600" />,
         group: 'process',
         groupLabel: 'Actions',
-        requiredPermission: 'invoices:write',
+        requiredPermission: 'exams:invoice',
         execute: async () => handleOpenConsolidatedReview(uninvoicedIds),
       });
     } else {
@@ -680,25 +785,53 @@ export const ExaminationView: React.FC = () => {
         icon: <Eye className="w-3.5 h-3.5 text-slate-700" />,
         group: 'view',
         groupLabel: 'Document',
-        requiredPermission: 'printing:read',
+        requiredPermission: 'exams:view',
         execute: async () => openExamSheetPreview([paper]),
+      },
+      {
+        id: 'exam.timeline',
+        label: 'Production Timeline & Audit',
+        icon: <History className="w-3.5 h-3.5 text-slate-700" />,
+        group: 'view',
+        groupLabel: 'Audit',
+        requiredPermission: 'exams:view',
+        execute: async () => openExamTimeline(paper),
       },
     ];
     if (paper.status === 'queued') {
-      defs.push({ id: 'exam.start-printing', label: 'Start Press Printing', icon: <Printer className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Production', requiredPermission: 'printing:write', execute: async () => updateExamPaperStatus(paper.id, 'printing') });
+      defs.push({ id: 'exam.start-printing', label: 'Start Press Printing (Reserve & Issue Materials)', icon: <Printer className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Production', requiredPermission: 'exams:produce', execute: async () => { try { await updateExamPaperStatus(paper.id, 'printing'); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the production start.', 'error'); } } });
     }
-    if (paper.status === 'queued' || paper.status === 'printing') {
-      defs.push({ id: 'exam.complete-print', label: 'Mark Print Completed (Deduct Paper & Toner)', icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Production', requiredPermission: 'printing:write', execute: async () => { updateExamPaperStatus(paper.id, 'completed'); triggerShortcutNotice(`Completed ${paper.jobNumber} & deducted paper sheets + toner impressions`); } });
+    if (paper.status === 'printing') {
+      defs.push({ id: 'exam.complete-print', label: 'Pass QC & Complete Production', icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:qc', execute: async () => { try { await updateExamPaperStatus(paper.id, 'completed'); triggerShortcutNotice(`Completed ${paper.jobNumber} and recorded QC approval`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the QC pass.', 'error'); } } });
+      defs.push({ id: 'exam.qc-hold', label: 'Place on QC Hold', icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:qc', execute: async () => { const reason = window.prompt(`Reason for QC hold on ${paper.jobNumber}:`); if (!reason?.trim()) return; try { await updateExamPaperStatus(paper.id, 'qc_hold', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} placed on QC hold.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the QC hold.', 'error'); } } });
     }
-    if (paper.status !== 'invoiced') {
-      defs.push({ id: 'exam.select-school-ready', label: 'Select All Ready for School', icon: <Layers className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Actions', requiredPermission: 'printing:read', execute: async () => handleSelectReadyForSchool(paper.schoolCustomerId) });
-      defs.push({ id: 'exam.invoice-now', label: 'Invoice This Paper Now', icon: <FileText className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Actions', requiredPermission: 'invoices:write', execute: async () => handleOpenConsolidatedReview([paper.id]) });
-    } else {
+    if (paper.status === 'qc_hold') {
+      defs.push({ id: 'exam.qc-rework', label: 'Authorise Rework (back to press)', icon: <RotateCcw className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:produce', execute: async () => { const reason = window.prompt(`Rework reason for ${paper.jobNumber}:`); if (!reason?.trim()) return; try { await updateExamPaperStatus(paper.id, 'printing', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} authorised for rework.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the rework.', 'error'); } } });
+    }
+    if (paper.status === 'completed' || paper.status === 'qc_passed') {
+      defs.push({ id: 'exam.pack', label: 'Record Packing', icon: <Package className="w-3.5 h-3.5 text-indigo-600" />, group: 'process', groupLabel: 'Dispatch', requiredPermission: 'exams:dispatch', execute: async () => { const countRaw = window.prompt(`Number of packages for ${paper.jobNumber}:`, '1'); if (countRaw == null) return; const count = Number(countRaw); if (!Number.isInteger(count) || count < 0) { triggerShortcutNotice('Package count must be a non-negative integer.', 'error'); return; } const seal = window.prompt('Seal reference (optional):', ''); try { await updateExamPaperStatus(paper.id, 'packed', { packageCount: count, sealReference: seal || null }); triggerShortcutNotice(`Packed ${paper.jobNumber}.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the packing record.', 'error'); } } });
+    }
+    if (paper.status === 'completed' || paper.status === 'qc_passed' || paper.status === 'packed') {
+      defs.push({ id: 'exam.dispatch', label: 'Record Dispatch', icon: <Truck className="w-3.5 h-3.5 text-indigo-600" />, group: 'process', groupLabel: 'Dispatch', requiredPermission: 'exams:dispatch', execute: async () => { try { await updateExamPaperStatus(paper.id, 'dispatched'); triggerShortcutNotice(`Dispatched ${paper.jobNumber}.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the dispatch.', 'error'); } } });
+    }
+    if (['completed', 'qc_passed', 'packed', 'dispatched'].includes(paper.status)) {
+      defs.push({ id: 'exam.deliver-paper', label: 'Record Delivery to School', icon: <Truck className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Delivery', requiredPermission: 'exams:deliver', execute: async () => { try { await deliverExamPaper(paper.id); triggerShortcutNotice(`Recorded delivery for ${paper.jobNumber}`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the delivery.', 'error'); } } });
+    }
+    if (paper.status === 'delivered') {
+      defs.push({ id: 'exam.select-school-ready', label: 'Select All Delivered for School', icon: <Layers className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Actions', requiredPermission: 'exams:view', execute: async () => handleSelectReadyForSchool(paper.schoolCustomerId) });
+      defs.push({ id: 'exam.invoice-now', label: 'Invoice This Paper Now', icon: <FileText className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Actions', requiredPermission: 'exams:invoice', execute: async () => handleOpenConsolidatedReview([paper.id]) });
+    } else if (paper.status === 'invoiced') {
       defs.push({ id: 'exam.preview-linked-invoice', label: 'Preview Linked Invoice', icon: <FileText className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Document', requiredPermission: 'invoices:read', execute: async () => openLinkedInvoicePreview(paper) });
     }
-    defs.push({ id: 'exam.copy-job', label: 'Copy Job Number', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'printing:read', execute: async () => { await navigator.clipboard?.writeText(paper.jobNumber); triggerShortcutNotice(`Copied ${paper.jobNumber}`); } });
-    if (paper.status !== 'invoiced') {
-      defs.push({ id: 'exam.delete-job', label: 'Remove Uninvoiced Job', icon: <Trash2 className="w-3.5 h-3.5" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:write', confirmation: { title: `Remove ${paper.jobNumber}`, message: 'Remove this uninvoiced job?', confirmLabel: 'Remove', destructive: true }, execute: async () => deleteExamPaper(paper.id) });
+    if (['printing', 'qc_hold', 'qc_passed', 'completed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(paper.status)) {
+      defs.push({ id: 'exam.reprint', label: 'Raise Controlled Reprint', icon: <RotateCcw className="w-3.5 h-3.5 text-rose-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:produce', execute: async () => { setReprintTarget(paper); setReprintReason(''); setReprintCopies(Number(paper.copies) || 0); } });
+    }
+    if (!['dispatched', 'delivered', 'invoiced', 'cancelled'].includes(paper.status)) {
+      defs.push({ id: 'exam.cancel-paper', label: 'Cancel Examination Paper', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'exams:cancel', execute: async () => { setCancelTarget(paper); setCancelReason(''); } });
+    }
+    defs.push({ id: 'exam.copy-job', label: 'Copy Job Number', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'exams:view', execute: async () => { await navigator.clipboard?.writeText(paper.jobNumber); triggerShortcutNotice(`Copied ${paper.jobNumber}`); } });
+    if (!['invoiced', 'cancelled', 'delivered'].includes(paper.status)) {
+      defs.push({ id: 'exam.delete-job', label: 'Remove Uninvoiced Job', icon: <Trash2 className="w-3.5 h-3.5" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'exams:cancel', confirmation: { title: `Remove ${paper.jobNumber}`, message: 'Remove this uninvoiced job?', confirmLabel: 'Remove', destructive: true }, execute: async () => deleteExamPaper(paper.id) });
     }
     const ctx = buildExamActionContext(paper, null);
     const resolved = resolveActions(defs, ctx);
@@ -745,7 +878,17 @@ export const ExaminationView: React.FC = () => {
             </button>
           )}
           <button
-            onClick={() => setIsAddModalOpen(true)}
+            onClick={openExamReconciliation}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs shadow-xs transition-all active:scale-95"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Reconciliation</span>
+          </button>
+          <button
+            onClick={() => {
+              setBatchSubmissionId(`exam-sub-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+              setIsAddModalOpen(true);
+            }}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
           >
             <Plus className="w-4 h-4" />
@@ -876,8 +1019,13 @@ export const ExaminationView: React.FC = () => {
               { id: 'all', label: 'All' },
               { id: 'queued', label: 'Queued' },
               { id: 'printing', label: 'Printing' },
-              { id: 'completed', label: 'Ready to Invoice' },
+              { id: 'qc_hold', label: 'QC Hold' },
+              { id: 'completed', label: 'QC Passed' },
+              { id: 'packed', label: 'Packed' },
+              { id: 'dispatched', label: 'Dispatched' },
+              { id: 'delivered', label: 'Delivered' },
               { id: 'invoiced', label: 'Invoiced' },
+              { id: 'cancelled', label: 'Cancelled' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -1017,7 +1165,7 @@ export const ExaminationView: React.FC = () => {
               {filteredPapers.map(paper => {
                 const school = customers.find(c => c.id === paper.schoolCustomerId);
                 const isSelected = selectedPaperIds.includes(paper.id);
-                const canSelect = paper.status !== 'invoiced';
+                const canSelect = paper.status === 'delivered';
 
                 return (
                   <tr
@@ -1036,7 +1184,7 @@ export const ExaminationView: React.FC = () => {
                         title={
                           canSelect
                             ? 'Select for consolidated school invoice'
-                            : 'Already invoiced'
+                            : 'Delivered papers only can be invoiced'
                         }
                       />
                     </td>
@@ -1091,9 +1239,34 @@ export const ExaminationView: React.FC = () => {
                           <Printer className="w-3 h-3" /> On Press
                         </span>
                       )}
-                      {paper.status === 'completed' && (
+                      {paper.status === 'qc_hold' && (
+                        <span className="font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" /> QC Hold
+                        </span>
+                      )}
+                      {(paper.status === 'completed' || paper.status === 'qc_passed') && (
                         <span className="font-semibold text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Ready to Invoice
+                          <CheckCircle2 className="w-3 h-3" /> QC Passed
+                        </span>
+                      )}
+                      {paper.status === 'packed' && (
+                        <span className="font-semibold text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1">
+                          <Package className="w-3 h-3" /> Packed
+                        </span>
+                      )}
+                      {paper.status === 'dispatched' && (
+                        <span className="font-semibold text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1">
+                          <Truck className="w-3 h-3" /> Dispatched
+                        </span>
+                      )}
+                      {paper.status === 'cancelled' && (
+                        <span className="font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1">
+                          <Ban className="w-3 h-3" /> Cancelled
+                        </span>
+                      )}
+                      {paper.status === 'delivered' && (
+                        <span className="font-semibold text-blue-600 dark:text-blue-400 inline-flex items-center gap-1">
+                          <Truck className="w-3 h-3" /> Delivered · Ready to Invoice
                         </span>
                       )}
                       {paper.status === 'invoiced' && (
@@ -1598,6 +1771,257 @@ export const ExaminationView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Production Timeline & Audit Modal */}
+      {timelinePaper && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[88vh]">
+            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History className="w-5 h-5 text-amber-400" />
+                <h2 className="font-bold text-base">
+                  Production Timeline — {timelinePaper.jobNumber}
+                </h2>
+              </div>
+              <button onClick={() => setTimelinePaper(null)} className="p-1 text-white/80 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto text-xs space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">Status</div>
+                  <div className="font-bold text-slate-900 dark:text-white">{timelinePaper.status}</div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">QC</div>
+                  <div className="font-bold text-slate-900 dark:text-white">{timelinePaper.qcStatus || 'pending'}</div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">Good / Spoiled</div>
+                  <div className="font-bold text-slate-900 dark:text-white">
+                    {timelinePaper.goodCopies ?? 0} / {timelinePaper.spoiledCopies ?? 0}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">Production version</div>
+                  <div className="font-bold text-slate-900 dark:text-white">
+                    v{timelinePaper.productionVersion ?? 1}
+                  </div>
+                </div>
+              </div>
+              {timelineLoading && <div className="text-slate-500">Loading authoritative events…</div>}
+              {!timelineLoading && timelineEvents.length === 0 && (
+                <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300">
+                  No production events have been recorded for this paper yet.
+                </div>
+              )}
+              <div className="border border-slate-200 dark:border-slate-800 rounded-lg divide-y divide-slate-100 dark:divide-slate-800">
+                {timelineEvents.map(ev => (
+                  <div key={ev.id} className="p-3 flex items-start justify-between gap-4">
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {ev.eventType}
+                        {ev.fromStatus || ev.toStatus
+                          ? ` · ${ev.fromStatus || '—'} → ${ev.toStatus || '—'}`
+                          : ''}
+                      </div>
+                      {ev.reason && <div className="text-[11px] text-slate-500 mt-0.5">{ev.reason}</div>}
+                      <div className="text-[10px] font-mono text-slate-400 mt-1">
+                        {ev.journalTxnId ? `Journal #${ev.journalTxnId} · ` : ''}
+                        {ev.invoiceId ? `Invoice #${ev.invoiceId} · ` : ''}
+                        {ev.quantityDelta != null ? `Qty ${ev.quantityDelta} · ` : ''}
+                        actor #{ev.actorUserId ?? '—'}
+                      </div>
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                      {String(ev.createdAt).slice(0, 19).replace('T', ' ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Controlled Cancellation Modal */}
+      {cancelTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleCancelExamPaper}
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden"
+          >
+            <div className="px-5 py-3 bg-rose-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Ban className="w-5 h-5" />
+                <h2 className="font-bold text-base">Cancel {cancelTarget.jobNumber}</h2>
+              </div>
+              <button type="button" onClick={() => setCancelTarget(null)} className="p-1 text-white/80 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-xs">
+              <p className="text-slate-600 dark:text-slate-300">
+                The server releases material reservations, returns unused issued material and writes off
+                non-recoverable WIP. The record is retained with an append-only cancellation event.
+                Delivered, dispatched and invoiced papers cannot be cancelled.
+              </p>
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700 dark:text-slate-300">
+                  Cancellation reason (required)
+                </label>
+                <textarea
+                  value={cancelReason}
+                  onChange={e => setCancelReason(e.target.value)}
+                  rows={3}
+                  required
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
+                  placeholder="Why is this examination paper being cancelled?"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setCancelTarget(null)}
+                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                >
+                  Keep Paper
+                </button>
+                <button
+                  type="submit"
+                  disabled={examActionBusy || !cancelReason.trim()}
+                  className="px-5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold"
+                >
+                  {examActionBusy ? 'Cancelling…' : 'Cancel Paper'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Controlled Reprint Modal */}
+      {reprintTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleReprintExamPaper}
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden"
+          >
+            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-amber-400" />
+                <h2 className="font-bold text-base">Raise Reprint — {reprintTarget.jobNumber}</h2>
+              </div>
+              <button type="button" onClick={() => setReprintTarget(null)} className="p-1 text-white/80 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-xs">
+              <p className="text-slate-600 dark:text-slate-300">
+                A reprint creates a new production record linked to the original. The original paper,
+                its costs and its invoice are never modified.
+              </p>
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700 dark:text-slate-300">Reprint reason (required)</label>
+                <textarea
+                  value={reprintReason}
+                  onChange={e => setReprintReason(e.target.value)}
+                  rows={3}
+                  required
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
+                  placeholder="e.g. QC failure, damaged in transit, exam office shortage"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700 dark:text-slate-300">Reprint copies</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={reprintCopies}
+                  onChange={e => setReprintCopies(parseInt(e.target.value) || 0)}
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setReprintTarget(null)}
+                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={examActionBusy || !reprintReason.trim()}
+                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold"
+                >
+                  {examActionBusy ? 'Creating reprint…' : 'Create Reprint Job'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Examination Reconciliation Modal */}
+      {reconciliationOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[88vh]">
+            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-amber-400" />
+                <h2 className="font-bold text-base">Examination Reconciliation</h2>
+              </div>
+              <button onClick={() => setReconciliationOpen(false)} className="p-1 text-white/80 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto text-xs space-y-2">
+              {!reconciliation && <div className="text-slate-500">Reading authoritative records…</div>}
+              {reconciliation?.checks?.map((check: any) => (
+                <div
+                  key={check.key}
+                  className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <div className="font-semibold text-slate-900 dark:text-white">{check.label}</div>
+                    {check.detail && (
+                      <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                        {Object.entries(check.detail)
+                          .map(([k, v]) => `${k}: ${v}`)
+                          .join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold tabular-nums text-slate-700 dark:text-slate-200">
+                      {check.value}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full font-bold uppercase text-[9px] ${
+                        check.status === 'critical'
+                          ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300'
+                          : check.status === 'attention'
+                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+                            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                      }`}
+                    >
+                      {check.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {reconciliation && (
+                <div className="text-[10px] font-mono text-slate-400 pt-2">
+                  Generated {String(reconciliation.generatedAt).slice(0, 19).replace('T', ' ')} ·{' '}
+                  {reconciliation.criticalCount} critical · {reconciliation.attentionCount} attention
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

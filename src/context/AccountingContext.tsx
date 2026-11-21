@@ -161,11 +161,44 @@ interface AccountingContextType {
     papers: Omit<
       ExamPaper,
       'id' | 'jobNumber' | 'totalAmount' | 'sheetsUsed' | 'impressionsUsed' | 'paperCost' | 'tonerCost' | 'materialCost'
-    >[]
+    >[],
+    options?: { submissionId?: string }
   ) => Promise<ExamPaper[]>;
   updateExamPaper: (paperId: string, updates: Partial<ExamPaper>) => void;
-  updateExamPaperStatus: (paperId: string, status: ExamPaperStatus) => Promise<void>;
-  deleteExamPaper: (paperId: string) => void;
+  updateExamPaperStatus: (
+    paperId: string,
+    status: ExamPaperStatus,
+    options?: {
+      reason?: string | null;
+      goodCopies?: number;
+      spoiledCopies?: number;
+      packageCount?: number;
+      sealReference?: string | null;
+      qcNotes?: string | null;
+    }
+  ) => Promise<void>;
+  deliverExamPaper: (
+    paperId: string,
+    input?: {
+      dispatchDate?: string | null;
+      recipientName?: string | null;
+      driverName?: string | null;
+      vehicleReg?: string | null;
+      notes?: string | null;
+    }
+  ) => Promise<void>;
+  deleteExamPaper: (paperId: string) => Promise<void>;
+  cancelExamPaper: (
+    paperId: string,
+    options: { reason: string; returnUnusedMaterials?: boolean }
+  ) => Promise<void>;
+  reprintExamPaper: (
+    paperId: string,
+    options: { reason: string; copies?: number; productionDate?: string | null }
+  ) => Promise<any>;
+  getExamPaperEvents: (paperId: string) => Promise<any[]>;
+  approveExamBatchSpec: (batchId: number, notes?: string | null) => Promise<any>;
+  getExamReconciliation: () => Promise<any>;
   createConsolidatedSchoolInvoice: (
     examPaperIds: string[],
     options?: ConsolidatedExamInvoiceOptions
@@ -183,11 +216,22 @@ interface AccountingContextType {
   linkContractDepositInvoice: (
     contractId: string,
     ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
-  ) => void;
-  cancelPrintingContract: (contractId: string, reason?: string) => void;
-  activatePrintingContract: (contractId: string) => void;
-  renewPrintingContract: (contractId: string) => void;
-  amendPrintingContract: (contractId: string, updates: Partial<PrintingContract>) => void;
+  ) => Promise<void>;
+  linkMilestoneInvoice: (
+    contractId: string,
+    assessmentNumber: number,
+    ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
+  ) => Promise<void>;
+  cancelPrintingContract: (
+    contractId: string,
+    options?: { reason?: string; settlementMode?: 'refund' | 'forfeit'; refundBankAccountId?: number | null }
+  ) => Promise<void>;
+  activatePrintingContract: (contractId: string) => Promise<void>;
+  renewPrintingContract: (
+    contractId: string,
+    deposit?: { amount?: string | number; bankAccountId?: number; startDate?: string; endDate?: string }
+  ) => Promise<void>;
+  amendPrintingContract: (contractId: string, updates: Partial<PrintingContract>) => Promise<void>;
   addContractAssessment: (contractId: string, milestone: ContractAssessmentMilestone) => void;
   removeContractAssessment: (contractId: string, assessmentNumber: number) => void;
   completeContractAssessment: (
@@ -623,8 +667,30 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     remainingBalance: Number(b.remainingBalance ?? 0),
     completedAssessments: Number(b.completedAssessments ?? 0),
     depositBankAccountId: String(b.depositBankAccountId ?? ''),
-    status: (b.status ?? 'active') as PrintingContract['status'],
+    status: (b.status ?? 'draft') as PrintingContract['status'],
     notes: b.notes ?? undefined,
+    activatedAt: b.activatedAt ?? undefined,
+    activatedBy: b.activatedBy != null ? Number(b.activatedBy) : undefined,
+    completedAt: b.completedAt ?? undefined,
+    completedBy: b.completedBy != null ? Number(b.completedBy) : undefined,
+    suspendedAt: b.suspendedAt ?? undefined,
+    suspendedBy: b.suspendedBy != null ? Number(b.suspendedBy) : undefined,
+    suspensionReason: b.suspensionReason ?? undefined,
+    resumedAt: b.resumedAt ?? undefined,
+    resumedBy: b.resumedBy != null ? Number(b.resumedBy) : undefined,
+    renewalOfContractId: b.renewalOfContractId != null ? Number(b.renewalOfContractId) : undefined,
+    customerAcceptanceId:
+      b.customerAcceptanceId != null ? Number(b.customerAcceptanceId) : undefined,
+    liabilityAccountId: b.liabilityAccountId != null ? Number(b.liabilityAccountId) : undefined,
+    unallocatedAmount: b.unallocatedAmount != null ? Number(b.unallocatedAmount) : undefined,
+    allocatedAmount: b.allocatedAmount != null ? Number(b.allocatedAmount) : undefined,
+    creditBalance: b.creditBalance === true,
+    updatedAt: b.updatedAt ?? undefined,
+    source: 'backend',
+    depositInvoiceId: b.depositInvoiceId != null ? String(b.depositInvoiceId) : undefined,
+    depositBackendInvoiceId:
+      b.depositBackendInvoiceId != null ? Number(b.depositBackendInvoiceId) : undefined,
+    depositInvoiceNumber: b.depositInvoiceNumber ?? undefined,
     assessments: (b.assessments || []).map((a: any) => ({
       assessmentNumber: Number(a.assessmentNumber),
       label: a.label,
@@ -642,6 +708,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       completedDate: a.completedDate ?? undefined,
       examBatchNote: a.examBatchNote ?? undefined,
       backendInvoiceId: a.backendInvoiceId != null ? Number(a.backendInvoiceId) : undefined,
+      linkedInvoiceNumber: a.linkedInvoiceNumber ?? undefined,
     })),
   });
 
@@ -660,7 +727,9 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     paperSize: (p.paperSize ?? 'A4') as ExamPaper['paperSize'],
     printSide: (p.printSide ?? 'Single-Sided') as ExamPaper['printSide'],
     bindingType: (p.bindingType ?? 'Stapled') as ExamPaper['bindingType'],
+    paperSpecId: p.paperSpecId != null ? String(p.paperSpecId) : undefined,
     printingItemId: p.printingItemId != null ? String(p.printingItemId) : undefined,
+    productionJobId: p.productionJobId != null ? Number(p.productionJobId) : undefined,
     rawPaperItemId: p.rawPaperItemId != null ? String(p.rawPaperItemId) : undefined,
     rawTonerItemId: p.rawTonerItemId != null ? String(p.rawTonerItemId) : undefined,
     ratePerPage: Number(p.ratePerPage ?? 0),
@@ -670,8 +739,21 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     paperCost: Number(p.paperCost ?? 0),
     tonerCost: Number(p.tonerCost ?? 0),
     materialCost: Number(p.materialCost ?? 0),
+    costStatus: p.costStatus,
+    costWarnings: Array.isArray(p.costWarnings) ? p.costWarnings : [],
     status: (p.status ?? 'queued') as ExamPaperStatus,
     productionDate: p.productionDate,
+    qcStatus: p.qcStatus,
+    qcApprovedCopies: Number(p.qcApprovedCopies ?? 0),
+    goodCopies: Number(p.goodCopies ?? 0),
+    spoiledCopies: Number(p.spoiledCopies ?? 0),
+    wasteSheets: Number(p.wasteSheets ?? 0),
+    startedAt: p.startedAt,
+    completedAt: p.completedAt,
+    deliveredAt: p.deliveredAt,
+    deliveryNoteId: p.deliveryNoteId != null ? Number(p.deliveryNoteId) : undefined,
+    invoiceId: p.invoiceId != null ? String(p.invoiceId) : undefined,
+    backendInvoiceId: p.backendInvoiceId != null ? Number(p.backendInvoiceId) : undefined,
     contractId: p.contractId != null ? String(p.contractId) : undefined,
     assessmentNumber: p.assessmentNumber != null ? Number(p.assessmentNumber) : undefined,
     notes: p.notes ?? undefined,
@@ -1757,30 +1839,37 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     papersData: Omit<
       ExamPaper,
       'id' | 'jobNumber' | 'totalAmount' | 'sheetsUsed' | 'impressionsUsed' | 'paperCost' | 'tonerCost' | 'materialCost'
-    >[]
+    >[],
+    options?: { submissionId?: string }
   ): Promise<ExamPaper[]> => {
     const year = new Date().getFullYear();
     const baseIdx = 100 + examPapers.length;
 
     // Attempt server-side creation first when every referenced id is a real
-    // backend record (numeric). The server assigns authoritative job numbers
-    // and ids, which we then adopt for the local rows.
+    // backend record (numeric). The server is the sole authority for costs,
+    // stock, job numbers and ids; never fall back to local success if it fails.
     const backendCustomerId = toBackendId(papersData[0]?.schoolCustomerId);
     const allServerIds =
       papersData.length > 0 &&
       papersData.every(p => toBackendId(p.rawPaperItemId) && toBackendId(p.rawTonerItemId));
     if (backendCustomerId && allServerIds) {
       const sample = papersData[0];
-      try {
-        const res = await printingApi.createExamBatch({
-          schoolCustomerId: backendCustomerId,
-          assessmentName: sample.assessmentName,
-          className: sample.className,
-          learnersCount: sample.learnersCount,
-          pricePerLearner: sample.pricePerLearner,
-          contractId: toBackendId(sample.contractId),
-          assessmentNumber: sample.assessmentNumber ?? null,
-          papers: papersData.map(p => ({
+      const grouped = new Map<string, typeof papersData>();
+      for (const paper of papersData) {
+        const key = `${paper.className.trim().toLowerCase()}__${paper.assessmentName.trim().toLowerCase()}`;
+        const rows = grouped.get(key) || [];
+        rows.push(paper);
+        grouped.set(key, rows);
+      }
+      const classes = Array.from(grouped.values()).map(rows => {
+        const lead = rows[0];
+        return {
+          className: lead.className,
+          learnersCount: lead.learnersCount,
+          pricePerLearner: lead.pricePerLearner,
+          contractId: toBackendId(lead.contractId),
+          assessmentNumber: lead.assessmentNumber ?? null,
+          papers: rows.map(p => ({
             subjectName: p.subjectName,
             pages: p.pages,
             copies: p.copies,
@@ -1788,36 +1877,70 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
             rawTonerItemId: toBackendId(p.rawTonerItemId)!,
             printSide: p.printSide,
             bindingType: p.bindingType,
+            paperSize: p.paperSize,
+            printingItemId: toBackendId(p.printingItemId),
             productionDate: p.productionDate,
             notes: p.notes ?? null,
           })),
-        });
-        const serverPapers: any[] = res?.papers || [];
-        const created: ExamPaper[] = papersData.map((paperData, idx) => {
-          const computed = buildExamPaperComputedFields(paperData);
-          const sp = serverPapers[idx];
-          return {
-            ...paperData,
-            ...computed,
-            id: sp?.id != null ? String(sp.id) : `exm-${Date.now()}-${idx}`,
-            backendId: sp?.id != null ? Number(sp.id) : undefined,
-            jobNumber: sp?.jobNumber || `EXM-${year}-${baseIdx + idx + 1}`,
-          };
-        });
-        setExamPapers(prev => [...created.slice().reverse(), ...prev]);
-        await logAuditAction(
-          'BATCH_EXAM_JOBS',
-          'ExamPaper',
-          created[0]?.id || 'batch',
-          `Added ${created.length} class/subject examination print jobs`
-        );
-        return created;
-      } catch {
-        // Fall through to local-only creation below.
+        };
+      });
+      let hash = 0;
+      const seed = `${backendCustomerId}|${sample.assessmentName}|${options?.submissionId || ''}|${papersData
+        .map(p => `${p.className}|${p.subjectName}|${p.pages}|${p.copies}`)
+        .join(';')}`;
+      for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+      const res = await printingApi.createExamBatch({
+        schoolCustomerId: backendCustomerId,
+        assessmentName: sample.assessmentName,
+        classes,
+        idempotencyKey: `exam-batch-${backendCustomerId}-${Math.abs(hash)}`,
+      });
+      const serverPapers: any[] = res?.papers || [];
+      const byKey = new Map<string, any>();
+      for (const sp of serverPapers) {
+        byKey.set(`${String(sp.className).toLowerCase()}__${String(sp.subjectName).toLowerCase()}`, sp);
       }
+      const created: ExamPaper[] = papersData.map((paperData, idx) => {
+        const sp = byKey.get(
+          `${paperData.className.trim().toLowerCase()}__${paperData.subjectName.trim().toLowerCase()}`
+        );
+        if (!sp?.backendId) {
+          throw new Error(
+            `Server did not return the created examination paper for ${paperData.className} · ${paperData.subjectName}. No local record was created.`
+          );
+        }
+        return {
+          ...paperData,
+          id: String(sp.backendId),
+          backendId: Number(sp.backendId),
+          jobNumber: sp.jobNumber,
+          paperSize: sp.paperSize ?? paperData.paperSize,
+          printingItemId: sp.printingItemId ?? paperData.printingItemId,
+          productionJobId: sp.productionJobId,
+          sheetsUsed: Number(sp.sheetsUsed ?? 0),
+          impressionsUsed: Number(sp.impressionsUsed ?? 0),
+          paperCost: Number(sp.paperCost ?? 0),
+          tonerCost: Number(sp.tonerCost ?? 0),
+          materialCost: Number(sp.materialCost ?? 0),
+          costStatus: sp.costStatus,
+          costWarnings: Array.isArray(sp.costWarnings) ? sp.costWarnings : [],
+          totalAmount: Number(sp.totalAmount ?? 0),
+          status: (sp.status ?? 'queued') as ExamPaperStatus,
+          productionDate: sp.productionDate ?? paperData.productionDate,
+        };
+      });
+      setExamPapers(prev => [...created.slice().reverse(), ...prev]);
+      await logAuditAction(
+        'BATCH_EXAM_JOBS',
+        'ExamPaper',
+        created[0]?.id || 'batch',
+        `Added ${created.length} class/subject examination print jobs`
+      );
+      return created;
     }
 
-    // Local-only (bundled demo) path.
+    // Local-only (bundled demo) path. This path is only reachable when the
+    // referenced customer/material ids are not real backend records.
     const created: ExamPaper[] = papersData.map((paperData, idx) => {
       const computed = buildExamPaperComputedFields(paperData);
       return {
@@ -1848,57 +1971,36 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     );
   };
 
-  const updateExamPaperStatus = async (paperId: string, nextStatus: ExamPaperStatus) => {
+  const updateExamPaperStatus = async (
+    paperId: string,
+    nextStatus: ExamPaperStatus,
+    options: {
+      reason?: string | null;
+      goodCopies?: number;
+      spoiledCopies?: number;
+      packageCount?: number;
+      sealReference?: string | null;
+      qcNotes?: string | null;
+    } = {}
+  ) => {
     const target = examPapers.find(p => p.id === paperId);
     if (!target || target.status === nextStatus) return;
+
+    // Backend-confirmed papers must be transitioned by the server. The server
+    // drives the linked printing job, inventory movements and WIP journal; the
+    // browser must never simulate stock or COGS for them.
+    if (target.backendId) {
+      const serverStatuses = ['queued', 'printing', 'completed', 'qc_hold', 'qc_passed', 'packed', 'dispatched'];
+      if (!serverStatuses.includes(nextStatus)) {
+        throw new Error(`Unsupported server transition: ${nextStatus}`);
+      }
+      await printingApi.updateExamPaperStatus(target.backendId, nextStatus as any, options);
+      await refreshExamPapersFromBackend();
+    }
 
     setExamPapers(prev =>
       prev.map(p => (p.id === paperId ? { ...p, status: nextStatus } : p))
     );
-
-    // When completing press production, consume both raw paper AND raw toner stock using exact conversionFactors
-    if (nextStatus === 'completed' && target.status !== 'completed' && target.status !== 'invoiced') {
-      const rawPaper = target.rawPaperItemId
-        ? inventoryItems.find(i => i.id === target.rawPaperItemId && i.type === 'raw_material')
-        : undefined;
-      const rawToner = target.rawTonerItemId
-        ? inventoryItems.find(i => i.id === target.rawTonerItemId && i.type === 'raw_material')
-        : undefined;
-
-      if (rawPaper) {
-        const factor = rawPaper.conversionFactor && rawPaper.conversionFactor > 0 ? rawPaper.conversionFactor : 500;
-        const purchaseUnitsUsed = round4(target.sheetsUsed / factor);
-        adjustInventoryStock(
-          rawPaper.id,
-          -purchaseUnitsUsed,
-          `Exam print production ${target.jobNumber} (${target.sheetsUsed} sheets)`
-        );
-      }
-      if (rawToner) {
-        const factor = rawToner.conversionFactor && rawToner.conversionFactor > 0 ? rawToner.conversionFactor : 15000;
-        const cartridgesUsed = round4(target.impressionsUsed / factor);
-        adjustInventoryStock(
-          rawToner.id,
-          -cartridgesUsed,
-          `Exam print production ${target.jobNumber} (${target.impressionsUsed} impressions)`
-        );
-      }
-
-      const rawCost = round2((target.paperCost || 0) + (target.tonerCost || 0));
-      if (rawCost > 0) {
-        setAccounts(prev =>
-          prev.map(acc => {
-            if (acc.code === '5010') {
-              return { ...acc, balance: round2(acc.balance + rawCost) };
-            }
-            if (acc.code === '1300') {
-              return { ...acc, balance: round2(acc.balance - rawCost) };
-            }
-            return acc;
-          })
-        );
-      }
-    }
 
     await logAuditAction(
       'UPDATE_EXAM_STATUS',
@@ -1906,23 +2008,95 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       paperId,
       `Exam job ${target.jobNumber} (${target.className} · ${target.subjectName}) marked ${nextStatus}`
     );
-
-    if (target.backendId && (nextStatus === 'queued' || nextStatus === 'printing' || nextStatus === 'completed')) {
-      printingApi.updateExamPaperStatus(target.backendId, nextStatus).catch(() => {
-        /* keep local fallback */
-      });
-    }
   };
 
-  const deleteExamPaper = (paperId: string) => {
+  const deliverExamPaper = async (
+    paperId: string,
+    input: {
+      dispatchDate?: string | null;
+      recipientName?: string | null;
+      driverName?: string | null;
+      vehicleReg?: string | null;
+      notes?: string | null;
+    } = {}
+  ) => {
     const target = examPapers.find(p => p.id === paperId);
-    setExamPapers(prev => prev.filter(p => p.id !== paperId));
-    if (target?.backendId) {
-      printingApi.deleteExamPaper(target.backendId).catch(() => {
-        /* keep local fallback */
-      });
-    }
+    if (!target) throw new Error('Examination paper not found');
+    if (!target.backendId) throw new Error('Delivery requires a server-confirmed examination paper');
+    await printingApi.deliverExamPaper(target.backendId, input);
+    setExamPapers(prev =>
+      prev.map(p =>
+        p.id === paperId
+          ? { ...p, status: 'delivered', deliveredAt: new Date().toISOString() }
+          : p
+      )
+    );
   };
+
+  const deleteExamPaper = async (paperId: string) => {
+    const target = examPapers.find(p => p.id === paperId);
+    if (!target) return;
+    if (target.backendId) {
+      await printingApi.deleteExamPaper(target.backendId);
+    }
+    setExamPapers(prev => prev.filter(p => p.id !== paperId));
+  };
+
+  const cancelExamPaper = async (
+    paperId: string,
+    options: { reason: string; returnUnusedMaterials?: boolean }
+  ) => {
+    const target = examPapers.find(p => p.id === paperId);
+    if (!target) throw new Error('Examination paper not found');
+    if (!target.backendId) {
+      throw new Error('Cancellation requires a server-confirmed examination paper');
+    }
+    await printingApi.cancelExamPaper(target.backendId, options);
+    setExamPapers(prev =>
+      prev.map(p =>
+        p.id === paperId
+          ? { ...p, status: 'cancelled', cancelledAt: new Date().toISOString() }
+          : p
+      )
+    );
+    await logAuditAction(
+      'CANCEL_EXAM_PAPER',
+      'ExamPaper',
+      paperId,
+      `Cancelled ${target.jobNumber}: ${options.reason}`
+    );
+  };
+
+  const reprintExamPaper = async (
+    paperId: string,
+    options: { reason: string; copies?: number; productionDate?: string | null }
+  ) => {
+    const target = examPapers.find(p => p.id === paperId);
+    if (!target) throw new Error('Examination paper not found');
+    if (!target.backendId) {
+      throw new Error('A reprint requires a server-confirmed examination paper');
+    }
+    const result = await printingApi.reprintExamPaper(target.backendId, {
+      ...options,
+      idempotencyKey: `exam-reprint-${target.backendId}-${Date.now()}`,
+    });
+    await refreshExamPapersFromBackend();
+    return result;
+  };
+
+  const getExamPaperEvents = async (paperId: string) => {
+    const target = examPapers.find(p => p.id === paperId);
+    if (!target?.backendId) return [];
+    return printingApi.listExamPaperEvents(target.backendId);
+  };
+
+  const approveExamBatchSpec = async (batchId: number, notes?: string | null) => {
+    const result = await printingApi.approveExamBatchSpec(batchId, notes);
+    await refreshExamPapersFromBackend();
+    return result;
+  };
+
+  const getExamReconciliation = async () => printingApi.getExamReconciliation();
 
   const createConsolidatedSchoolInvoice = async (
     examPaperIds: string[],
@@ -1933,9 +2107,23 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     );
     if (selectedPapers.length === 0) return null;
 
+    // Invoice eligibility is a server rule, mirrored here for UX. A paper must
+    // have been produced, QC-approved and delivered before it can be billed.
+    const notDelivered = selectedPapers.filter(p => p.status !== 'delivered');
+    if (notDelivered.length > 0) {
+      throw new Error(
+        `Cannot invoice ${notDelivered.length} examination paper(s) before delivery: ${notDelivered
+          .map(p => `${p.jobNumber} (${p.status})`)
+          .join(', ')}`
+      );
+    }
+
     const schoolId = selectedPapers[0].schoolCustomerId;
     const sameSchool = selectedPapers.every(p => p.schoolCustomerId === schoolId);
-    if (!sameSchool) return null;
+    if (!sameSchool) {
+      throw new Error('All selected examination papers must belong to the same school');
+    }
+    const useBackend = selectedPapers.every(p => Boolean(p.backendId));
 
     const school = customers.find(c => c.id === schoolId);
     const includeTax = options?.includeTax ?? false;
@@ -1955,7 +2143,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       const ratePerLearner = lead.pricePerLearner;
       const classAmount = round2(learners * ratePerLearner);
       const classMaterialCost = round2(group.reduce((s, p) => s + (p.materialCost || 0), 0));
-      const unitCostPerLearner = learners > 0 ? round4(classMaterialCost / learners) : 0;
+      // Backend invoices must carry zero item-less line cost: the server posts
+      // exact WIP→COGS relief from the linked production jobs. Keeping a
+      // material cost on the line would double-count COGS and gross profit.
+      const unitCostPerLearner = useBackend || learners <= 0 ? 0 : round4(classMaterialCost / learners);
       const subjectSummary = group.map(p => `${p.subjectName} (${p.pages}pp)`).join(', ');
       return {
         id: `exl-${Date.now()}-${idx}`,
@@ -1966,7 +2157,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         rate: ratePerLearner,
         amount: classAmount,
         unitCost: unitCostPerLearner,
-        totalCost: classMaterialCost,
+        totalCost: useBackend ? 0 : classMaterialCost,
         taxable: includeTax,
       };
     });
@@ -1992,10 +2183,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     let backendInvoiceId: number | undefined;
     let backendInvoiceNumber: string | undefined;
 
-    try {
+    if (useBackend) {
+      const backendCustomerId = toBackendId(schoolId);
       const generated = await documentsApi.generateWorkflowInvoice({
         sourceKind: 'exam_batch',
         sourceRef: selectedPapers.map(p => p.jobNumber).join(','),
+        customerId: backendCustomerId,
         customerName: school?.companyName || school?.name || 'School Institution',
         customerEmail: school?.email,
         customerPhone: school?.phone,
@@ -2010,18 +2203,21 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           `Consolidated school examination invoice (per-learner class pricing) for ${school?.companyName || 'School'} (${classesList}) — ${assessmentNames}.${
             contract ? ` Applied to Printing Contract ${contract.contractNumber} Assessment #${options?.assessmentNumber}.` : ''
           }`,
+        idempotencyKey: `exam-invoice-${selectedPapers
+          .map(p => p.backendId)
+          .sort((a, b) => Number(a) - Number(b))
+          .join('-')}`,
+        postgresExamPaperIds: selectedPapers.map(p => Number(p.backendId)),
         lines: lines.map(l => ({
           description: l.description,
           quantity: l.quantity,
           rate: l.rate,
-          unitCost: l.unitCost ?? 0,
+          unitCost: 0,
           taxable: l.taxable,
         })),
       });
       backendInvoiceId = generated.invoice.id;
       backendInvoiceNumber = generated.invoice.invoiceNumber;
-    } catch {
-      // Fall back gracefully if invoked outside authenticated PostgreSQL session
     }
 
     const createdInvoice = await addInvoice({
@@ -2036,8 +2232,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       taxRate,
       taxAmount,
       total,
-      totalCost,
-      grossProfit,
+      totalCost: useBackend ? 0 : totalCost,
+      grossProfit: useBackend ? subtotal : grossProfit,
       notes:
         options?.notes ||
         `Consolidated school examination invoice (per-learner class pricing) for ${school?.companyName || 'School'} (${classesList}) — ${assessmentNames}.${
@@ -2167,43 +2363,47 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     });
 
     // Attempt server-side creation first when the customer and deposit account
-    // are real backend records (numeric ids). The backend posts the deposit
-    // journal itself, so local ledger mutations are skipped in that case.
+    // are real backend records (numeric ids). The contract is created as a
+    // DRAFT; funding, acceptance, approval and activation are separate steps.
+    //
+    // Fail-closed (G-01): a backend rejection or an unreachable server throws
+    // and mutates no local state — the caller never sees a local-only contract
+    // or a fabricated journal entry for a money movement.
     const backendCustomerId = toBackendId(contractData.schoolCustomerId);
     const backendBankAccountId = toBackendId(contractData.depositBankAccountId);
     let backendId: number | undefined;
     let effectiveNumber = ctrNum;
     if (backendCustomerId && backendBankAccountId) {
-      try {
-        const res = await printingApi.createContract({
-          schoolCustomerId: backendCustomerId,
-          title: contractData.title,
-          academicYear: contractData.academicYear,
-          startDate: contractData.startDate,
-          endDate: contractData.endDate,
-          totalPrepaidAmount: contractData.totalPrepaidAmount,
-          totalAssessments: contractData.totalAssessments,
-          depositBankAccountId: backendBankAccountId,
-          notes: contractData.notes ?? null,
-          assessments: enrichedAssessments.map(a => ({
-            assessmentNumber: a.assessmentNumber,
-            label: a.label,
-            scheduledDate: a.scheduledDate,
-            agreedAmount: a.agreedAmount,
-            rawPaperItemId: toBackendId(a.rawPaperItemId),
-            rawTonerItemId: toBackendId(a.rawTonerItemId),
-            estimatedSheets: a.estimatedSheets,
-            estimatedImpressions: a.estimatedImpressions,
-            paperCost: a.paperCost,
-            tonerCost: a.tonerCost,
-          })),
-        });
-        if (res?.contractId) {
-          backendId = Number(res.contractId);
-          effectiveNumber = res.contractNumber || ctrNum;
-        }
-      } catch {
-        // Fall back to local-only creation below when the backend is unreachable.
+      const idempotencyKey = `contract-create-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const res = await printingApi.createContract({
+        schoolCustomerId: backendCustomerId,
+        title: contractData.title,
+        academicYear: contractData.academicYear,
+        startDate: contractData.startDate,
+        endDate: contractData.endDate,
+        totalPrepaidAmount: contractData.totalPrepaidAmount,
+        totalAssessments: contractData.totalAssessments,
+        depositBankAccountId: backendBankAccountId,
+        notes: contractData.notes ?? null,
+        idempotencyKey,
+        assessments: enrichedAssessments.map(a => ({
+          assessmentNumber: a.assessmentNumber,
+          label: a.label,
+          scheduledDate: a.scheduledDate,
+          agreedAmount: a.agreedAmount,
+          rawPaperItemId: toBackendId(a.rawPaperItemId),
+          rawTonerItemId: toBackendId(a.rawTonerItemId),
+          estimatedSheets: a.estimatedSheets,
+          estimatedImpressions: a.estimatedImpressions,
+          paperCost: a.paperCost,
+          tonerCost: a.tonerCost,
+        })),
+      });
+      if (res?.contractId) {
+        backendId = Number(res.contractId);
+        effectiveNumber = res.contractNumber || ctrNum;
+      } else {
+        throw new Error('The server did not return a contract. No contract was created.');
       }
     }
 
@@ -2215,7 +2415,11 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       contractNumber: effectiveNumber,
       remainingBalance: contractData.totalPrepaidAmount,
       completedAssessments: 0,
-      status: 'active',
+      status: 'draft',
+      source: backendId ? 'backend' : 'local',
+      creditBalance: false,
+      unallocatedAmount: 0,
+      updatedAt: new Date().toISOString(),
     };
 
     setPrintingContracts(prev => [newContract, ...prev]);
@@ -2467,10 +2671,33 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     );
   };
 
-  const linkContractDepositInvoice = (
+  const linkContractDepositInvoice = async (
     contractId: string,
     ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
   ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId && ref.backendInvoiceId) {
+      // Persist server-side so the link survives a refresh (G-09).
+      const updated = await printingApi.linkDepositInvoice(ctr.backendId, {
+        invoiceId: ref.backendInvoiceId,
+        invoiceNumber: ref.invoiceNumber ?? null,
+      });
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                depositInvoiceId: ref.invoiceId ?? c.depositInvoiceId,
+                depositBackendInvoiceId: ref.backendInvoiceId ?? c.depositBackendInvoiceId,
+                depositInvoiceNumber:
+                  ref.invoiceNumber ?? updated?.depositInvoiceNumber ?? c.depositInvoiceNumber,
+              }
+            : c
+        )
+      );
+      return;
+    }
+
     setPrintingContracts(prev =>
       prev.map(c =>
         c.id === contractId
@@ -2485,39 +2712,174 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     );
   };
 
-  const cancelPrintingContract = (contractId: string, reason?: string) => {
+  /** Links a generated milestone invoice so it survives a refresh (G-09). */
+  const linkMilestoneInvoice = async (
+    contractId: string,
+    assessmentNumber: number,
+    ref: { invoiceId?: string; backendInvoiceId?: number; invoiceNumber?: string }
+  ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (ctr?.backendId && ref.backendInvoiceId) {
+      const updated = await printingApi.linkMilestoneInvoice(ctr.backendId, assessmentNumber, {
+        invoiceId: ref.backendInvoiceId,
+        invoiceNumber: ref.invoiceNumber ?? null,
+      });
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId ? { ...c, ...(updated ?? {}) } : c
+        )
+      );
+      return;
+    }
+
     setPrintingContracts(prev =>
       prev.map(c =>
         c.id === contractId
-          ? { ...c, status: 'cancelled', notes: reason ? `${c.notes || ''}\nCancelled: ${reason}`.trim() : c.notes }
+          ? {
+              ...c,
+              assessments: c.assessments.map(a =>
+                a.assessmentNumber === assessmentNumber
+                  ? {
+                      ...a,
+                      linkedInvoiceId: ref.invoiceId ?? a.linkedInvoiceId,
+                      linkedInvoiceNumber: ref.invoiceNumber ?? a.linkedInvoiceNumber,
+                    }
+                  : a
+              ),
+            }
           : c
       )
     );
-    const ctr = printingContracts.find(c => c.id === contractId);
-    if (ctr?.backendId) {
-      printingApi.cancelContract(ctr.backendId, reason).catch(() => {
-        /* keep local fallback */
-      });
-    }
-    logAuditAction('CANCEL_PRINTING_CONTRACT', 'PrintingContract', contractId, reason || 'Cancelled from contract register');
   };
 
-  const activatePrintingContract = (contractId: string) => {
-    setPrintingContracts(prev =>
-      prev.map(c => (c.id === contractId ? { ...c, status: 'active' } : c))
-    );
+  /**
+   * Cancels a contract. When the backend owns the contract this is a real
+   * settlement (refund or forfeit) and the local state only changes after the
+   * server confirms (G-01, G-04).
+   */
+  const cancelPrintingContract = async (
+    contractId: string,
+    options: { reason?: string; settlementMode?: 'refund' | 'forfeit'; refundBankAccountId?: number | null } = {}
+  ) => {
     const ctr = printingContracts.find(c => c.id === contractId);
-    if (ctr?.backendId) {
-      printingApi.activateContract(ctr.backendId).catch(() => {
-        /* keep local fallback */
+    if (!ctr) return;
+
+    if (ctr.backendId) {
+      const updated = await printingApi.cancelContract(ctr.backendId, {
+        reason: options.reason,
+        settlementMode: options.settlementMode ?? 'forfeit',
+        refundBankAccountId: options.refundBankAccountId ?? null,
       });
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                status: 'cancelled',
+                remainingBalance: updated?.remainingBalance ?? 0,
+                creditBalance: false,
+                updatedAt: new Date().toISOString(),
+                notes: options.reason
+                  ? `${c.notes || ''}\nCancelled: ${options.reason}`.trim()
+                  : c.notes,
+              }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                status: 'cancelled',
+                remainingBalance: 0,
+                creditBalance: false,
+                notes: options.reason
+                  ? `${c.notes || ''}\nCancelled: ${options.reason}`.trim()
+                  : c.notes,
+              }
+            : c
+        )
+      );
+    }
+    logAuditAction(
+      'CANCEL_PRINTING_CONTRACT',
+      'PrintingContract',
+      contractId,
+      options.reason || 'Cancelled from contract register'
+    );
+  };
+
+  /** Activates a funded, accepted and approved draft (D-1). */
+  const activatePrintingContract = async (contractId: string) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr) return;
+
+    if (ctr.backendId) {
+      const updated = await printingApi.activateContract(ctr.backendId);
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? { ...c, status: updated?.status ?? 'active', updatedAt: new Date().toISOString() }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev =>
+        prev.map(c => (c.id === contractId ? { ...c, status: 'active' } : c))
+      );
     }
     logAuditAction('ACTIVATE_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Activated from contract register');
   };
 
-  const renewPrintingContract = (contractId: string) => {
+  /**
+   * Renews a contract into a fresh retainer period. The backend requires a real
+   * new deposit, so the successor is created server-side and the local copy is
+   * replaced by the server's response (G-05, G-08).
+   */
+  const renewPrintingContract = async (
+    contractId: string,
+    deposit?: { amount?: string | number; bankAccountId?: number; startDate?: string; endDate?: string }
+  ) => {
     const source = printingContracts.find(c => c.id === contractId);
     if (!source) return;
+
+    if (source.backendId) {
+      const res = await printingApi.renewContract(source.backendId, {
+        depositAmount: deposit?.amount ?? source.totalPrepaidAmount,
+        depositBankAccountId: deposit?.bankAccountId,
+        startDate: deposit?.startDate,
+        endDate: deposit?.endDate,
+        idempotencyKey: `contract-renew-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      });
+      if (!res?.contractId) {
+        throw new Error('The server did not return the renewed contract.');
+      }
+      const renewed: PrintingContract = {
+        ...source,
+        ...res,
+        id: `ctr-${res.contractId}`,
+        backendId: Number(res.contractId),
+        contractNumber: res.contractNumber || source.contractNumber,
+        status: 'draft',
+        remainingBalance: res.totalPrepaidAmount ?? source.totalPrepaidAmount,
+        completedAssessments: 0,
+        creditBalance: false,
+        unallocatedAmount: res.unallocatedAmount ?? 0,
+        source: 'backend',
+        updatedAt: new Date().toISOString(),
+      };
+      setPrintingContracts(prev => [renewed, ...prev]);
+      logAuditAction(
+        'RENEW_PRINTING_CONTRACT',
+        'PrintingContract',
+        renewed.id,
+        `Renewed from ${source.contractNumber}`
+      );
+      return;
+    }
+
     const renewed: PrintingContract = {
       ...source,
       id: `ctr-${Date.now()}`,
@@ -2525,48 +2887,42 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       status: 'active',
       remainingBalance: source.totalPrepaidAmount,
       completedAssessments: 0,
-      assessments: source.assessments.map(a => ({ ...a, status: 'pending', completedDate: undefined, linkedInvoiceId: undefined, backendInvoiceId: undefined, linkedInvoiceNumber: undefined })),
+      assessments: source.assessments.map(a => ({
+        ...a,
+        status: 'pending',
+        completedDate: undefined,
+        linkedInvoiceId: undefined,
+        backendInvoiceId: undefined,
+        linkedInvoiceNumber: undefined,
+      })),
     };
     setPrintingContracts(prev => [renewed, ...prev]);
-    if (source.backendId) {
-      printingApi
-        .renewContract(source.backendId)
-        .then(res => {
-          if (res?.contractId) {
-            setPrintingContracts(prev =>
-              prev.map(c =>
-                c.id === renewed.id
-                  ? { ...c, backendId: Number(res.contractId), contractNumber: res.contractNumber || c.contractNumber }
-                  : c
-              )
-            );
-          }
-        })
-        .catch(() => {
-          /* keep local fallback */
-        });
-    }
     logAuditAction('RENEW_PRINTING_CONTRACT', 'PrintingContract', renewed.id, `Renewed from ${source.contractNumber}`);
   };
 
-  const amendPrintingContract = (contractId: string, updates: Partial<PrintingContract>) => {
-    setPrintingContracts(prev =>
-      prev.map(c => (c.id === contractId ? { ...c, ...updates } : c))
-    );
+  /** Amends contract metadata; local state updates only after the server confirms. */
+  const amendPrintingContract = async (contractId: string, updates: Partial<PrintingContract>) => {
     const ctr = printingContracts.find(c => c.id === contractId);
-    if (ctr?.backendId) {
+    if (!ctr) return;
+
+    if (ctr.backendId) {
       const merged = { ...ctr, ...updates };
-      printingApi
-        .amendContract(ctr.backendId, {
-          title: merged.title,
-          academicYear: merged.academicYear,
-          startDate: merged.startDate,
-          endDate: merged.endDate,
-          notes: merged.notes ?? null,
-        })
-        .catch(() => {
-          /* keep local fallback */
-        });
+      const updated = await printingApi.amendContract(ctr.backendId, {
+        title: merged.title,
+        academicYear: merged.academicYear,
+        startDate: merged.startDate,
+        endDate: merged.endDate,
+        notes: merged.notes ?? null,
+      });
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? { ...c, ...updates, ...updated, updatedAt: new Date().toISOString() }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev => prev.map(c => (c.id === contractId ? { ...c, ...updates } : c)));
     }
     logAuditAction('AMEND_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Amended from contract register');
   };
@@ -3307,12 +3663,19 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         addExamPapersBatch,
         updateExamPaper,
         updateExamPaperStatus,
+        deliverExamPaper,
         deleteExamPaper,
+        cancelExamPaper,
+        reprintExamPaper,
+        getExamPaperEvents,
+        approveExamBatchSpec,
+        getExamReconciliation,
         createConsolidatedSchoolInvoice,
         printingContracts,
         addPrintingContract,
         updateContractAssessment,
         linkContractDepositInvoice,
+        linkMilestoneInvoice,
         completeContractAssessment,
         cancelPrintingContract,
         activatePrintingContract,

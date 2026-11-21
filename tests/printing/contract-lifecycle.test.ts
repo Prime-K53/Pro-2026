@@ -7,6 +7,7 @@ import {
   cancelPrintingContract,
   completeContractAssessment,
   createPrintingContract,
+  fundContractFromWallet,
   recordContractAcceptance,
   resumeContract,
   suspendContract,
@@ -127,11 +128,18 @@ test('Printing contract lifecycle: draft → active → suspended → active →
       });
     }
 
+    async function fund(contractId: number, amount: string, key: string) {
+      return db.withCompanyDb(companyId, tx =>
+        fundContractFromWallet(tx, companyId, actor, contractId, { idempotencyKey: key })
+      );
+    }
+
     section('Draft contract and activation guard');
     const first = await createDraft('Lifecycle Contract 1', '500');
     assert.equal(first.status, 'draft');
     const firstId = Number(first.contractId);
 
+    // No acceptance yet.
     await assert.rejects(
       () => db.withCompanyDb(companyId, tx => activatePrintingContract(tx, companyId, actor, firstId)),
       (err: any) => err instanceof AccountingError && err.statusCode === 409
@@ -146,18 +154,37 @@ test('Printing contract lifecycle: draft → active → suspended → active →
       })
     );
 
+    // Accepted but not yet approved.
     await assert.rejects(
       () => db.withCompanyDb(companyId, tx => activatePrintingContract(tx, companyId, actor, firstId)),
-      (err: any) => err instanceof AccountingError && err.statusCode === 409
+      (err: any) => err instanceof AccountingError && err.code === 'ACTIVATION_APPROVAL_REQUIRED'
     );
 
     await acceptAndApprove(firstId);
+
+    // Approved and accepted but not funded (D-1: wallet-funded activation only).
+    await assert.rejects(
+      () => db.withCompanyDb(companyId, tx => activatePrintingContract(tx, companyId, actor, firstId)),
+      (err: any) => err instanceof AccountingError && err.code === 'CONTRACT_NOT_FUNDED'
+    );
+
+    // Funding moves the wallet, not activation.
+    await fund(firstId, '500', 'lifecycle-fund-1');
+    const walletAfterFunding = await db.withCompanyDb(companyId, async tx => {
+      const r = await tx.query<{ balance: string }>(
+        `SELECT balance::text AS balance FROM customer_wallets WHERE company_id = $1 AND id = $2`,
+        [companyId, walletId]
+      );
+      return Number(r.rows[0].balance);
+    });
+    assert.equal(walletAfterFunding, 500);
 
     const activated = await db.withCompanyDb(companyId, tx =>
       activatePrintingContract(tx, companyId, actor, firstId)
     );
     assert.equal(activated.status, 'active');
 
+    // Activation consumes no further wallet funds.
     const walletAfterActivation = await db.withCompanyDb(companyId, async tx => {
       const r = await tx.query<{ balance: string }>(
         `SELECT balance::text AS balance FROM customer_wallets WHERE company_id = $1 AND id = $2`,
@@ -207,6 +234,7 @@ test('Printing contract lifecycle: draft → active → suspended → active →
     const second = await createDraft('Lifecycle Contract 2', '500');
     const secondId = Number(second.contractId);
     await acceptAndApprove(secondId);
+    await fund(secondId, '500', 'lifecycle-fund-2');
     await db.withCompanyDb(companyId, tx => activatePrintingContract(tx, companyId, actor, secondId));
 
     const cancelled = await db.withCompanyDb(companyId, tx =>

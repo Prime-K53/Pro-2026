@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
-import { PrintingContract, ContractAssessmentMilestone } from '../../types/accounting';
+import { Account, PrintingContract, ContractAssessmentMilestone } from '../../types/accounting';
 import { formatCurrency } from '../../utils/currency';
 import { printingApi } from '../../services/printingApi';
 import {
@@ -164,7 +164,12 @@ export const AddAssessmentModal: React.FC<{ contract: PrintingContract; onClose:
     useAccounting();
   const currency = companyProfile.currency || 'K';
   const rawMaterials = inventoryItems.filter(i => i.type === 'raw_material');
-  const nextNumber = (contract.assessments?.length || 0) + 1;
+  // First free slot in 1..5, not length + 1 (G-26: removing #3 must let #3 be reused).
+  const usedNumbers = new Set((contract.assessments || []).map(a => a.assessmentNumber));
+  const nextNumber = [1, 2, 3, 4, 5].find(n => !usedNumbers.has(n)) ?? 0;
+  // Amount still assignable before the prepaid total is exhausted (G-26).
+  const allocatedSoFar = (contract.assessments || []).reduce((s, a) => s + (Number(a.agreedAmount) || 0), 0);
+  const remainingAllocatable = Math.max(0, (Number(contract.totalPrepaidAmount) || 0) - allocatedSoFar);
   const [label, setLabel] = useState(`Assessment ${nextNumber}`);
   const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().slice(0, 10));
   const [agreedAmount, setAgreedAmount] = useState('0');
@@ -180,6 +185,10 @@ export const AddAssessmentModal: React.FC<{ contract: PrintingContract; onClose:
 
   const submit = () => {
     if (!label.trim()) return;
+    if (nextNumber === 0) {
+      triggerShortcutNotice('All five assessment slots are already in use', 'error');
+      return;
+    }
     const milestone: ContractAssessmentMilestone = {
       assessmentNumber: nextNumber,
       label: label.trim(),
@@ -226,9 +235,22 @@ export const AddAssessmentModal: React.FC<{ contract: PrintingContract; onClose:
             <input type="date" value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} className={inputCls} required />
           </Field>
         </div>
-        <Field label={`Agreed Amount`}>
-          <input type="number" min="0" step="0.01" value={agreedAmount} onChange={e => setAgreedAmount(e.target.value)} className={`${inputCls} text-right font-mono font-bold`} />
+        <Field label={`Agreed Amount (max ${remainingAllocatable.toFixed(2)} allocatable)`}>
+          <input
+            type="number"
+            min="0"
+            max={remainingAllocatable}
+            step="0.01"
+            value={agreedAmount}
+            onChange={e => setAgreedAmount(e.target.value)}
+            className={`${inputCls} text-right font-mono font-bold`}
+          />
         </Field>
+        {Number(agreedAmount) > remainingAllocatable && (
+          <p className="text-xs text-rose-600">
+            Amount exceeds the {remainingAllocatable.toFixed(2)} still allocatable against the prepaid total.
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Paper Raw Material">
             <select value={rawPaperItemId} onChange={e => setRawPaperItemId(e.target.value)} className={inputCls}>
@@ -497,7 +519,7 @@ export const ContractInfoModal: React.FC<{
             </div>
             <div className="space-y-1 font-mono text-[11px]">
               <div className="flex justify-between">
-                <span className="text-slate-500">#{(contract as any).liabilityAccountId || 2250} Unearned Contract Revenue</span>
+                <span className="text-slate-500">#{contract.liabilityAccountId ?? 2250} Unearned Contract Revenue</span>
                 <span>{formatCurrency(contract.remainingBalance, currency)}</span>
               </div>
               <div className="flex justify-between">
@@ -639,6 +661,491 @@ export const ContractInfoModal: React.FC<{
           </table>
         </div>
       )}
+    </ModalFrame>
+  );
+};
+
+/* ------------------------------------------------------------------ *
+ * Contract money modals: funding, activation, cancellation settlement,
+ * top-up and renewal (G-03, G-04, G-18, G-21, G-22).
+ * ------------------------------------------------------------------ */
+
+const inputClsModal =
+  'w-full rounded border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950';
+
+function newIdempotencyKey(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export const FundContractModal: React.FC<{ contract: PrintingContract; onClose: () => void }> = ({
+  contract,
+  onClose,
+}) => {
+  const { triggerShortcutNotice } = useAccounting();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const required = Number(contract.totalPrepaidAmount) || 0;
+  const funded = Number(contract.allocatedAmount ?? 0) || 0;
+  const shortfall = Math.max(0, required - funded);
+
+  const submit = async () => {
+    if (!contract.backendId) {
+      setError('This contract is not backed by the server and cannot be funded.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const funding = await printingApi.fundContract(contract.backendId, newIdempotencyKey('contract-fund'));
+      triggerShortcutNotice(`Allocated ${funding?.amount ?? required} to ${contract.contractNumber}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Funding failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Fund Retainer from Wallet"
+      subtitle={`${contract.contractNumber} · required ${required.toFixed(2)} · allocated ${funded.toFixed(2)}`}
+      icon={<Wallet className="h-4 w-4 text-emerald-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="success" onClick={submit} disabled={busy || shortfall <= 0}>
+            {busy ? 'Allocating…' : shortfall > 0 ? `Shortfall ${shortfall.toFixed(2)}` : 'Allocate Retainer'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex justify-between">
+            <span className="text-slate-500">Prepaid total</span>
+            <span className="font-mono font-semibold">{required.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Already allocated</span>
+            <span className="font-mono font-semibold">{funded.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between border-t border-slate-200 pt-1 dark:border-slate-700">
+            <span className="text-slate-500">Still to allocate</span>
+            <span className="font-mono font-bold text-emerald-600">{shortfall.toFixed(2)}</span>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500">
+          This moves cash out of the customer wallet into the contract retainer liability. The contract stays a
+          draft until it is accepted, approved and activated.
+        </p>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+export const ActivationRequestModal: React.FC<{ contract: PrintingContract; onClose: () => void }> = ({
+  contract,
+  onClose,
+}) => {
+  const { triggerShortcutNotice } = useAccounting();
+  const [reason, setReason] = useState('Contract documents signed and retainer funded');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!contract.backendId) {
+      setError('This contract is not backed by the server.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await printingApi.requestActivation(contract.backendId, {
+        reason,
+        amount: contract.totalPrepaidAmount,
+        idempotencyKey: newIdempotencyKey('contract-activation-req'),
+      });
+      triggerShortcutNotice(`Activation requested for ${contract.contractNumber}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Could not create the activation request');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Request Activation Approval"
+      subtitle={contract.contractNumber}
+      icon={<CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="primary" onClick={submit} disabled={busy || !reason.trim()}>
+            {busy ? 'Submitting…' : 'Submit for Approval'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40">
+          Activation requires, in order: customer acceptance, wallet funding of the full retainer, and an
+          approved activation request. The checklist on the contract record shows what is still missing.
+        </div>
+        <Field label="Reason / justification">
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={3}
+            className={inputClsModal}
+          />
+        </Field>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+export const CancelContractModal: React.FC<{ contract: PrintingContract; onClose: () => void }> = ({
+  contract,
+  onClose,
+}) => {
+  const { cancelPrintingContract, triggerShortcutNotice, accounts } = useAccounting();
+  const remaining = Number(contract.remainingBalance) || 0;
+  const [mode, setMode] = useState<'refund' | 'forfeit'>(remaining > 0 ? 'refund' : 'forfeit');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const banks = (accounts || []).filter((a: Account) => a.type === 'Bank');
+  const [refundBankAccountId, setRefundBankAccountId] = useState<string>(
+    banks[0]?.id ? String(banks[0].id) : ''
+  );
+
+  const submit = async () => {
+    if (!reason.trim()) {
+      setError('A cancellation reason is required.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelPrintingContract(contract.id, {
+        reason: reason.trim(),
+        settlementMode: remaining > 0 ? mode : 'forfeit',
+        refundBankAccountId:
+          mode === 'refund' && remaining > 0 ? Number(refundBankAccountId) || null : null,
+      });
+      triggerShortcutNotice(`Cancelled ${contract.contractNumber}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Cancellation failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title={`Cancel ${contract.contractNumber}`}
+      subtitle={remaining > 0 ? `Remaining retainer ${remaining.toFixed(2)}` : 'No balance outstanding'}
+      icon={<Trash2 className="h-4 w-4 text-rose-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Keep Contract
+          </Btn>
+          <Btn variant="danger" onClick={submit} disabled={busy}>
+            {busy ? 'Cancelling…' : 'Cancel Contract'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {remaining > 0 ? (
+          <>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  checked={mode === 'refund'}
+                  onChange={() => setMode('refund')}
+                  className="h-4 w-4"
+                />
+                Refund {remaining.toFixed(2)} to the school
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  checked={mode === 'forfeit'}
+                  onChange={() => setMode('forfeit')}
+                  className="h-4 w-4"
+                />
+                Forfeit {remaining.toFixed(2)} as earned income
+              </label>
+            </div>
+            {mode === 'refund' && (
+              <Field label="Refund bank account">
+                <select
+                  value={refundBankAccountId}
+                  onChange={e => setRefundBankAccountId(e.target.value)}
+                  className={inputClsModal}
+                >
+                  {banks.length === 0 && <option value="">No active bank accounts</option>}
+                  {banks.map((b: any) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            <p className="text-xs text-slate-500">
+              {mode === 'refund'
+                ? `Posts Dr Unearned Contract Revenue ${remaining.toFixed(2)} / Cr Bank ${remaining.toFixed(2)}.`
+                : `Posts Dr Unearned Contract Revenue ${remaining.toFixed(2)} / Cr Other Income ${remaining.toFixed(2)}.`}
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-slate-500">
+            The retainer is fully consumed. Cancelling records the closure without a journal entry.
+          </p>
+        )}
+        <Field label="Reason (required)">
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={2}
+            className={inputClsModal}
+          />
+        </Field>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+export const TopUpContractModal: React.FC<{ contract: PrintingContract; onClose: () => void }> = ({
+  contract,
+  onClose,
+}) => {
+  const { triggerShortcutNotice, accounts } = useAccounting();
+  const [amount, setAmount] = useState('');
+  const [depositDate, setDepositDate] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const banks = (accounts || []).filter((a: Account) => a.type === 'Bank');
+  const [bankAccountId, setBankAccountId] = useState<string>(banks[0]?.id ? String(banks[0].id) : '');
+
+  const submit = async () => {
+    const value = Number(amount);
+    if (!(value > 0)) {
+      setError('Enter an amount greater than zero.');
+      return;
+    }
+    if (!contract.backendId) {
+      setError('This contract is not backed by the server.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await printingApi.topUpContract(contract.backendId, {
+        amount: value.toFixed(2),
+        bankAccountId: Number(bankAccountId),
+        depositDate,
+        notes: notes.trim() || null,
+        idempotencyKey: newIdempotencyKey('contract-topup'),
+      });
+      triggerShortcutNotice(`Topped up ${contract.contractNumber} by ${value.toFixed(2)}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Top-up failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Top Up Retainer"
+      subtitle={contract.contractNumber}
+      icon={<DollarSign className="h-4 w-4 text-emerald-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="success" onClick={submit} disabled={busy}>
+            {busy ? 'Posting…' : 'Post Top-Up'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex justify-between">
+            <span className="text-slate-500">Current prepaid total</span>
+            <span className="font-mono font-semibold">
+              {(Number(contract.totalPrepaidAmount) || 0).toFixed(2)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Current remaining</span>
+            <span className="font-mono font-semibold">
+              {(Number(contract.remainingBalance) || 0).toFixed(2)}
+            </span>
+          </div>
+        </div>
+        <Field label="Amount">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+            className={`${inputClsModal} text-right font-mono font-bold`}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Deposit bank account">
+            <select
+              value={bankAccountId}
+              onChange={e => setBankAccountId(e.target.value)}
+              className={inputClsModal}
+            >
+              {banks.length === 0 && <option value="">No active bank accounts</option>}
+              {banks.map((b: any) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Deposit date">
+            <input
+              type="date"
+              value={depositDate}
+              onChange={e => setDepositDate(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+        </div>
+        <Field label="Notes">
+          <input
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            className={inputClsModal}
+            placeholder="Optional reference"
+          />
+        </Field>
+        <p className="text-xs text-slate-500">
+          Posts Dr Bank / Cr Unearned Contract Revenue and adds the amount to both the prepaid total and the
+          remaining balance.
+        </p>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+export const RenewContractModal: React.FC<{ contract: PrintingContract; onClose: () => void }> = ({
+  contract,
+  onClose,
+}) => {
+  const { renewPrintingContract, triggerShortcutNotice } = useAccounting();
+  const [depositAmount, setDepositAmount] = useState(String(Number(contract.totalPrepaidAmount) || 0));
+  const [startDate, setStartDate] = useState(contract.startDate);
+  const [endDate, setEndDate] = useState(contract.endDate);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const amount = Number(depositAmount);
+    if (!(amount > 0)) {
+      setError('A deposit amount greater than zero is required to renew.');
+      return;
+    }
+    if (endDate < startDate) {
+      setError('End date cannot be earlier than the start date.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await renewPrintingContract(contract.id, { amount, startDate, endDate });
+      triggerShortcutNotice(`Created renewal draft for ${contract.contractNumber}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Renewal failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Renew Contract"
+      subtitle={`Successor to ${contract.contractNumber}`}
+      icon={<FileText className="h-4 w-4 text-blue-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="primary" onClick={submit} disabled={busy}>
+            {busy ? 'Creating…' : 'Create Renewal Draft'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Field label="New deposit amount">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={depositAmount}
+            onChange={e => setDepositAmount(e.target.value)}
+            className={`${inputClsModal} text-right font-mono font-bold`}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="New start date">
+            <input
+              type="date"
+              value={startDate}
+              onChange={e => setStartDate(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+          <Field label="New end date">
+            <input
+              type="date"
+              value={endDate}
+              onChange={e => setEndDate(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+        </div>
+        <p className="text-xs text-slate-500">
+          A renewal is a new agreement: it needs a real new deposit and produces a new draft contract. The
+          original contract is left unchanged.
+        </p>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
     </ModalFrame>
   );
 };

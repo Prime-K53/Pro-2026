@@ -10,6 +10,7 @@ import {
   InvoiceLineInput,
   listInvoices,
 } from './salesService.ts';
+import { linkExamPapersToInvoice } from './printingRecordsService.ts';
 
 export type UnifiedDocumentKind =
   | 'invoice'
@@ -580,11 +581,24 @@ export async function listCompanyDocuments(
     invoice_id: number | null;
     invoice_number: string | null;
     created_at: string;
+    delivered_count: string;
+    eligible_for_invoice: boolean;
   }>(
     `SELECT eb.id, eb.school_customer_id, c.company_name AS school_name,
             eb.assessment_name, eb.class_name, eb.learners_count,
             eb.class_revenue::text, eb.invoice_id, inv.invoice_number,
-            eb.created_at::date::text AS created_at
+            eb.created_at::date::text AS created_at,
+            (SELECT COUNT(*)::text FROM exam_papers p
+              WHERE p.company_id = eb.company_id AND p.batch_id = eb.id
+                AND p.status = 'delivered') AS delivered_count,
+            (
+              EXISTS (SELECT 1 FROM exam_papers p
+                       WHERE p.company_id = eb.company_id AND p.batch_id = eb.id
+                         AND p.status = 'delivered')
+              AND NOT EXISTS (SELECT 1 FROM exam_papers p
+                               WHERE p.company_id = eb.company_id AND p.batch_id = eb.id
+                                 AND p.status NOT IN ('delivered', 'invoiced'))
+            ) AS eligible_for_invoice
        FROM exam_assessment_batches eb
        JOIN customers c ON c.company_id = eb.company_id AND c.id = eb.school_customer_id
        LEFT JOIN invoices inv ON inv.company_id = eb.company_id AND inv.id = eb.invoice_id
@@ -604,14 +618,18 @@ export async function listCompanyDocuments(
       counterpartyId: Number(r.school_customer_id),
       documentDate: r.created_at,
       dueDate: null,
-      status: r.invoice_id ? 'invoiced' : 'pending_invoice',
+      status: r.invoice_id
+        ? 'invoiced'
+        : Number(r.delivered_count) > 0
+        ? 'delivered_pending_invoice'
+        : 'pending_production',
       amount: toMoneyNumber(parseDecimal4(r.class_revenue)),
       balanceDue: null,
       currencyCode: 'ZMW',
       journalTxnId: null,
       linkedInvoiceId: r.invoice_id !== null ? Number(r.invoice_id) : null,
       linkedInvoiceNumber: r.invoice_number || null,
-      canGenerateInvoice: !r.invoice_id,
+      canGenerateInvoice: !r.invoice_id && Boolean(r.eligible_for_invoice),
       notes: '',
       source: 'postgres',
     });
@@ -1260,7 +1278,7 @@ export async function getDocumentPreviewPayload(
       title: 'EXAMINATION PRODUCTION & BILLING SHEET',
       status: batch.invoice_id ? 'invoiced' : 'pending_invoice',
       documentDate: String(batch.created_at).slice(0, 10),
-      currencyCode: 'ZMW',
+      currencyCode: companyMeta.currency,
       company: companyMeta,
       counterparty: {
         roleLabel: 'School Institution',
@@ -1438,6 +1456,7 @@ export interface WorkflowInvoiceGenerationInput {
   postgresContractId?: number | null;
   postgresMilestoneNumber?: number | null;
   postgresExamBatchId?: number | null;
+  postgresExamPaperIds?: number[] | null;
   postgresPrintingJobId?: number | null;
 }
 
@@ -1497,6 +1516,35 @@ export async function generateInvoiceFromWorkflow(
     }
   }
 
+  let examPaperIds = Array.isArray(input.postgresExamPaperIds)
+    ? input.postgresExamPaperIds.map(Number).filter(n => Number.isInteger(n) && n > 0)
+    : [];
+  if (examPaperIds.length === 0 && input.postgresExamBatchId) {
+    const batchPapers = await tx.query<{ id: number }>(
+      `SELECT id FROM exam_papers
+        WHERE company_id = $1 AND batch_id = $2
+          AND status = 'delivered' AND invoice_id IS NULL
+        ORDER BY id ASC`,
+      [companyId, Number(input.postgresExamBatchId)]
+    );
+    examPaperIds = batchPapers.rows.map(r => Number(r.id));
+    if (examPaperIds.length === 0) {
+      const controlled = await tx.query<{ id: number }>(
+        `SELECT id FROM exam_papers
+          WHERE company_id = $1 AND batch_id = $2 AND production_job_id IS NOT NULL
+          LIMIT 1`,
+        [companyId, Number(input.postgresExamBatchId)]
+      );
+      if (controlled.rows.length > 0) {
+        throw new AccountingError(
+          409,
+          'Examination papers must be produced, QC-approved and delivered before this batch can be invoiced',
+          'EXAM_BATCH_NOT_DELIVERED'
+        );
+      }
+    }
+  }
+
   const created = await createInvoiceOrSalesReceipt(tx, companyId, actor, {
     customerId: resolvedCustomerId,
     invoiceDate: input.invoiceDate,
@@ -1510,6 +1558,19 @@ export async function generateInvoiceFromWorkflow(
   });
 
   const invoiceId = Number(created.invoice.id);
+
+  // Paper-level linkage is authoritative for examination invoices. It validates
+  // delivery/QC eligibility, prevents double invoicing and relieves WIP to COGS
+  // exactly once. Skipped on idempotent replay because the original transaction
+  // already performed the link.
+  let examLink: Awaited<ReturnType<typeof linkExamPapersToInvoice>> | null = null;
+  if (examPaperIds.length > 0 && !created.idempotentReplay) {
+    examLink = await linkExamPapersToInvoice(tx, companyId, actor, {
+      invoiceId,
+      customerId: resolvedCustomerId,
+      paperIds: examPaperIds,
+    });
+  }
 
   // Optionally link to Postgres contract milestone, exam batch, or printing job if present
   if (input.postgresContractId && input.postgresMilestoneNumber) {
@@ -1549,8 +1610,10 @@ export async function generateInvoiceFromWorkflow(
       sourceRef: input.sourceRef || null,
       invoiceNumber: created.invoice.invoiceNumber,
       customerId: resolvedCustomerId,
+      examPaperIds,
+      examLink,
     },
   });
 
-  return created;
+  return { ...created, examLink };
 }

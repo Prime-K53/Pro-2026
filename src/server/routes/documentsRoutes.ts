@@ -14,6 +14,7 @@ import {
   listCompanyDocuments,
   UnifiedDocumentKind,
 } from '../services/documentsService.ts';
+import { renderContractToRenderModel } from '../services/contractRenderService.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -100,6 +101,39 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
           })
         );
         return res.json({ preview });
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  // Deterministic render-model endpoint for contracts (feature-flagged, additive).
+  // Returns { document, renderModel, consistency } where:
+  //   - document: the generic ERPDocument envelope
+  //   - renderModel: absolute-coordinate render tree
+  //   - consistency: ConsistencyLock validation result
+  // This does not affect the existing /documents/preview/contract/:id endpoint.
+  router.get(
+    '/documents/render-model/contract/:id',
+    requirePermission('attachments:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+          return res.status(400).json({ error: 'Invalid contract id' });
+        }
+        const blueprintId = req.query.blueprintId ? String(req.query.blueprintId) : undefined;
+        const checkConsistency =
+          req.query.checkConsistency == null || String(req.query.checkConsistency).toLowerCase() !== 'false';
+
+        const result = await db.withCompanyDb(auth.companyId, tx =>
+          renderContractToRenderModel(tx, auth.companyId, id, {
+            blueprintId,
+            checkConsistency,
+          })
+        );
+        return res.json(result);
       } catch (err) {
         return handleDocumentsError(res, err);
       }

@@ -49,6 +49,33 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
   const customerInvoices = invoices.filter(i => i.customerId === customer?.id);
   const totalBalance = customer?.balance || 0;
 
+  // Compute real aging from invoice due dates (not hardcoded percentages)
+  const asOfDate = new Date(statementDate);
+  const agingBuckets = {
+    current: 0,
+    d1_30: 0,
+    d31_60: 0,
+    d61_90: 0,
+    d90plus: 0,
+  };
+
+  for (const inv of customerInvoices) {
+    if (String(inv.status) === 'voided' || inv.balanceDue <= 0) continue;
+    const dueDate = new Date(inv.dueDate);
+    const daysPastDue = Math.floor((asOfDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysPastDue <= 0) {
+      agingBuckets.current += inv.balanceDue;
+    } else if (daysPastDue <= 30) {
+      agingBuckets.d1_30 += inv.balanceDue;
+    } else if (daysPastDue <= 60) {
+      agingBuckets.d31_60 += inv.balanceDue;
+    } else if (daysPastDue <= 90) {
+      agingBuckets.d61_90 += inv.balanceDue;
+    } else {
+      agingBuckets.d90plus += inv.balanceDue;
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div
@@ -230,19 +257,19 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
             <div className="grid grid-cols-4 divide-x divide-slate-300 text-center font-mono p-3">
               <div>
                 <span className="text-[10px] font-sans text-slate-500">Current</span>
-                <div className="font-bold mt-1">{formatCurrency(totalBalance * 0.7, currency)}</div>
+                <div className="font-bold mt-1">{formatCurrency(agingBuckets.current, currency)}</div>
               </div>
               <div>
                 <span className="text-[10px] font-sans text-slate-500">1 - 30 Days</span>
-                <div className="font-bold mt-1">{formatCurrency(totalBalance * 0.3, currency)}</div>
+                <div className="font-bold mt-1">{formatCurrency(agingBuckets.d1_30, currency)}</div>
               </div>
               <div>
                 <span className="text-[10px] font-sans text-slate-500">31 - 60 Days</span>
-                <div className="font-bold mt-1">{formatCurrency(0, currency)}</div>
+                <div className="font-bold mt-1">{formatCurrency(agingBuckets.d31_60, currency)}</div>
               </div>
               <div>
                 <span className="text-[10px] font-sans text-slate-500">60+ Days</span>
-                <div className="font-bold mt-1 text-slate-400">{formatCurrency(0, currency)}</div>
+                <div className="font-bold mt-1 text-slate-400">{formatCurrency(agingBuckets.d61_90 + agingBuckets.d90plus, currency)}</div>
               </div>
             </div>
           </div>

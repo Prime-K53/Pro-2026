@@ -490,7 +490,23 @@ export async function createPrintingJob(
       runningWastePct: input.runningWastePct ?? 0,
       allowInsufficientStockPreview: true,
     });
-    const yieldImp = Number(tonerItem.conversion_factor) > 0 ? Number(tonerItem.conversion_factor) : 10000;
+    // Prefer a real material-specification yield. A conversion factor of 1
+    // means "1 cartridge = 1 cartridge", not "1 cartridge = 1 impression", so
+    // only use it as a yield when it is greater than one. If neither source
+    // provides a yield, use the established conservative 10,000-impression
+    // default and let the caller see the cost as estimated, not actual.
+    const tonerMs = await tx.query<{ yield_per_purchase_unit: string | null }>(
+      `SELECT yield_per_purchase_unit::text
+         FROM material_specifications
+        WHERE company_id = $1 AND inventory_item_id = $2
+        LIMIT 1`,
+      [companyId, rawTonerId]
+    );
+    const specYield = tonerMs.rows[0]?.yield_per_purchase_unit
+      ? Number(tonerMs.rows[0].yield_per_purchase_unit)
+      : null;
+    const convYield = Number(tonerItem.conversion_factor) > 1 ? Number(tonerItem.conversion_factor) : null;
+    const yieldImp = specYield && specYield > 0 ? specYield : convYield ?? 10000;
     const tRes = calculateToner({
       machine: {
         machineId: 0,

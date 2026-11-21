@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
+import { rateLimit } from '../rateLimiter.ts';
+import { hasPermission, type Permission } from '../permissions.ts';
 import {
   approveJobBudget,
   cancelPrintingJob,
@@ -28,24 +30,36 @@ import {
   addContractAssessment,
   amendPrintingContract,
   approveContractAmendment,
+  approveExamBatchSpecification,
+  cancelExamPaper,
   completeContractAssessment,
   createExamBatch,
+  createExamReprint,
   createPrintingContract,
   deleteExamPaper,
+  deliverExamPaper,
+  getExaminationReconciliation,
+  listExamBatches,
+  listExamPaperEvents,
+  fundContractFromWallet,
   getPrintingContract,
   listContractAmendments,
   listContractWalletTransactions,
   listExamPapers,
   listPrintingContracts,
+  linkContractDepositInvoice,
+  linkMilestoneInvoice,
   recordContractAcceptance,
   rejectContractAmendment,
   removeContractAssessment,
   renewPrintingContract,
   requestAssessmentChangeApproval,
+  requestContractActivation,
   requestContractAmendment,
   resumeContract,
   setPrintingContractStatus,
   suspendContract,
+  topUpContract,
   updateContractAssessment,
   updateExamPaperStatus,
 } from '../services/printingRecordsService.ts';
@@ -60,17 +74,35 @@ function handlePrintingError(res: Response, err: unknown): Response {
     return res.status(err.statusCode).json({ error: err.message, code: err.code });
   }
   const pgCode = (err as any)?.code;
-  const msg = (err as any)?.message || 'Printing workflow error';
-  if (pgCode === '23505' || pgCode === '23514' || pgCode === '23001') {
-    return res.status(409).json({ error: msg, code: pgCode });
+  // Map Postgres constraint/code failures onto safe, typed client responses
+  // instead of leaking raw SQL text (G-17).
+  if (pgCode === '23505') return res.status(409).json({ error: 'Duplicate record', code: 'DUPLICATE_KEY' });
+  if (pgCode === '23514') return res.status(409).json({ error: 'Check constraint violated', code: 'CHECK_CONSTRAINT' });
+  if (pgCode === '23001') return res.status(409).json({ error: 'Restrict violation', code: 'RESTRICT_VIOLATION' });
+  if (pgCode === '23503') return res.status(409).json({ error: 'Related record is required or in use', code: 'FOREIGN_KEY_CONSTRAINT' });
+  if (pgCode === '23502') return res.status(400).json({ error: 'A required field is missing', code: 'MISSING_REQUIRED_FIELD' });
+  if (pgCode === '22P02' || pgCode === '22007' || pgCode === '22003') {
+    return res.status(400).json({ error: 'Invalid value supplied', code: 'INVALID_VALUE' });
   }
-  console.error('[Printing Route Error]', err);
-  return res.status(500).json({ error: msg });
+  if (pgCode === '40001') return res.status(409).json({ error: 'Concurrent update, please retry', code: 'SERIALIZATION_CONFLICT' });
+  if (pgCode === '40P01') return res.status(409).json({ error: 'Deadlock detected, please retry', code: 'DEADLOCK' });
+
+  const requestId = `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  console.error(`[Printing Route Error ${requestId}]`, err);
+  return res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR', requestId });
 }
 
 export function createPrintingRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
+
+  // Contract money movements are capped per user so a runaway client cannot
+  // flood the ledger with journals (G-23).
+  const contractMoneyLimit = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    keyFn: req => `printing:${req.auth?.companyId ?? 'anon'}:${req.auth?.userId ?? req.ip}`,
+  });
 
   router.use(requireAuth, rejectCrossCompanyParams);
 
@@ -332,10 +364,13 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
-  // Prepaid school printing retainer. Posts the cash-in / unearned-revenue entry.
-  router.post('/printing/contracts', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+  // Prepaid school printing retainer. Always creates a DRAFT: the contract is
+  // funded later from the customer wallet (D-1).
+  router.post('/printing/contracts', contractMoneyLimit, requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
     try {
-      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
         createPrintingContract(tx, req.auth!.companyId, toActor(req), {
           schoolCustomerId: Number(req.body?.schoolCustomerId),
           title: req.body?.title,
@@ -346,18 +381,95 @@ export function createPrintingRouter(db: ServerDatabase): Router {
           totalAssessments: Number(req.body?.totalAssessments),
           depositBankAccountId: Number(req.body?.depositBankAccountId),
           notes: req.body?.notes ?? null,
+          renewalOfContractId: req.body?.renewalOfContractId ?? null,
           assessments: Array.isArray(req.body?.assessments) ? req.body.assessments : [],
+          idempotencyKey,
         })
       );
-      return res.status(201).json({ contract });
+      return res.status(result.idempotentReplay ? 200 : 201).json({ contract: result });
     } catch (err) {
       return handlePrintingError(res, err);
     }
   });
 
+  // Fund a draft contract from the customer wallet (G-03, G-05).
+  router.post(
+    '/printing/contracts/:id/fund',
+    contractMoneyLimit,
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        const idempotencyKey =
+          (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+        const funding = await db.withCompanyDb(req.auth!.companyId, tx =>
+          fundContractFromWallet(tx, req.auth!.companyId, toActor(req), id, {
+            idempotencyKey,
+            notes: req.body?.notes ?? null,
+          })
+        );
+        return res.status(201).json({ funding });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  // Record a pending activation approval request (G-03).
+  router.post(
+    '/printing/contracts/:id/activation-requests',
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        const request = await db.withCompanyDb(req.auth!.companyId, tx =>
+          requestContractActivation(tx, req.auth!.companyId, toActor(req), id, {
+            reason: req.body?.reason,
+            amount: req.body?.amount,
+            payload: req.body?.payload,
+          })
+        );
+        return res.status(201).json({ request });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  // Additional retainer deposit against an active contract (G-18).
+  router.post(
+    '/printing/contracts/:id/deposits',
+    contractMoneyLimit,
+    requirePermission('printing:contracts:manage'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        const idempotencyKey =
+          (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+        const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+          topUpContract(tx, req.auth!.companyId, toActor(req), id, {
+            amount: req.body?.amount,
+            bankAccountId: Number(req.body?.bankAccountId),
+            depositDate: req.body?.depositDate,
+            notes: req.body?.notes ?? null,
+            idempotencyKey,
+          })
+        );
+        return res.status(result.idempotentReplay ? 200 : 201).json({ deposit: result });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
   // Examination print batch (one class / subject group with its papers).
-  router.post('/printing/exam-batches', requirePermission('printing:write'), async (req: Request, res: Response) => {
+  router.post('/printing/exam-batches', requirePermission('exams:create'), async (req: Request, res: Response) => {
     try {
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const batch = await db.withCompanyDb(req.auth!.companyId, tx =>
         createExamBatch(tx, req.auth!.companyId, toActor(req), {
           schoolCustomerId: Number(req.body?.schoolCustomerId),
@@ -368,6 +480,10 @@ export function createPrintingRouter(db: ServerDatabase): Router {
           contractId: req.body?.contractId ?? null,
           assessmentNumber: req.body?.assessmentNumber ?? null,
           papers: Array.isArray(req.body?.papers) ? req.body.papers : [],
+          classes: Array.isArray(req.body?.classes) ? req.body.classes : undefined,
+          dueDate: req.body?.dueDate ?? null,
+          priority: req.body?.priority ?? null,
+          idempotencyKey,
         })
       );
       return res.status(201).json({ batch });
@@ -461,7 +577,7 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.post('/printing/contracts/:id/cancel', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+  router.post('/printing/contracts/:id/cancel', contractMoneyLimit, requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
@@ -478,14 +594,19 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.post('/printing/contracts/:id/renew', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+  router.post('/printing/contracts/:id/renew', contractMoneyLimit, requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        renewPrintingContract(tx, req.auth!.companyId, toActor(req), id, req.body ?? undefined)
+        renewPrintingContract(tx, req.auth!.companyId, toActor(req), id, {
+          ...(req.body ?? {}),
+          idempotencyKey,
+        })
       );
-      return res.status(201).json(result);
+      return res.status(result.idempotentReplay ? 200 : 201).json({ contract: result });
     } catch (err) {
       return handlePrintingError(res, err);
     }
@@ -760,11 +881,65 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   );
 
+  // Link a generated retainer invoice to its contract (G-09).
+  router.post(
+    '/printing/contracts/:id/deposit-invoice',
+    requirePermission('invoices:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        const invoiceId = Number(req.body?.invoiceId);
+        if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+          return res.status(400).json({ error: 'A valid invoiceId is required' });
+        }
+        const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+          linkContractDepositInvoice(tx, req.auth!.companyId, toActor(req), id, {
+            invoiceId,
+            invoiceNumber: req.body?.invoiceNumber ?? null,
+          })
+        );
+        return res.json({ contract });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
+  // Link a generated assessment invoice to its milestone (G-09).
+  router.post(
+    '/printing/contracts/:id/assessments/:assessmentNumber/invoice-link',
+    requirePermission('invoices:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const id = Number(req.params.id);
+        const assessmentNumber = Number(req.params.assessmentNumber);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+        if (!Number.isInteger(assessmentNumber) || assessmentNumber < 1) {
+          return res.status(400).json({ error: 'Invalid assessment number' });
+        }
+        const invoiceId = Number(req.body?.invoiceId);
+        if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+          return res.status(400).json({ error: 'A valid invoiceId is required' });
+        }
+        const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+          linkMilestoneInvoice(tx, req.auth!.companyId, toActor(req), id, assessmentNumber, {
+            invoiceId,
+            invoiceNumber: req.body?.invoiceNumber ?? null,
+          })
+        );
+        return res.json({ contract });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
+
   /* ================================================================
    * Examination papers — read + status transitions + removal
    * ================================================================ */
 
-  router.get('/printing/exam-papers', requirePermission('printing:read'), async (req: Request, res: Response) => {
+  router.get('/printing/exam-papers', requirePermission('exams:view'), async (req: Request, res: Response) => {
     try {
       const papers = await db.withCompanyDb(req.auth!.companyId, tx =>
         listExamPapers(tx, req.auth!.companyId)
@@ -775,16 +950,72 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.patch('/printing/exam-papers/:id/status', requirePermission('printing:write'), async (req: Request, res: Response) => {
+  // Examination batch register with aggregated paper counts and totals.
+  router.get('/printing/exam-batches', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const status = typeof req.query.status === 'string' ? req.query.status : null;
+      const schoolRaw = req.query.schoolCustomerId;
+      const schoolCustomerId =
+        typeof schoolRaw === 'string' && /^\d+$/.test(schoolRaw) ? Number(schoolRaw) : null;
+      const batches = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listExamBatches(tx, req.auth!.companyId, { status, schoolCustomerId })
+      );
+      return res.json({ companyId: req.auth!.companyId, batches });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Append-only production timeline for a paper.
+  router.get('/printing/exam-papers/:id/events', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const events = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listExamPaperEvents(tx, req.auth!.companyId, id)
+      );
+      return res.json({ paperId: id, events });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Status transitions carry a different duty per target state, so the required
+  // permission is resolved server-side rather than trusting a single broad grant.
+  const EXAM_TRANSITION_PERMISSION: Record<string, Permission> = {
+    queued: 'exams:produce',
+    printing: 'exams:produce',
+    completed: 'exams:qc',
+    qc_passed: 'exams:qc',
+    qc_hold: 'exams:qc',
+    packed: 'exams:dispatch',
+    dispatched: 'exams:dispatch',
+  };
+
+  router.patch('/printing/exam-papers/:id/status', async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
       const status = String(req.body?.status || '').trim();
-      if (!['queued', 'printing', 'completed'].includes(status)) {
+      const permission = EXAM_TRANSITION_PERMISSION[status];
+      if (!permission) {
         return res.status(400).json({ error: 'Invalid exam paper status' });
       }
+      if (!hasPermission(req.auth!.role, permission)) {
+        return res.status(403).json({
+          error: `Role '${req.auth!.role}' lacks required permission '${permission}'`,
+        });
+      }
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        updateExamPaperStatus(tx, req.auth!.companyId, toActor(req), id, status as 'queued' | 'printing' | 'completed')
+        updateExamPaperStatus(tx, req.auth!.companyId, toActor(req), id, status as any, {
+          reason: req.body?.reason ?? null,
+          goodCopies: req.body?.goodCopies != null ? Number(req.body.goodCopies) : undefined,
+          spoiledCopies:
+            req.body?.spoiledCopies != null ? Number(req.body.spoiledCopies) : undefined,
+          packageCount: req.body?.packageCount != null ? Number(req.body.packageCount) : undefined,
+          sealReference: req.body?.sealReference ?? null,
+          qcNotes: req.body?.qcNotes ?? null,
+        })
       );
       return res.json(result);
     } catch (err) {
@@ -792,7 +1023,92 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.delete('/printing/exam-papers/:id', requirePermission('printing:write'), async (req: Request, res: Response) => {
+  // Controlled cancellation with mandatory reason and inventory release.
+  router.post('/printing/exam-papers/:id/cancel', requirePermission('exams:cancel'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        cancelExamPaper(tx, req.auth!.companyId, toActor(req), id, {
+          reason: String(req.body?.reason || ''),
+          returnUnusedMaterials: req.body?.returnUnusedMaterials !== false,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Controlled reprint: a new linked production record, never a mutation of the parent.
+  router.post('/printing/exam-papers/:id/reprint', requirePermission('exams:produce'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        createExamReprint(tx, req.auth!.companyId, toActor(req), id, {
+          reason: String(req.body?.reason || req.body?.reprintReason || ''),
+          copies: req.body?.copies != null ? Number(req.body.copies) : undefined,
+          productionDate: req.body?.productionDate ?? null,
+          idempotencyKey,
+        })
+      );
+      return res.status(201).json({ reprint: result });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Freeze the approved production specification for a batch.
+  router.post('/printing/exam-batches/:id/approve-spec', requirePermission('exams:approve'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam batch id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        approveExamBatchSpecification(tx, req.auth!.companyId, toActor(req), id, {
+          notes: req.body?.notes ?? null,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Authoritative examination reconciliation (read-only).
+  router.get('/printing/exam-reconciliation', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const report = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getExaminationReconciliation(tx, req.auth!.companyId)
+      );
+      return res.json({ companyId: req.auth!.companyId, report });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-papers/:id/deliver', requirePermission('exams:deliver'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        deliverExamPaper(tx, req.auth!.companyId, toActor(req), id, {
+          dispatchDate: req.body?.dispatchDate ?? null,
+          recipientName: req.body?.recipientName ?? null,
+          driverName: req.body?.driverName ?? null,
+          vehicleReg: req.body?.vehicleReg ?? null,
+          notes: req.body?.notes ?? null,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.delete('/printing/exam-papers/:id', requirePermission('exams:cancel'), async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });

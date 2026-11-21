@@ -80,10 +80,13 @@ export async function listCustomers(tx: Transaction, companyId: number, includeI
     is_tax_exempt: boolean;
     notes: string | null;
     is_active: boolean;
+    customer_code: string | null;
+    customer_status: string;
   }>(
     `SELECT id, parent_customer_id, customer_type, name, company_name, email, phone,
             billing_address, shipping_address, payment_term_id, terms_label,
-            credit_limit::text, balance::text, is_tax_exempt, notes, is_active
+            credit_limit::text, balance::text, is_tax_exempt, notes, is_active,
+            customer_code, customer_status
        FROM customers
       WHERE company_id = $1 ${includeInactive ? '' : 'AND is_active = TRUE'}
       ORDER BY LOWER(company_name) ASC, id ASC`,
@@ -107,6 +110,8 @@ export async function listCustomers(tx: Transaction, companyId: number, includeI
     isTaxExempt: Boolean(r.is_tax_exempt),
     notes: r.notes || '',
     isActive: Boolean(r.is_active),
+    customerCode: r.customer_code ?? '',
+    customerStatus: r.customer_status,
   }));
 }
 
@@ -128,6 +133,11 @@ export async function createCustomer(
     creditLimit?: string | number | null;
     isTaxExempt?: boolean;
     notes?: string | null;
+    taxRegistrationNumber?: string | null;
+    taxJurisdiction?: string | null;
+    exemptionCertificateNumber?: string | null;
+    exemptionCertificateExpiryDate?: string | null;
+    withholdingTaxClassification?: string | null;
   }
 ) {
   const name = String(input.name || '').trim();
@@ -139,17 +149,49 @@ export async function createCustomer(
     throw new AccountingError(400, `Invalid customerType '${customerType}'`, 'INVALID_CUSTOMER_TYPE');
   }
 
+  // Duplicate detection: check for existing customers with same name (case-insensitive), email, or phone
+  const dupRes = await tx.query<{ id: number; name: string; company_name: string; email: string | null; phone: string | null }>(
+    `SELECT id, name, company_name, email, phone
+       FROM customers
+      WHERE company_id = $1
+        AND (
+          LOWER(name) = LOWER($2)
+          OR LOWER(company_name) = LOWER($3)
+          OR ($4::VARCHAR IS NOT NULL AND email IS NOT NULL AND LOWER(email) = LOWER($4::VARCHAR))
+          OR ($5::VARCHAR IS NOT NULL AND phone IS NOT NULL AND phone = $5::VARCHAR)
+        )`,
+    [companyId, name, companyName, input.email ?? null, input.phone ?? null]
+  );
+  if (dupRes.rows.length > 0) {
+    throw new AccountingError(
+      409,
+      `Potential duplicate customer found: "${dupRes.rows[0].company_name || dupRes.rows[0].name}" (ID: ${dupRes.rows[0].id})`,
+      'DUPLICATE_CUSTOMER'
+    );
+  }
+
   const creditLimitStr =
     input.creditLimit !== undefined && input.creditLimit !== null && input.creditLimit !== ''
       ? formatDecimal4(parseDecimal4(input.creditLimit))
       : null;
 
+  // Generate server-side customer code: CUST-{6-digit sequence per company}
+  const codeSeq = await tx.query<{ seq: number }>(
+    `SELECT COALESCE(MAX(CAST(substring(customer_code from 6) AS INTEGER)), 0) + 1 AS seq
+       FROM customers
+      WHERE company_id = $1 AND customer_code LIKE 'CUST-%'`,
+    [companyId]
+  );
+  const customerCode = `CUST-${String(codeSeq.rows[0]?.seq ?? 1).padStart(6, '0')}`;
+
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO customers (
        company_id, parent_customer_id, customer_type, name, company_name, email, phone,
        billing_address, shipping_address, payment_term_id, terms_label, credit_limit,
-       is_tax_exempt, notes
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::NUMERIC(19,4), $13, $14)
+       is_tax_exempt, notes, customer_code, customer_status,
+       tax_registration_number, tax_jurisdiction, exemption_certificate_number,
+       exemption_certificate_expiry_date, withholding_tax_classification
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::NUMERIC(19,4), $13, $14, $15, 'active', $16, $17, $18, $19::DATE, $20)
      RETURNING id`,
     [
       companyId,
@@ -166,6 +208,12 @@ export async function createCustomer(
       creditLimitStr,
       Boolean(input.isTaxExempt),
       input.notes?.trim() || null,
+      customerCode,
+      input.taxRegistrationNumber?.trim() || null,
+      input.taxJurisdiction?.trim() || null,
+      input.exemptionCertificateNumber?.trim() || null,
+      input.exemptionCertificateExpiryDate ?? null,
+      input.withholdingTaxClassification?.trim() || null,
     ]
   );
 
@@ -177,7 +225,7 @@ export async function createCustomer(
     action: 'CUSTOMER_CREATED',
     tableName: 'customers',
     recordId: id,
-    newValues: { name, companyName, customerType },
+    newValues: { name, companyName, customerType, customerCode, customerStatus: 'active' },
   });
 
   const all = await listCustomers(tx, companyId, true);
@@ -745,8 +793,9 @@ export async function createInvoiceOrSalesReceipt(
     credit_limit: string | null;
     balance: string;
     is_tax_exempt: boolean;
+    customer_status: string;
   }>(
-    `SELECT id, company_name, terms_label, credit_limit::text, balance::text, is_tax_exempt
+    `SELECT id, company_name, terms_label, credit_limit::text, balance::text, is_tax_exempt, customer_status
        FROM customers WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, customerId]
   );
@@ -754,6 +803,11 @@ export async function createInvoiceOrSalesReceipt(
     throw new AccountingError(404, 'Customer not found in active company', 'CUSTOMER_NOT_FOUND');
   }
   const customer = custRes.rows[0];
+
+  // Customer status check: blocked customers cannot transact
+  if (customer.customer_status === 'blocked') {
+    throw new AccountingError(409, `Customer ${customer.company_name} is blocked and cannot transact`, 'CUSTOMER_BLOCKED');
+  }
 
   const invoiceDate = input.invoiceDate ? assertIsoDate(input.invoiceDate, 'invoiceDate') : todayIsoDate();
   const dueDate = input.dueDate

@@ -7,7 +7,15 @@ import { CompanyRole } from './permissions.ts';
 import { hashPassword } from './supabaseAuth.ts';
 import { writeAuditLog } from './audit.ts';
 import { postJournalEntry, postOpeningBalances } from './services/accountingEngine.ts';
-import { createExamBatch, createPrintingContract } from './services/printingRecordsService.ts';
+import {
+  activatePrintingContract,
+  createExamBatch,
+  createPrintingContract,
+  fundContractFromWallet,
+  recordContractAcceptance,
+  requestContractActivation,
+} from './services/printingRecordsService.ts';
+import { recordWalletDeposit } from './services/customerWalletService.ts';
 
 export interface ServerDatabase {
   pg: PGlite;
@@ -256,8 +264,8 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
 
     // Seed isolated data in Company A
     const custA = await tx.query<{ id: number }>(
-      `INSERT INTO customers (company_id, customer_type, name, company_name, email, balance)
-       VALUES ($1, 'school', 'Lusaka Boys Secondary', 'Lusaka Boys Secondary School', 'bursar@lbs.edu.zm', 5400.0000)
+      `INSERT INTO customers (company_id, customer_code, customer_type, name, company_name, email, balance)
+       VALUES ($1, 'CUST-000001', 'school', 'Lusaka Boys Secondary', 'Lusaka Boys Secondary School', 'bursar@lbs.edu.zm', 5400.0000)
        RETURNING id`,
       [compA.companyId]
     );
@@ -297,7 +305,7 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
          purchase_unit, usage_unit, conversion_factor, asset_account_id, cogs_account_id, income_account_id
        ) VALUES
          ($1, 'RM-A4-80G', 'A4 80gsm White Bond Paper', 'raw_material', 'Internal press paper ream', 145.000000, 0.0000, 120.000000, 25.000000, 'Ream', 'Sheet', 500.000000, $2, $3, $4),
-         ($1, 'RM-TONER-K', 'Kyocera TK-1124 Toner Cartridge', 'raw_material', 'Black toner cartridge for press', 320.000000, 0.0000, 40.000000, 8.000000, 'Cartridge', 'Cartridge', 1.000000, $2, $3, $4),
+         ($1, 'RM-TONER-K', 'Kyocera TK-1124 Toner Cartridge', 'raw_material', 'Black toner cartridge for press', 320.000000, 0.0000, 40.000000, 8.000000, 'Cartridge', 'Impression', 10000.000000, $2, $3, $4),
          ($1, 'PP-EXBOOK-A4', 'Custom School Exercise Book', 'printed_product', 'Non-stocked BOM printed item', 6.400000, 14.0000, 0.000000, 0.000000, 'Book', 'Book', 1.000000, $2, $3, $4),
          ($1, 'ST-PEN-BOX', 'Blue Ballpoint Pen Box (12s)', 'stationery', 'Stocked retail stationery', 18.000000, 32.0000, 48.000000, 10.000000, 'Box', 'Box', 1.000000, $2, $3, $4),
          ($1, 'PS-DUPLEX-EXAM', 'Duplex Exam Printing Service', 'printing_service', 'Automated duplex press service', 0.390000, 1.2500, 0.000000, 0.000000, 'Page', 'Page', 1.000000, $2, $3, $4)`,
@@ -377,8 +385,23 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
     // Seed a prepaid printing contract + examination batch for Company A so the
     // Printing Contracts and Examination modules load and round-trip through the
     // backend instead of relying only on bundled demo state.
+    //
+    // The seed exercises the full lifecycle — draft, wallet-funded, accepted,
+    // approved, activated — because activation is only reachable that way (D-1).
     if (seedPaperItemId && seedTonerItemId) {
-      const seedContract = await createPrintingContract(tx, compA.companyId, adminActor, {
+      // The wallet service requires a credit-normal wallet liability account
+      // (default code 2310). Ensure it exists before any wallet movement.
+      await tx.query(
+        `INSERT INTO accounts (company_id, code, name, account_type, detail_type, normal_balance, is_active)
+         SELECT $1, '2310', 'Customer Wallet Funds', 'OtherCurrentLiability',
+                'other_current_liability', 'credit', TRUE
+          WHERE NOT EXISTS (
+            SELECT 1 FROM accounts WHERE company_id = $1 AND code = '2310'
+          )`,
+        [compA.companyId]
+      );
+
+      const draft = await createPrintingContract(tx, compA.companyId, adminActor, {
         schoolCustomerId: custAId,
         title: 'Grade 12 Mock & Final Examination Retainer',
         academicYear: '2026',
@@ -393,8 +416,49 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
           { assessmentNumber: 2, label: 'Mid-Year Mock', scheduledDate: '2026-07-15', agreedAmount: '1000.0000', rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, estimatedSheets: '5000.000000', estimatedImpressions: '10000.000000', paperCost: '450.0000', tonerCost: '120.0000' },
           { assessmentNumber: 3, label: 'Final Examination', scheduledDate: '2026-11-15', agreedAmount: '1000.0000', rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, estimatedSheets: '5000.000000', estimatedImpressions: '10000.000000', paperCost: '450.0000', tonerCost: '120.0000' },
         ],
-        activate: true,
       });
+
+      // 1. Cash into the customer wallet (Dr Bank / Cr Wallet liability).
+      await recordWalletDeposit(tx, compA.companyId, adminActor, {
+        customerId: custAId,
+        amount: '3000.0000',
+        bankAccountId: acA['1010'],
+        txnDate: '2026-01-05',
+        referenceNumber: 'SEED-WLT-DEP-1',
+        memo: 'Retainer deposit — Grade 12 Mock & Final Examination Retainer',
+        idempotencyKey: 'seed-wallet-deposit-contract-a',
+      });
+
+      // 2. Allocate the wallet to the contract (contract remains a draft).
+      await fundContractFromWallet(tx, compA.companyId, adminActor, draft.contractId, {
+        idempotencyKey: 'seed-contract-fund-a',
+        notes: 'Seed retainer funding',
+      });
+
+      // 3. Record customer acceptance.
+      await recordContractAcceptance(tx, compA.companyId, adminActor, draft.contractId, {
+        method: 'drawn',
+        signerName: 'Seeded School Administrator',
+        documentVersion: 'v1',
+        outcome: 'accepted',
+      });
+
+      // 4. Create and approve the activation request.
+      const activationRequest = await requestContractActivation(tx, compA.companyId, adminActor, draft.contractId, {
+        reason: 'Seed contract activation',
+        amount: '3000.0000',
+      });
+
+      await tx.query(
+        `UPDATE approval_requests
+            SET status = 'approved', decided_by = $2, decided_at = NOW(),
+                decision_note = 'Approved during seed'
+          WHERE company_id = $1 AND id = $2 AND status = 'pending'`,
+        [compA.companyId, activationRequest.requestId]
+      );
+
+      // 5. Activate — now reachable because funding, acceptance and approval exist.
+      await activatePrintingContract(tx, compA.companyId, adminActor, draft.contractId);
 
       await createExamBatch(tx, compA.companyId, adminActor, {
         schoolCustomerId: custAId,
@@ -402,7 +466,7 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
         className: 'Grade 12',
         learnersCount: 120,
         pricePerLearner: '30.0000',
-        contractId: seedContract.contractId,
+        contractId: draft.contractId,
         assessmentNumber: 1,
         papers: [
           { subjectName: 'Mathematics', pages: 8, copies: 120, rawPaperItemId: seedPaperItemId, rawTonerItemId: seedTonerItemId, printSide: 'Duplex', bindingType: 'Stapled', sheetsUsed: '480.000000', impressionsUsed: '960.000000', paperCost: '43.2000', tonerCost: '9.6000', productionDate: '2026-03-10', notes: 'Seed batch' },
@@ -477,8 +541,8 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
 
     // Seed isolated data in Company B (strictly invisible to Company A sessions!)
     const custB = await tx.query<{ id: number }>(
-      `INSERT INTO customers (company_id, customer_type, name, company_name, email, balance)
-       VALUES ($1, 'corporate', 'Ndola Mining Supplies', 'Ndola Mining Supplies Ltd', 'ap@ndolamining.zm', 9800.0000)
+      `INSERT INTO customers (company_id, customer_code, customer_type, name, company_name, email, balance)
+       VALUES ($1, 'CUST-000002', 'corporate', 'Ndola Mining Supplies', 'Ndola Mining Supplies Ltd', 'ap@ndolamining.zm', 9800.0000)
        RETURNING id`,
       [compB.companyId]
     );

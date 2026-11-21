@@ -3,6 +3,8 @@ import { buildQuery, requestJson } from './http';
 
 export interface ApiCustomer {
   id: number;
+  customerCode: string;
+  customerStatus: string;
   name: string;
   companyName: string;
   email: string;

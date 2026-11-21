@@ -32,6 +32,10 @@ export const APPROVAL_ACTION_TYPES = [
   'contract_assessment_change',
   'contract_activation',
   'contract_amendment',
+  'customer',
+  'credit_limit_change',
+  'credit_hold_release',
+  'customer_merge',
 ] as const;
 
 export type ApprovalActionType = (typeof APPROVAL_ACTION_TYPES)[number];

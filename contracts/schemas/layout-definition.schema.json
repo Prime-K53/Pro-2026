@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Document Layout Definition",
+  "description": "A renderer-agnostic blueprint for document structure and styling.",
+  "type": "object",
+  "required": ["metadata", "fixedSections", "flowSections"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["id", "title", "documentType", "pageSize", "orientation", "margins", "unit"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "documentType": { "type": "string" },
+        "pageSize": {
+          "oneOf": [
+            { "enum": ["A4", "Letter"] },
+            {
+              "type": "object",
+              "required": ["width", "height", "unit"],
+              "properties": {
+                "width": { "type": "number" },
+                "height": { "type": "number" },
+                "unit": { "enum": ["mm", "pt", "px"] }
+              }
+            }
+          ]
+        },
+        "orientation": { "enum": ["portrait", "landscape"] },
+        "unit": { "enum": ["mm", "pt", "px"] },
+        "margins": {
+          "type": "object",
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" },
+            "left": { "type": "number" }
+          }
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "watermark": { "type": "string" },
+            "showDigitalSignaturePlaceholder": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "fixedSections": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/section" }
+    },
+    "flowSections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "elements"],
+        "properties": {
+          "id": { "type": "string" },
+          "elements": { "type": "array", "items": { "$ref": "#/definitions/node" } },
+          "allowPageBreakInside": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "section": {
+      "type": "object",
+      "required": ["id", "role", "repeat", "content"],
+      "properties": {
+        "id": { "type": "string" },
+        "role": { "enum": ["header", "footer", "content", "watermark"] },
+        "repeat": { "enum": ["every-page", "first-page", "last-page", "none"] },
+        "content": { "$ref": "#/definitions/node" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["container", "text", "image", "line", "table", "spacer"] },
+        "id": { "type": "string" },
+        "style": { "type": "object" },
+        "flex": { "type": "number" },
+        "width": {
+          "oneOf": [
+            { "type": "number" },
+            { "enum": ["auto", "100%"] }
+          ]
+        },
+        "height": { "type": "number" },
+        "condition": {
+          "type": "object",
+          "required": ["field", "operator"],
+          "properties": {
+            "field": { "type": "string" },
+            "operator": { "enum": ["eq", "neq", "gt", "lt", "exists"] },
+            "value": {}
+          }
+        },
+        "layout": { "enum": ["vertical", "horizontal", "stack"] },
+        "children": { "type": "array", "items": { "$ref": "#/definitions/node" } },
+        "content": { "type": "string" },
+        "multiline": { "type": "boolean" },
+        "orientation": { "enum": ["horizontal", "vertical"] },
+        "thickness": { "type": "number" },
+        "color": { "type": "string" },
+        "url": { "type": "string" },
+        "alt": { "type": "string" },
+        "fit": { "enum": ["contain", "cover", "fill"] },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "header", "width"],
+            "properties": {
+              "id": { "type": "string" },
+              "header": { "type": "string" },
+              "width": {
+                "oneOf": [
+                  { "type": "number" },
+                  { "enum": ["auto"] }
+                ]
+              },
+              "align": { "enum": ["left", "center", "right"] }
+            }
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["cells"],
+            "properties": {
+              "cells": { "type": "object" }
+            }
+          }
+        },
+        "showHeaders": { "type": "boolean" }
+      }
+    }
+  }
+}

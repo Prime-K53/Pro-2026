@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServerDatabase } from '../../src/server/db.ts';
 import { AccountingError, ActorContext } from '../../src/server/services/accountingEngine.ts';
-import { activatePrintingContract, createPrintingContract } from '../../src/server/services/printingRecordsService.ts';
+import {
+  activatePrintingContract,
+  createPrintingContract,
+  fundContractFromWallet,
+} from '../../src/server/services/printingRecordsService.ts';
 import { createInvoiceOrSalesReceipt } from '../../src/server/services/salesService.ts';
 import {
   allocateWalletFunds,
@@ -100,6 +104,21 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
     assert.equal(objects.timezone, 'Africa/Blantyre');
 
     section('Deposit 1000');
+    // The demo seed now funds a contract from this customer's wallet, so assert
+    // deltas against the pre-existing state rather than absolute counts.
+    const baseline = await db.withCompanyDb(companyId, async tx => {
+      const stmt = await tx.query<{ cnt: number }>(
+        `SELECT COUNT(*)::int AS cnt FROM customer_wallet_transactions
+          WHERE company_id = $1 AND customer_id = $2`,
+        [companyId, customerId]
+      );
+      const bank = await tx.query<{ cnt: number }>(
+        `SELECT COUNT(*)::int AS cnt FROM bank_transactions WHERE company_id = $1 AND category = 'Customer Wallet'`,
+        [companyId]
+      );
+      return { walletTxns: Number(stmt.rows[0].cnt), bankRows: Number(bank.rows[0].cnt) };
+    });
+
     const deposit = await db.withCompanyDb(companyId, tx =>
       recordWalletDeposit(tx, companyId, actor, {
         customerId,
@@ -116,7 +135,7 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
 
     const afterDeposit = await db.withCompanyDb(companyId, tx => getWalletStatement(tx, companyId, walletId));
     assert.equal(afterDeposit.closingBalance, 1000);
-    assert.equal(afterDeposit.transactions.length, 1);
+    assert.equal(afterDeposit.transactions.length, baseline.walletTxns + 1);
 
     const bankCount1 = await db.withCompanyDb(companyId, async tx => {
       const r = await tx.query<{ cnt: number }>(
@@ -125,7 +144,7 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
       );
       return Number(r.rows[0].cnt);
     });
-    assert.equal(bankCount1, 1, 'one bank Deposit row for the wallet deposit');
+    assert.equal(bankCount1, baseline.bankRows + 1, 'one additional bank Deposit row for the wallet deposit');
 
     section('Idempotent deposit replay');
     const depositReplay = await db.withCompanyDb(companyId, tx =>
@@ -145,7 +164,7 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
       );
       return Number(r.rows[0].cnt);
     });
-    assert.equal(bankCount2, 1, 'replay does not create a second bank row');
+    assert.equal(bankCount2, baseline.bankRows + 1, 'replay does not create a second bank row');
 
     section('Create draft contract, activate, and allocate 200');
     const contract = await db.withCompanyDb(companyId, tx =>
@@ -168,18 +187,25 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
     assert.equal(contract.status, 'draft');
     const contractId = Number(contract.contractId);
 
+    // Wallet-funded activation (D-1): fund before activating.
+    await db.withCompanyDb(companyId, tx =>
+      fundContractFromWallet(tx, companyId, actor, contractId, {
+        idempotencyKey: 'wallet-test-fund-1',
+      })
+    );
+
     await db.withCompanyDb(companyId, async tx => {
       await tx.query(
         `INSERT INTO contract_acceptances (
            company_id, contract_id, method, signer_name, document_version, outcome, created_by
-         ) VALUES ($1, $2, 'drawn', 'Test Signer', 'v1', 'accepted', $3)`,
+        ) VALUES ($1, $2, 'drawn', 'Test Signer', 'v1', 'accepted', $3)`,
         [companyId, contractId, actor.userId]
       );
       await tx.query(
         `INSERT INTO approval_requests (
            company_id, action_type, entity_type, entity_id, amount, requested_by,
            status, decided_by, decided_at, payload_json, business_date, payload_hash
-         ) VALUES ($1, 'contract_activation', 'printing_contract', $2, 500, $3, 'approved', $3, NOW(), '{}'::jsonb, CURRENT_DATE, '0000000000000000000000000000000000000000000000000000000000000000')`,
+        ) VALUES ($1, 'contract_activation', 'printing_contract', $2, 500, $3, 'approved', $3, NOW(), '{}'::jsonb, CURRENT_DATE, '0000000000000000000000000000000000000000000000000000000000000000')`,
         [companyId, contractId, actor.userId]
       );
     });
@@ -189,6 +215,8 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
     );
     assert.equal(activated.status, 'active');
 
+    // The 500 retainer left the wallet at funding time; this 200 allocation is
+    // an additional movement on top.
     const allocation = await db.withCompanyDb(companyId, tx =>
       allocateWalletFunds(tx, companyId, actor, {
         customerId,
@@ -260,7 +288,7 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
       );
       return Number(r.rows[0].cnt);
     });
-    assert.equal(bankCount3, 1, 'wallet invoice payment creates no bank row');
+    assert.equal(bankCount3, baseline.bankRows + 1, 'wallet invoice payment creates no bank row');
 
     section('Refund 100 and idempotency');
     const refund = await db.withCompanyDb(companyId, tx =>
@@ -296,7 +324,7 @@ test('Customer wallet subledger: migration, deposit, allocation, invoice payment
       );
       return Number(r.rows[0].cnt);
     });
-    assert.equal(bankCount4, 2, 'deposit + refund bank rows only');
+    assert.equal(bankCount4, baseline.bankRows + 2, 'deposit + refund bank rows only');
 
     section('Insufficient funds');
     await assert.rejects(

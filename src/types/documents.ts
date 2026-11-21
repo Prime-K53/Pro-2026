@@ -100,6 +100,7 @@ export interface GenerateWorkflowInvoicePayload {
   postgresContractId?: number | null;
   postgresMilestoneNumber?: number | null;
   postgresExamBatchId?: number | null;
+  postgresExamPaperIds?: number[] | null;
   postgresPrintingJobId?: number | null;
 }
 
@@ -571,6 +572,7 @@ export function mapExamBatchToPreviewModel(params: {
   const subtotal = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   const totalCost = Math.round(papers.reduce((s, p) => s + (p.materialCost || 0), 0) * 100) / 100;
   const allInvoiced = papers.every(p => p.status === 'invoiced');
+  const allDelivered = papers.every(p => p.status === 'delivered' || p.status === 'invoiced');
   const linkedInvPaper = papers.find(p => p.invoiceId || p.backendInvoiceId || p.linkedInvoiceNumber);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -645,9 +647,9 @@ export function mapExamBatchToPreviewModel(params: {
           invoiceNumber: linkedInvPaper.linkedInvoiceNumber,
         }
       : undefined,
-    canGenerateInvoice: uninvoicedPapers.length > 0,
+    canGenerateInvoice: allDelivered && uninvoicedPapers.length > 0,
     generateInvoiceInput:
-      uninvoicedPapers.length > 0
+      allDelivered && uninvoicedPapers.length > 0
         ? {
             sourceKind: 'exam_batch',
             sourceRef: lead?.jobNumber || 'exam-batch',
@@ -661,11 +663,20 @@ export function mapExamBatchToPreviewModel(params: {
             terms: customer?.terms || 'Net 30',
             taxRate: 0,
             notes: `Consolidated examination invoice for ${schoolName} — ${lead?.assessmentName || ''} (${uninvoicedPapers.length} subject papers).`,
+            idempotencyKey: `exam-invoice-${uninvoicedPapers
+              .map(p => p.backendId)
+              .filter((id): id is number => typeof id === 'number')
+              .sort((a, b) => a - b)
+              .join('-')}`,
+            postgresExamPaperIds: uninvoicedPapers
+              .map(p => p.backendId)
+              .filter((id): id is number => typeof id === 'number'),
             lines: lines.map(l => ({
               description: l.description,
               quantity: l.quantity,
               rate: l.rate,
-              unitCost: l.unitCost ?? 0,
+              // WIP is relieved server-side from the linked production jobs.
+              unitCost: 0,
               taxable: false,
             })),
           }

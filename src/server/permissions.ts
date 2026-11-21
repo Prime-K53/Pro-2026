@@ -34,6 +34,19 @@ export type Permission =
   | 'reports:schedule'
   | 'customers:read'
   | 'customers:write'
+  | 'customers:approve'
+  | 'customers:change_credit_limit'
+  | 'customers:place_credit_hold'
+  | 'customers:release_credit_hold'
+  | 'customers:merge'
+  | 'payments:allocate'
+  | 'payments:reverse'
+  | 'payments:void'
+  | 'credit_memos:approve'
+  | 'statements:send'
+  | 'collections:manage'
+  | 'fx:revalue'
+  | 'reports:view_reconciliation'
   | 'invoices:read'
   | 'invoices:write'
   | 'estimates:read'
@@ -60,6 +73,18 @@ export type Permission =
   | 'printing:read'
   | 'printing:write'
   | 'printing:contracts:manage'
+  | 'exams:view'
+  | 'exams:view_confidential'
+  | 'exams:create'
+  | 'exams:edit'
+  | 'exams:approve'
+  | 'exams:produce'
+  | 'exams:qc'
+  | 'exams:dispatch'
+  | 'exams:deliver'
+  | 'exams:invoice'
+  | 'exams:cancel'
+  | 'exams:manage_permissions'
   | 'wallet:read'
   | 'wallet:transactions:read'
   | 'wallet:deposit'
@@ -115,6 +140,19 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'reports:schedule',
       'customers:read',
       'customers:write',
+      'customers:approve',
+      'customers:change_credit_limit',
+      'customers:place_credit_hold',
+      'customers:release_credit_hold',
+      'customers:merge',
+      'payments:allocate',
+      'payments:reverse',
+      'payments:void',
+      'credit_memos:approve',
+      'statements:send',
+      'collections:manage',
+      'fx:revalue',
+      'reports:view_reconciliation',
       'invoices:read',
       'invoices:write',
       'estimates:read',
@@ -141,6 +179,18 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'printing:read',
       'printing:write',
       'printing:contracts:manage',
+      'exams:view',
+      'exams:view_confidential',
+      'exams:create',
+      'exams:edit',
+      'exams:approve',
+      'exams:produce',
+      'exams:qc',
+      'exams:dispatch',
+      'exams:deliver',
+      'exams:invoice',
+      'exams:cancel',
+      'exams:manage_permissions',
       'wallet:read',
       'wallet:transactions:read',
       'wallet:deposit',
@@ -179,6 +229,18 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'approvals:read',
       'customers:read',
       'customers:write',
+      'customers:approve',
+      'customers:change_credit_limit',
+      'customers:place_credit_hold',
+      'customers:release_credit_hold',
+      'payments:allocate',
+      'payments:reverse',
+      'payments:void',
+      'credit_memos:approve',
+      'statements:send',
+      'collections:manage',
+      'fx:revalue',
+      'reports:view_reconciliation',
       'invoices:read',
       'invoices:write',
       'estimates:read',
@@ -199,6 +261,10 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:damage',
       'printing:read',
       'printing:write',
+      'exams:view',
+      'exams:create',
+      'exams:edit',
+      'exams:invoice',
       'wallet:read',
       'wallet:transactions:read',
       'employees:read', // Redacted directory only (no payRate, SSN, bank accounts)
@@ -228,6 +294,18 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'approvals:decide',
       'reports:schedule',
       'customers:read',
+      'customers:approve',
+      'customers:change_credit_limit',
+      'customers:place_credit_hold',
+      'customers:release_credit_hold',
+      'payments:allocate',
+      'payments:reverse',
+      'payments:void',
+      'credit_memos:approve',
+      'statements:send',
+      'collections:manage',
+      'fx:revalue',
+      'reports:view_reconciliation',
       'invoices:read',
       'estimates:read', // Redacted: unit_cost, total_cost, estimated_profit omitted
       'vendors:read',
@@ -241,6 +319,10 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:read',
       'printing:read',
       'printing:contracts:manage',
+      'exams:view',
+      'exams:view_confidential',
+      'exams:invoice',
+      'exams:cancel',
       'wallet:read',
       'wallet:transactions:read',
       'wallet:deposit',
@@ -281,6 +363,15 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'inventory:deactivate',
       'printing:read',
       'printing:write',
+      'exams:view',
+      'exams:view_confidential',
+      'exams:create',
+      'exams:edit',
+      'exams:approve',
+      'exams:produce',
+      'exams:qc',
+      'exams:dispatch',
+      'exams:deliver',
       'wallet:read',
       'wallet:transactions:read',
       'reports:read',
@@ -310,6 +401,7 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'tax:read',
       'inventory:read',
       'printing:read',
+      'exams:view',
       'wallet:read',
       'wallet:transactions:read',
       'employees:read', // Redacted directory only

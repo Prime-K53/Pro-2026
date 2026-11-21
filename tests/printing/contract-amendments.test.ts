@@ -7,6 +7,7 @@ import {
   addContractAssessment,
   approveContractAmendment,
   createPrintingContract,
+  fundContractFromWallet,
   recordContractAcceptance,
   renewPrintingContract,
   requestAssessmentChangeApproval,
@@ -108,6 +109,14 @@ test('Printing contract amendments: draft/active, approval, acceptance, assessme
       })
     );
     const contractId = Number(contract.contractId);
+
+    // Wallet-funded activation (D-1): the contract must be funded before it can
+    // be activated.
+    await db.withCompanyDb(companyId, tx =>
+      fundContractFromWallet(tx, companyId, admin, contractId, {
+        idempotencyKey: 'amend-fund-1',
+      })
+    );
 
     await db.withCompanyDb(companyId, async tx => {
       await tx.query(
@@ -228,7 +237,7 @@ test('Printing contract amendments: draft/active, approval, acceptance, assessme
 
     section('Renewal creates a new draft with predecessor');
     const renewed = await db.withCompanyDb(companyId, tx =>
-      renewPrintingContract(tx, companyId, admin, contractId)
+      renewPrintingContract(tx, companyId, admin, contractId, { depositAmount: '500' })
     );
     assert.equal(renewed.status, 'draft');
     const renewedId = Number(renewed.contractId);

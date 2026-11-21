@@ -138,7 +138,21 @@ export interface QuickPrintJob {
   notes?: string;
 }
 
-export type ExamPaperStatus = 'queued' | 'printing' | 'completed' | 'invoiced';
+export type ExamPaperStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'queued'
+  | 'reserved'
+  | 'printing'
+  | 'qc_hold'
+  | 'qc_passed'
+  | 'completed'
+  | 'packed'
+  | 'dispatched'
+  | 'delivered'
+  | 'invoiced'
+  | 'cancelled'
+  | 'reprinted';
 
 export interface ExamPaper {
   id: string;
@@ -155,7 +169,9 @@ export interface ExamPaper {
   paperSize: 'A4' | 'A3' | 'B5' | 'Letter';
   printSide: 'Single-Sided' | 'Duplex';
   bindingType: 'Stapled' | 'Saddle-Stitched' | 'Loose Leaf' | 'Booklet';
+  paperSpecId?: string;
   printingItemId?: string;
+  productionJobId?: number;
   rawPaperItemId?: string;
   rawTonerItemId?: string;
   ratePerPage: number; // Reference rate; consolidated class billing uses learnersCount * pricePerLearner
@@ -165,8 +181,28 @@ export interface ExamPaper {
   paperCost: number;
   tonerCost: number;
   materialCost: number;
+  costStatus?: 'authoritative' | 'estimated' | 'unavailable' | 'legacy_unverified';
+  costWarnings?: string[];
   status: ExamPaperStatus;
   productionDate: string;
+  qcStatus?: string;
+  qcApprovedCopies?: number;
+  goodCopies?: number;
+  spoiledCopies?: number;
+  wasteSheets?: number;
+  startedAt?: string;
+  completedAt?: string;
+  packedAt?: string;
+  dispatchedAt?: string;
+  deliveredAt?: string;
+  cancelledAt?: string;
+  reprintOfPaperId?: number;
+  reprintReason?: string;
+  productionVersion?: number;
+  qcNotes?: string;
+  packageCount?: number;
+  sealReference?: string;
+  deliveryNoteId?: number;
   invoiceId?: string;
   backendInvoiceId?: number;
   linkedInvoiceNumber?: string;
@@ -222,6 +258,17 @@ export interface PrintingContract {
   resumedBy?: number;
   renewalOfContractId?: number;
   customerAcceptanceId?: number;
+  /** Liability account carrying the unearned retainer (G-11). */
+  liabilityAccountId?: number;
+  /** Sum of agreed assessment amounts not yet spent (G-18). */
+  unallocatedAmount?: number;
+  /** Funds already allocated from the customer wallet. */
+  allocatedAmount?: number;
+  /** All assessments complete but retainer cash remains (G-21). */
+  creditBalance?: boolean;
+  updatedAt?: string;
+  /** Whether this contract came from the server or the bundled demo set (G-11). */
+  source?: 'backend' | 'local';
   assessments: ContractAssessmentMilestone[];
   depositInvoiceId?: string;
   depositBackendInvoiceId?: number;
