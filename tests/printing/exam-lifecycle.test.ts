@@ -11,6 +11,7 @@ import {
   getExaminationReconciliation,
   listExamBatches,
   listExamPaperEvents,
+  updateExamPaperDetails,
   updateExamPaperStatus,
 } from '../../src/server/services/printingRecordsService.ts';
 import { hasPermission } from '../../src/server/permissions.ts';
@@ -123,6 +124,20 @@ test('examination lifecycle: spec freeze, QC, packing, dispatch, cancellation, r
     const paperA = Number(created.papers[0].backendId);
     const paperB = Number(created.papers[1].backendId);
 
+    // D3: every paper gets exactly 2 free teacher copies; planned production is
+    // learner quantity + 2 (40 learners -> 42 planned), billable stays at 40.
+    const d3Row = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
+      const r = await tx.query(
+        `SELECT teacher_copies, planned_production_quantity, billable_quantity, copies
+           FROM exam_papers WHERE company_id = $1 AND id = $2`,
+        [ctx.companyId, paperA]
+      );
+      return r.rows[0];
+    });
+    assert.equal(Number(d3Row.teacher_copies), 2, 'D3: exactly two free teacher copies');
+    assert.equal(Number(d3Row.planned_production_quantity), Number(d3Row.copies) + 2);
+    assert.equal(Number(d3Row.billable_quantity), Number(d3Row.copies), 'billable starts at learner quantity');
+
     // Frozen production specification is hash-addressed and idempotent.
     const spec = await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
       approveExamBatchSpecification(tx, ctx.companyId, ctx.actor, batchId, { notes: 'Exam office approved' })
@@ -196,7 +211,9 @@ test('examination lifecycle: spec freeze, QC, packing, dispatch, cancellation, r
 
     const qcRow = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
       const r = await tx.query(
-        `SELECT status, qc_status, good_copies, spoiled_copies FROM exam_papers
+        `SELECT status, qc_status, good_copies, spoiled_copies,
+                accepted_learner_quantity, billable_quantity
+           FROM exam_papers
           WHERE company_id = $1 AND id = $2`,
         [ctx.companyId, paperA]
       );
@@ -206,6 +223,10 @@ test('examination lifecycle: spec freeze, QC, packing, dispatch, cancellation, r
     assert.equal(qcRow.qc_status, 'passed');
     assert.equal(Number(qcRow.good_copies), 38);
     assert.equal(Number(qcRow.spoiled_copies), 2);
+    // D3: after QC, billable learner quantity = good output minus the 2 teacher
+    // copies (38 - 2 = 36); teacher copies are never invoiced.
+    assert.equal(Number(qcRow.accepted_learner_quantity), 36);
+    assert.equal(Number(qcRow.billable_quantity), 36);
 
     const packed = await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
       updateExamPaperStatus(tx, ctx.companyId, ctx.actor, paperA, 'packed', {
@@ -269,6 +290,21 @@ test('examination lifecycle: spec freeze, QC, packing, dispatch, cancellation, r
       })
     );
     assert.equal(reprintReplay.paperId, reprint.paperId, 'idempotent reprint retry must not duplicate');
+
+    // D3: a reprint is a replacement/additional run and must NOT grant another
+    // teacher-copy allowance. teacher_copies=0, planned=billable=reprint copies.
+    const reprintRow = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
+      const r = await tx.query(
+        `SELECT teacher_copies, planned_production_quantity, billable_quantity, copies
+           FROM exam_papers WHERE company_id = $1 AND id = $2`,
+        [ctx.companyId, reprint.paperId]
+      );
+      return r.rows[0];
+    });
+    assert.equal(Number(reprintRow.teacher_copies), 0, 'reprint must not grant a new teacher-copy allowance');
+    assert.equal(Number(reprintRow.planned_production_quantity), 5);
+    assert.equal(Number(reprintRow.billable_quantity), 5);
+    assert.equal(Number(reprintRow.copies), 5);
 
     const original = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
       const r = await tx.query(
@@ -349,6 +385,7 @@ test('examination lifecycle: spec freeze, QC, packing, dispatch, cancellation, r
 test('examination permissions separate content, production, QC, delivery and billing duties', () => {
   assert.equal(hasPermission('Administrator', 'exams:manage_permissions'), true);
   assert.equal(hasPermission('Administrator', 'exams:view_confidential'), true);
+  assert.equal(hasPermission('Administrator', 'exams:edit'), true);
 
   assert.equal(hasPermission('ProductionManager', 'exams:produce'), true);
   assert.equal(hasPermission('ProductionManager', 'exams:qc'), true);
@@ -356,9 +393,11 @@ test('examination permissions separate content, production, QC, delivery and bil
   assert.equal(hasPermission('ProductionManager', 'exams:deliver'), true);
   assert.equal(hasPermission('ProductionManager', 'exams:invoice'), false);
   assert.equal(hasPermission('ProductionManager', 'exams:cancel'), false);
+  assert.equal(hasPermission('ProductionManager', 'exams:edit'), true);
 
   assert.equal(hasPermission('Bookkeeper', 'exams:create'), true);
   assert.equal(hasPermission('Bookkeeper', 'exams:invoice'), true);
+  assert.equal(hasPermission('Bookkeeper', 'exams:edit'), true);
   assert.equal(hasPermission('Bookkeeper', 'exams:view_confidential'), false);
   assert.equal(hasPermission('Bookkeeper', 'exams:qc'), false);
   assert.equal(hasPermission('Bookkeeper', 'exams:cancel'), false);
@@ -370,4 +409,100 @@ test('examination permissions separate content, production, QC, delivery and bil
   assert.equal(hasPermission('Read-Only', 'exams:view'), true);
   assert.equal(hasPermission('Read-Only', 'exams:view_confidential'), false);
   assert.equal(hasPermission('Read-Only', 'exams:create'), false);
+});
+
+test('examination paper editing: allowed before spec freeze, blocked afterwards', async () => {
+  const ctx = await setup();
+  try {
+    const created = await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+      createExamBatch(tx, ctx.companyId, ctx.actor, {
+        schoolCustomerId: ctx.customerId,
+        assessmentName: 'Edit Guard Examination',
+        classes: [
+          {
+            className: 'Form 2',
+            learnersCount: 20,
+            pricePerLearner: '10.0000',
+            papers: [
+              {
+                subjectName: 'English',
+                pages: 4,
+                copies: 20,
+                rawPaperItemId: ctx.paperItemId,
+                rawTonerItemId: ctx.tonerItemId,
+                productionDate: '2026-11-26',
+              },
+            ],
+          },
+        ],
+        idempotencyKey: 'exam-edit-batch-1',
+      })
+    );
+    const paperId = Number(created.papers[0].backendId);
+    const batchId = Number(created.batches[0].batchId);
+
+    // Edit while queued and not frozen -> succeeds; D3 planned/billable updated.
+    const edited = await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+      updateExamPaperDetails(tx, ctx.companyId, ctx.actor, paperId, {
+        subjectName: 'English (Revised)',
+        copies: 30,
+        pages: 8,
+        reason: 'Corrected class list',
+        idempotencyKey: 'exam-edit-1',
+      })
+    );
+    assert.equal(edited.copies, 30);
+    assert.equal(edited.plannedProductionQuantity, 32, 'planned = learner copies + 2 teacher');
+    assert.equal(edited.billableQuantity, 30, 'billable = learner copies');
+    assert.equal(edited.pages, 8);
+    assert.equal(edited.subjectName, 'English (Revised)');
+
+    // The linked production job's ordered quantity is synced to planned production.
+    const job = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
+      const r = await tx.query(
+        `SELECT ordered_qty FROM printing_jobs WHERE company_id = $1 AND id = $2`,
+        [ctx.companyId, edited.productionJobId]
+      );
+      return r.rows[0];
+    });
+    assert.equal(Number(job.ordered_qty), 32, 'production job ordered_qty must match planned production');
+
+    // Idempotent replay of the same edit returns the same result.
+    const replay = await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+      updateExamPaperDetails(tx, ctx.companyId, ctx.actor, paperId, {
+        subjectName: 'English (Revised)',
+        copies: 30,
+        pages: 8,
+        reason: 'Corrected class list',
+        idempotencyKey: 'exam-edit-1',
+      })
+    );
+    assert.equal(replay.copies, 30, 'idempotent edit replay must not re-apply');
+
+    // Freeze the specification; editing is now rejected.
+    await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+      approveExamBatchSpecification(tx, ctx.companyId, ctx.actor, batchId, { notes: 'frozen' })
+    );
+    await expectCode(
+      () =>
+        ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+          updateExamPaperDetails(tx, ctx.companyId, ctx.actor, paperId, { copies: 40 })
+        ),
+      'EXAM_SPEC_FROZEN'
+    );
+
+    // Move to production; editing is now rejected because the paper left 'queued'.
+    await ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+      updateExamPaperStatus(tx, ctx.companyId, ctx.actor, paperId, 'printing')
+    );
+    await expectCode(
+      () =>
+        ctx.db.withCompanyDb(ctx.companyId, (tx: any) =>
+          updateExamPaperDetails(tx, ctx.companyId, ctx.actor, paperId, { copies: 40 })
+        ),
+      'EXAM_PAPER_NOT_EDITABLE'
+    );
+  } finally {
+    await ctx.db.close();
+  }
 });

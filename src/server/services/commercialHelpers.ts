@@ -18,6 +18,7 @@ export interface ControlAccountMap {
   fxGain4900: number;
   cogs5000: number;
   fxLoss6900: number;
+  openingBalanceEquity3900: number;
   baseCurrency: string;
   roundingMode: RoundingMode;
 }
@@ -136,6 +137,17 @@ export async function resolveCommercialContext(
         description: 'Foreign exchange loss & non-operating charges',
       })
     ).id;
+  const openingBalanceEquity3900 =
+    byCode.get('3900') ??
+    (
+      await createAccount(tx, companyId, actor, {
+        code: '3900',
+        name: 'Opening Balance Equity',
+        accountType: 'Equity',
+        detailType: 'equity',
+        description: 'Offset for customer and supplier opening balances (D-2)',
+      })
+    ).id;
 
   return {
     bank1010,
@@ -147,6 +159,7 @@ export async function resolveCommercialContext(
     fxGain4900,
     cogs5000,
     fxLoss6900,
+    openingBalanceEquity3900,
     baseCurrency,
     roundingMode: prefs.roundingMode,
   };
@@ -471,15 +484,23 @@ export async function saveRouteIdempotency(
   );
 }
 
+export interface CustomerCreditExposure {
+  openInvoiceBalance4: bigint;
+  unappliedCreditMemos4: bigint;
+  unappliedReceipts4: bigint;
+  exposure4: bigint;
+}
+
 /**
- * Recomputes customer AR balance deterministically from posted non-voided invoices,
- * unapplied credit memos, and unapplied payment remainders.
+ * Authoritative credit exposure (D-9): open invoice balance minus unapplied
+ * credit memos and unapplied ordinary receipts. Wallet funds are a separate
+ * liability and deliberately excluded (D-4).
  */
-export async function recalculateCustomerBalance(
+export async function getCustomerCreditExposure(
   tx: Transaction,
   companyId: number,
   customerId: number
-): Promise<string> {
+): Promise<CustomerCreditExposure> {
   const openInv = await tx.query<{ total_due: string }>(
     `SELECT COALESCE(SUM(balance_due), 0)::NUMERIC(19,4)::text AS total_due
        FROM invoices
@@ -507,10 +528,28 @@ export async function recalculateCustomerBalance(
     [companyId, customerId]
   );
 
-  const net4 =
-    parseDecimal4(openInv.rows[0].total_due) -
-    parseDecimal4(openCm.rows[0].total_credit) -
-    parseDecimal4(unappliedPmt.rows[0].unapplied);
+  const openInvoiceBalance4 = parseDecimal4(openInv.rows[0].total_due);
+  const unappliedCreditMemos4 = parseDecimal4(openCm.rows[0].total_credit);
+  const unappliedReceipts4 = parseDecimal4(unappliedPmt.rows[0].unapplied);
+
+  return {
+    openInvoiceBalance4,
+    unappliedCreditMemos4,
+    unappliedReceipts4,
+    exposure4: openInvoiceBalance4 - unappliedCreditMemos4 - unappliedReceipts4,
+  };
+}
+
+/**
+ * Recomputes customer AR balance deterministically from posted non-voided invoices,
+ * unapplied credit memos, and unapplied payment remainders.
+ */
+export async function recalculateCustomerBalance(
+  tx: Transaction,
+  companyId: number,
+  customerId: number
+): Promise<string> {
+  const { exposure4: net4 } = await getCustomerCreditExposure(tx, companyId, customerId);
 
   const formatted = formatDecimal4(net4);
   await tx.query(
@@ -520,28 +559,71 @@ export async function recalculateCustomerBalance(
   return formatted;
 }
 
+export interface VendorApExposure {
+  openBillBalance4: bigint;
+  unappliedVendorCredits4: bigint;
+  unappliedBillPayments4: bigint;
+  exposure4: bigint;
+}
+
 /**
- * Recomputes vendor AP balance deterministically from non-voided bills minus unapplied vendor credits.
+ * Authoritative supplier exposure: open bills less unapplied vendor credits and
+ * any cash advanced to the supplier. A negative exposure is a supplier
+ * prepayment/credit position, not a customer-style credit limit.
+ */
+export async function getVendorApExposure(
+  tx: Transaction,
+  companyId: number,
+  vendorId: number
+): Promise<VendorApExposure> {
+  const openBills = await tx.query<{ total_due: string }>(
+    `SELECT COALESCE(SUM(balance_due), 0)::NUMERIC(19,4)::text AS total_due
+       FROM bills
+      WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided'`,
+    [companyId, vendorId]
+  );
+  const credits = await tx.query<{ total_credit: string }>(
+    `SELECT COALESCE(SUM(remaining_credit), 0)::NUMERIC(19,4)::text AS total_credit
+       FROM vendor_credits
+      WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided'`,
+    [companyId, vendorId]
+  );
+  const unappliedPayments = await tx.query<{ unapplied: string }>(
+    `SELECT COALESCE(SUM(bp.amount - COALESCE(alloc.alloc_sum, 0)), 0)::NUMERIC(19,4)::text AS unapplied
+       FROM bill_payments bp
+       LEFT JOIN (
+         SELECT bill_payment_id, SUM(amount) AS alloc_sum
+           FROM bill_payment_allocations
+          WHERE company_id = $1
+          GROUP BY bill_payment_id
+       ) alloc ON alloc.bill_payment_id = bp.id
+      WHERE bp.company_id = $1 AND bp.vendor_id = $2 AND bp.is_voided = FALSE`,
+    [companyId, vendorId]
+  );
+
+  const openBillBalance4 = parseDecimal4(openBills.rows[0].total_due);
+  const unappliedVendorCredits4 = parseDecimal4(credits.rows[0].total_credit);
+  const unappliedBillPayments4 = parseDecimal4(unappliedPayments.rows[0].unapplied);
+
+  return {
+    openBillBalance4,
+    unappliedVendorCredits4,
+    unappliedBillPayments4,
+    exposure4:
+      openBillBalance4 - unappliedVendorCredits4 - unappliedBillPayments4,
+  };
+}
+
+/**
+ * Recomputes vendor AP balance deterministically from open bills, unapplied
+ * vendor credits, and any unapplied supplier payment/prepayment.
  */
 export async function recalculateVendorBalance(
   tx: Transaction,
   companyId: number,
   vendorId: number
 ): Promise<string> {
-  const openBills = await tx.query<{ total_due: string }>(
-    `SELECT COALESCE(SUM(balance_due), 0)::NUMERIC(19,4)::text AS total_due
-       FROM bills
-      WHERE company_id = $1 AND vendor_id = $2
-        AND status <> 'voided'`,
-    [companyId, vendorId]
-  );
-  const openVc = await tx.query<{ total_credit: string }>(
-    `SELECT COALESCE(SUM(remaining_credit), 0)::NUMERIC(19,4)::text AS total_credit
-       FROM vendor_credits
-      WHERE company_id = $1 AND vendor_id = $2`,
-    [companyId, vendorId]
-  );
-  const net4 = parseDecimal4(openBills.rows[0].total_due) - parseDecimal4(openVc.rows[0].total_credit);
+  const { exposure4: net4 } = await getVendorApExposure(tx, companyId, vendorId);
   const formatted = formatDecimal4(net4);
   await tx.query(
     `UPDATE vendors SET balance = $3::NUMERIC(19,4) WHERE company_id = $1 AND id = $2`,

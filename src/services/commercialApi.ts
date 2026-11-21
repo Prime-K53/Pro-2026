@@ -9,10 +9,17 @@ export interface ApiCustomer {
   companyName: string;
   email: string;
   phone: string;
-  address: string;
+  billingAddress: string;
+  shippingAddress: string;
   terms: string;
   creditLimit: number | null;
-  taxExempt: boolean;
+  isTaxExempt: boolean;
+  taxExemptionValid: boolean;
+  taxExemptionExpiry: string | null;
+  taxRegistrationNumber: string;
+  currencyCode: string;
+  openingBalanceInvoiceId: number | null;
+  notes: string;
   balance: number;
   balanceStr: string;
   isActive: boolean;
@@ -55,6 +62,7 @@ export interface ApiInvoice {
 
 export interface ApiVendor {
   id: number;
+  vendorCode: string;
   name: string;
   companyName: string;
   email: string;
@@ -63,9 +71,93 @@ export interface ApiVendor {
   taxId: string;
   is1099Eligible: boolean;
   defaultExpenseAccountId: number | null;
+  paymentTermId: number | null;
   terms: string;
   balance: number;
+  balanceStr?: string;
+  status: 'active' | 'inactive' | 'on_hold' | 'blocked';
+  currencyCode: string;
+  openingBalanceBillId: number | null;
+  notes: string;
+  vendorCategory: string;
+  isPreferred: boolean;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankBranch: string;
   isActive: boolean;
+  createdAt?: string;
+}
+
+export interface ApiVendorApProfile {
+  vendorId: number;
+  vendorCode: string;
+  vendorName: string;
+  email: string;
+  phone: string;
+  address: string;
+  taxId: string;
+  is1099Eligible: boolean;
+  terms: string;
+  status: 'active' | 'inactive' | 'on_hold' | 'blocked';
+  currencyCode: string;
+  vendorCategory: string;
+  isPreferred: boolean;
+  notes: string;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankBranch: string;
+  openingBalanceBillId: number | null;
+  asOfDate: string;
+  exposure: {
+    openBillBalance: number;
+    unappliedVendorCredits: number;
+    unappliedBillPayments: number;
+    netExposure: number;
+  };
+  aging: {
+    current: number;
+    days1To30: number;
+    days31To60: number;
+    days61To90: number;
+    daysOver90: number;
+    total: number;
+    unappliedCredit: number;
+    unappliedPayment: number;
+    bills: Array<{
+      billId: number;
+      billNumber: string;
+      billDate: string;
+      dueDate: string;
+      daysPastDue: number;
+      originalBalance: number;
+      balanceDue: number;
+      appliedUnapplied: number;
+    }>;
+  };
+  counts: {
+    openBills: number;
+    openPurchaseOrders: number;
+    unappliedCredits: number;
+    statements: number;
+  };
+  lastBillDate: string | null;
+  lastPaymentDate: string | null;
+  ytdSpend: number;
+  createdAt: string;
+}
+
+export interface ApiVendorStatementSummary {
+  statementId: number;
+  statementDate: string;
+  periodStart: string;
+  periodEnd: string;
+  currencyCode: string;
+  openingBalance: number;
+  closingBalance: number;
+  emailedAt: string | null;
+  createdAt: string;
 }
 
 export interface ApiBill {
@@ -194,7 +286,15 @@ export const commercialApi = {
     const d = await requestJson<{ customers: ApiCustomer[] }>('/api/customers');
     return d.customers;
   },
-  async createCustomer(payload: Partial<ApiCustomer> & { companyName: string }): Promise<ApiCustomer> {
+  async createCustomer(
+    payload: Partial<ApiCustomer> & {
+      companyName: string;
+      openingBalance?: string | number | null;
+      openingBalanceDate?: string | null;
+      openingBalanceExchangeRate?: string | number | null;
+      customerType?: string;
+    }
+  ): Promise<ApiCustomer> {
     const d = await requestJson<{ customer: ApiCustomer }>('/api/customers', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -213,6 +313,51 @@ export const commercialApi = {
   async getCustomerStatement(id: number, params: { periodStart?: string; periodEnd?: string; saveSnapshot?: boolean } = {}) {
     const d = await requestJson<{ statement: any }>(`/api/customers/${id}/statement${buildQuery(params)}`);
     return d.statement;
+  },
+  async getCustomerCreditProfile(id: number) {
+    const d = await requestJson<{ profile: any }>(`/api/customers/${id}/credit-profile`);
+    return d.profile;
+  },
+  async listUnappliedPayments(id: number) {
+    const d = await requestJson<{ payments: any[] }>(`/api/customers/${id}/unapplied-payments`);
+    return d.payments;
+  },
+  async applyUnappliedPayment(paymentId: number, payload: { invoiceId: number; amount?: string | number | null }) {
+    const d = await requestJson<any>(`/api/payments/${paymentId}/allocate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async listCustomerStatements(id: number, limit = 25) {
+    const d = await requestJson<{ statements: any[] }>(
+      `/api/customers/${id}/statements${buildQuery({ limit })}`
+    );
+    return d.statements;
+  },
+  async sendCustomerStatement(id: number, payload: { periodStart?: string; periodEnd?: string; recipient?: string }) {
+    const d = await requestJson<any>(`/api/customers/${id}/statement/send`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return d;
+  },
+  async previewFxRevaluation(params: { asOfDate?: string; currencyCode?: string } = {}) {
+    const d = await requestJson<{ preview: any }>(`/api/fx-revaluation/preview${buildQuery(params)}`);
+    return d.preview;
+  },
+  async postFxRevaluation(payload: { asOfDate?: string; currencyCode?: string }) {
+    const d = await requestJson<any>('/api/fx-revaluation', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async listFxRevaluationRuns(limit = 20) {
+    const d = await requestJson<{ runs: any[] }>(`/api/fx-revaluation/runs${buildQuery({ limit })}`);
+    return d.runs;
   },
   async listResellerPermits(customerId?: number) {
     const d = await requestJson<{ permits: any[] }>(`/api/reseller-permits${buildQuery({ customerId })}`);
@@ -364,9 +509,61 @@ export const commercialApi = {
     emitAccountingUpdated();
     return d.vendor;
   },
-  async getVendorStatement(id: number, params: { periodStart?: string; periodEnd?: string } = {}) {
+  async updateVendor(id: number, payload: any): Promise<ApiVendor> {
+    const d = await requestJson<{ vendor: ApiVendor }>(`/api/vendors/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.vendor;
+  },
+  async getVendorApProfile(id: number, asOfDate?: string): Promise<ApiVendorApProfile> {
+    const d = await requestJson<{ profile: ApiVendorApProfile }>(
+      `/api/vendors/${id}/ap-profile${buildQuery({ asOfDate })}`
+    );
+    return d.profile;
+  },
+  async addVendorOpeningBalance(
+    id: number,
+    payload: {
+      openingBalance: number | string;
+      openingBalanceDate?: string;
+      exchangeRate?: number | string;
+      terms?: string;
+    }
+  ): Promise<ApiVendorApProfile> {
+    const d = await requestJson<{ profile: ApiVendorApProfile }>(`/api/vendors/${id}/opening-balance`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.profile;
+  },
+  async getVendorStatement(
+    id: number,
+    params: { periodStart?: string; periodEnd?: string; saveSnapshot?: boolean } = {}
+  ) {
     const d = await requestJson<{ statement: any }>(`/api/vendors/${id}/statement${buildQuery(params)}`);
     return d.statement;
+  },
+  async listVendorStatements(id: number): Promise<ApiVendorStatementSummary[]> {
+    const d = await requestJson<{ statements: ApiVendorStatementSummary[] }>(
+      `/api/vendors/${id}/statements`
+    );
+    return d.statements;
+  },
+  async getVendorStatementSnapshot(id: number, statementId: number) {
+    const d = await requestJson<{ statement: any }>(`/api/vendors/${id}/statements/${statementId}`);
+    return d.statement;
+  },
+  async sendVendorStatement(
+    id: number,
+    payload: { periodStart?: string; periodEnd?: string; recipient?: string } = {}
+  ) {
+    return requestJson<any>(`/api/vendors/${id}/statement/send`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
   async listPurchaseOrders(): Promise<ApiPurchaseOrder[]> {
     const d = await requestJson<{ purchaseOrders: ApiPurchaseOrder[] }>('/api/purchase-orders');

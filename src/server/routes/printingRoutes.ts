@@ -61,6 +61,7 @@ import {
   suspendContract,
   topUpContract,
   updateContractAssessment,
+  updateExamPaperDetails,
   updateExamPaperStatus,
 } from '../services/printingRecordsService.ts';
 
@@ -234,8 +235,13 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     try {
       const jobId = Number(req.params.id);
       if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Invalid job id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        recordMaterialConsumptionAndWaste(tx, req.auth!.companyId, toActor(req), jobId, req.body || {})
+        recordMaterialConsumptionAndWaste(tx, req.auth!.companyId, toActor(req), jobId, {
+          ...(req.body || {}),
+          idempotencyKey,
+        })
       );
       return res.json(result);
     } catch (err) {
@@ -266,8 +272,13 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     try {
       const jobId = Number(req.params.id);
       if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Invalid job id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        recordProductionOperation(tx, req.auth!.companyId, toActor(req), jobId, req.body || {})
+        recordProductionOperation(tx, req.auth!.companyId, toActor(req), jobId, {
+          ...(req.body || {}),
+          idempotencyKey,
+        })
       );
       return res.status(201).json(result);
     } catch (err) {
@@ -279,8 +290,13 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     try {
       const jobId = Number(req.params.id);
       if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Invalid job id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        recordFinishingOperation(tx, req.auth!.companyId, toActor(req), jobId, req.body || {})
+        recordFinishingOperation(tx, req.auth!.companyId, toActor(req), jobId, {
+          ...(req.body || {}),
+          idempotencyKey,
+        })
       );
       return res.status(201).json(result);
     } catch (err) {
@@ -944,7 +960,25 @@ export function createPrintingRouter(db: ServerDatabase): Router {
       const papers = await db.withCompanyDb(req.auth!.companyId, tx =>
         listExamPapers(tx, req.auth!.companyId)
       );
-      return res.json({ companyId: req.auth!.companyId, papers });
+      // P0-02 (data-leak slice): exam cost fields are confidential. Only
+      // holders of exams:view_confidential may see paper/toner/material cost,
+      // cost status/warnings and physical consumption. Everyone else with
+      // exams:view gets the operational fields with costs redacted.
+      const canViewCosts = hasPermission(req.auth!.role, 'exams:view_confidential');
+      const redacted = canViewCosts
+        ? papers
+        : papers.map(p => ({
+            ...p,
+            paperCost: undefined,
+            tonerCost: undefined,
+            materialCost: undefined,
+            costStatus: undefined,
+            costWarnings: undefined,
+            sheetsUsed: undefined,
+            impressionsUsed: undefined,
+            wasteSheets: undefined,
+          }));
+      return res.json({ companyId: req.auth!.companyId, papers: redacted, costsRedacted: !canViewCosts });
     } catch (err) {
       return handlePrintingError(res, err);
     }
@@ -960,7 +994,17 @@ export function createPrintingRouter(db: ServerDatabase): Router {
       const batches = await db.withCompanyDb(req.auth!.companyId, tx =>
         listExamBatches(tx, req.auth!.companyId, { status, schoolCustomerId })
       );
-      return res.json({ companyId: req.auth!.companyId, batches });
+      // P0-02 (data-leak slice): redact aggregate cost totals unless the caller
+      // holds exams:view_confidential.
+      const canViewCosts = hasPermission(req.auth!.role, 'exams:view_confidential');
+      const redacted = canViewCosts
+        ? batches
+        : batches.map(b => ({
+            ...b,
+            totalPaperCost: undefined,
+            totalTonerCost: undefined,
+          }));
+      return res.json({ companyId: req.auth!.companyId, batches: redacted, costsRedacted: !canViewCosts });
     } catch (err) {
       return handlePrintingError(res, err);
     }
@@ -1018,6 +1062,35 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         })
       );
       return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // Edit an examination paper's details before production begins (spec not frozen,
+  // paper still queued). Teacher copies remain fixed (D3); the linked production
+  // job's ordered quantity is kept in sync.
+  router.patch('/printing/exam-papers/:id', requirePermission('exams:edit'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam paper id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const paper = await db.withCompanyDb(req.auth!.companyId, tx =>
+        updateExamPaperDetails(tx, req.auth!.companyId, toActor(req), id, {
+          subjectName: req.body?.subjectName ?? undefined,
+          pages: req.body?.pages != null ? Number(req.body.pages) : undefined,
+          copies: req.body?.copies != null ? Number(req.body.copies) : undefined,
+          printSide: req.body?.printSide ?? undefined,
+          bindingType: req.body?.bindingType ?? undefined,
+          paperSize: req.body?.paperSize ?? undefined,
+          productionDate: req.body?.productionDate ?? undefined,
+          notes: req.body?.notes ?? undefined,
+          reason: req.body?.reason ?? null,
+          idempotencyKey,
+        })
+      );
+      return res.json(paper);
     } catch (err) {
       return handlePrintingError(res, err);
     }

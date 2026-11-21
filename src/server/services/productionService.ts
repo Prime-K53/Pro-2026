@@ -1211,11 +1211,23 @@ export async function recordMaterialConsumptionAndWaste(
       wasteUsageQty?: string | number;
       wasteReason?: string | null;
     }>;
+    idempotencyKey?: string | null;
   }
 ) {
   if (!Array.isArray(input.lines) || input.lines.length === 0) {
     throw new AccountingError(400, 'At least one consumption line is required');
   }
+
+  // P1-09: Consumption double-posts WIP if replayed without an idempotency key.
+  const idem = await checkRouteIdempotency<{ job: any; variances: any[] }>(
+    tx,
+    companyId,
+    `job_consume_${jobId}`,
+    input.idempotencyKey,
+    { jobId, ...input }
+  );
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+
   const jRes = await tx.query<{ id: number; job_number: string; status: string }>(
     `SELECT id, job_number, status FROM printing_jobs WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, jobId]
@@ -1322,7 +1334,18 @@ export async function recordMaterialConsumptionAndWaste(
     newValues: { addedWasteCost: formatDecimal4(addedWasteCost4), variances },
   });
 
-  return { job: await getPrintingJobById(tx, companyId, jobId), variances };
+  const out = { job: await getPrintingJobById(tx, companyId, jobId), variances };
+  await saveRouteIdempotency(
+    tx,
+    companyId,
+    `job_consume_${jobId}`,
+    input.idempotencyKey,
+    idem.payloadHash,
+    200,
+    out,
+    actor.userId
+  );
+  return { ...out, idempotentReplay: false };
 }
 
 export async function returnUnusedMaterials(
@@ -1521,8 +1544,20 @@ export async function recordProductionOperation(
     machineCost?: string | number;
     operationDate?: string;
     notes?: string | null;
+    idempotencyKey?: string | null;
   }
 ) {
+  // P1-09: Production operations post WIP journals and increment produced
+  // quantity; a replay without an idempotency key would double-post WIP.
+  const idem = await checkRouteIdempotency<{ operationId: number; journalTxnId: number | null; job: any }>(
+    tx,
+    companyId,
+    `job_operation_${jobId}`,
+    input.idempotencyKey,
+    { jobId, ...input }
+  );
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+
   const jRes = await tx.query<{
     id: number;
     job_number: string;
@@ -1701,11 +1736,22 @@ export async function recordProductionOperation(
     },
   });
 
-  return {
+  const out = {
     operationId: Number(opIns.rows[0].id),
     journalTxnId,
     job: await getPrintingJobById(tx, companyId, jobId),
   };
+  await saveRouteIdempotency(
+    tx,
+    companyId,
+    `job_operation_${jobId}`,
+    input.idempotencyKey,
+    idem.payloadHash,
+    200,
+    out,
+    actor.userId
+  );
+  return { ...out, idempotentReplay: false };
 }
 
 export async function recordFinishingOperation(
@@ -1724,8 +1770,20 @@ export async function recordFinishingOperation(
     machineCost?: string | number;
     operationDate?: string;
     notes?: string | null;
+    idempotencyKey?: string | null;
   }
 ) {
+  // P1-09: Finishing consumes stock and posts WIP; a replay without an
+  // idempotency key would double-deduct consumables and double-post WIP.
+  const idem = await checkRouteIdempotency<{ finishingOperationId: number; journalTxnId: number | null; job: any }>(
+    tx,
+    companyId,
+    `job_finishing_${jobId}`,
+    input.idempotencyKey,
+    { jobId, ...input }
+  );
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+
   const jRes = await tx.query<{ id: number; job_number: string; status: string }>(
     `SELECT id, job_number, status FROM printing_jobs WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, jobId]
@@ -1894,11 +1952,22 @@ export async function recordFinishingOperation(
     newValues: { printingJobId: jobId, finishingType: input.finishingType, totalAddedCost: formatDecimal4(totalAdded4) },
   });
 
-  return {
+  const out = {
     finishingOperationId: Number(finIns.rows[0].id),
     journalTxnId,
     job: await getPrintingJobById(tx, companyId, jobId),
   };
+  await saveRouteIdempotency(
+    tx,
+    companyId,
+    `job_finishing_${jobId}`,
+    input.idempotencyKey,
+    idem.payloadHash,
+    200,
+    out,
+    actor.userId
+  );
+  return { ...out, idempotentReplay: false };
 }
 
 // ============================================================================

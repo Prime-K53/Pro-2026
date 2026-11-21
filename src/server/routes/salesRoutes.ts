@@ -13,6 +13,7 @@ import {
 } from '../services/approvalService.ts';
 import {
   applyCreditMemoToInvoice,
+  applyUnappliedPaymentToInvoice,
   approveEstimate,
   convertEstimateToInvoice,
   createCreditMemo,
@@ -24,8 +25,10 @@ import {
   dispatchInvoiceReminder,
   generateCustomerStatement,
   getArAgingReport,
+  getCustomerCreditProfile,
   listCommunicationsAndReminders,
   listCreditMemos,
+  listCustomerStatements,
   listCustomers,
   listEstimates,
   listInvoices,
@@ -33,14 +36,21 @@ import {
   listPaymentTerms,
   listRecurringInvoices,
   listResellerPermits,
+  listUnappliedPayments,
   recordCustomerPayment,
   rejectEstimate,
   runDueRecurringInvoices,
+  sendCustomerStatement,
   updateCustomer,
   voidCreditMemo,
   voidCustomerPayment,
   voidInvoice,
 } from '../services/salesService.ts';
+import {
+  listFxRevaluationRuns,
+  postFxRevaluation,
+  previewFxRevaluation,
+} from '../services/fxRevaluationService.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -88,9 +98,42 @@ export function createSalesRouter(db: ServerDatabase): Router {
 
   router.post('/customers', requirePermission('customers:write'), async (req: Request, res: Response) => {
     try {
-      const customer = await db.withCompanyDb(req.auth!.companyId, tx =>
-        createCustomer(tx, req.auth!.companyId, toActor(req), req.body || {})
+      const body = req.body || {};
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || body.idempotencyKey || null;
+      const gate = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateApprovalGate(tx, req.auth!.companyId, toActor(req), {
+          actionType: 'customer',
+          entityType: 'customer',
+          amount: 0n,
+          businessDate: new Date().toISOString().slice(0, 10),
+          payload: body,
+          approvalRequestId: body.approvalRequestId ? Number(body.approvalRequestId) : null,
+          idempotencyKey,
+        })
       );
+      if (gate.requiresApproval) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: gate.request,
+          message: 'Customer master creation requires approval before it is committed.',
+        });
+      }
+
+      const customer = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const created = await createCustomer(tx, req.auth!.companyId, toActor(req), body);
+        if (gate.request) {
+          await consumeApprovalRequest(
+            tx,
+            req.auth!.companyId,
+            toActor(req),
+            gate.request.id,
+            'customer',
+            created.id
+          );
+        }
+        return created;
+      });
       return res.status(201).json({ customer });
     } catch (err) {
       return handleSalesError(res, err);
@@ -101,10 +144,105 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid customer id' });
-      const customer = await db.withCompanyDb(req.auth!.companyId, tx =>
-        updateCustomer(tx, req.auth!.companyId, toActor(req), id, req.body || {})
+      const body = req.body || {};
+      const actionType =
+        body.creditLimit !== undefined
+          ? 'credit_limit_change'
+          : body.customerStatus === 'active'
+          ? 'credit_hold_release'
+          : 'customer';
+      const gate = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateApprovalGate(tx, req.auth!.companyId, toActor(req), {
+          actionType,
+          entityType: 'customer',
+          amount: body.creditLimit !== undefined ? parseDecimal4(body.creditLimit ?? 0) : 0n,
+          businessDate: new Date().toISOString().slice(0, 10),
+          payload: body,
+          approvalRequestId: body.approvalRequestId ? Number(body.approvalRequestId) : null,
+          idempotencyKey: body.idempotencyKey || null,
+        })
       );
+      if (gate.requiresApproval) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: gate.request,
+          message: 'Customer master change requires approval before it is committed.',
+        });
+      }
+
+      const customer = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const updated = await updateCustomer(tx, req.auth!.companyId, toActor(req), id, body);
+        if (gate.request) {
+          await consumeApprovalRequest(
+            tx,
+            req.auth!.companyId,
+            toActor(req),
+            gate.request.id,
+            'customer',
+            id
+          );
+        }
+        return updated;
+      });
       return res.json({ customer });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.get('/customers/:id/credit-profile', requirePermission('customers:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid customer id' });
+      const profile = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getCustomerCreditProfile(tx, req.auth!.companyId, id)
+      );
+      return res.json({ profile });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.get('/customers/:id/unapplied-payments', requirePermission('invoices:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid customer id' });
+      const payments = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listUnappliedPayments(tx, req.auth!.companyId, id)
+      );
+      return res.json({ payments });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.get('/customers/:id/statements', requirePermission('customers:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid customer id' });
+      const statements = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listCustomerStatements(tx, req.auth!.companyId, id, Number(req.query.limit) || 25)
+      );
+      return res.json({ statements });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.post('/customers/:id/statement/send', requirePermission('statements:send'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid customer id' });
+      const body = req.body || {};
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        sendCustomerStatement(tx, req.auth!.companyId, toActor(req), {
+          customerId: id,
+          periodStart: body.periodStart || undefined,
+          periodEnd: body.periodEnd || undefined,
+          recipient: body.recipient || undefined,
+        })
+      );
+      return res.status(202).json(result);
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -371,6 +509,19 @@ export function createSalesRouter(db: ServerDatabase): Router {
     }
   });
 
+  router.post('/payments/:id/allocate', requirePermission('payments:allocate'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid payment id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        applyUnappliedPaymentToInvoice(tx, req.auth!.companyId, toActor(req), id, req.body || {})
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
   router.post('/payments/:id/void', requirePermission('invoices:write'), async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -581,6 +732,47 @@ export function createSalesRouter(db: ServerDatabase): Router {
   });
 
   // AR Aging
+  // FX Revaluation (D-8)
+  router.get('/fx-revaluation/preview', requirePermission('fx:revalue'), async (req: Request, res: Response) => {
+    try {
+      const preview = await db.withCompanyDb(req.auth!.companyId, tx =>
+        previewFxRevaluation(tx, req.auth!.companyId, toActor(req), {
+          asOfDate: req.query.asOfDate ? String(req.query.asOfDate) : null,
+          currencyCode: req.query.currencyCode ? String(req.query.currencyCode) : null,
+        })
+      );
+      return res.json({ preview });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.post('/fx-revaluation', requirePermission('fx:revalue'), async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        postFxRevaluation(tx, req.auth!.companyId, toActor(req), {
+          asOfDate: body.asOfDate || null,
+          currencyCode: body.currencyCode || null,
+        })
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.get('/fx-revaluation/runs', requirePermission('fx:revalue'), async (req: Request, res: Response) => {
+    try {
+      const runs = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listFxRevaluationRuns(tx, req.auth!.companyId, Number(req.query.limit) || 20)
+      );
+      return res.json({ runs });
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
   router.get('/reports/ar-aging', requirePermission('reports:read'), async (req: Request, res: Response) => {
     try {
       const asOfDate = req.query.asOfDate ? String(req.query.asOfDate) : undefined;

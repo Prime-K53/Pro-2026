@@ -17,6 +17,7 @@ import {
   divRoundBigInt,
   formatDecimal6,
   generateNextDocNumber,
+  getVendorApExposure,
   multiplyQty6ByRate4,
   parseDecimal6,
   recalculateVendorBalance,
@@ -33,6 +34,7 @@ import {
 export async function listVendors(tx: Transaction, companyId: number) {
   const res = await tx.query<{
     id: number;
+    vendor_code: string | null;
     name: string;
     company_name: string;
     email: string | null;
@@ -44,12 +46,24 @@ export async function listVendors(tx: Transaction, companyId: number) {
     payment_term_id: number | null;
     terms_label: string;
     balance: string;
+    status: string;
+    currency_code: string;
+    opening_balance_bill_id: number | null;
+    notes: string | null;
+    vendor_category: string;
+    is_preferred: boolean;
+    bank_name: string | null;
+    bank_account_name: string | null;
+    bank_account_number: string | null;
+    bank_branch: string | null;
     is_active: boolean;
     created_at: string;
   }>(
-    `SELECT id, name, company_name, email, phone, address, ein_or_ssn, is_1099_eligible,
-            default_expense_account_id, payment_term_id, terms_label, balance::text,
-            is_active, created_at::text
+    `SELECT id, vendor_code, name, company_name, email, phone, address, ein_or_ssn,
+            is_1099_eligible, default_expense_account_id, payment_term_id, terms_label,
+            balance::text, status, currency_code, opening_balance_bill_id, notes,
+            vendor_category, is_preferred, bank_name, bank_account_name,
+            bank_account_number, bank_branch, is_active, created_at::text
        FROM vendors
       WHERE company_id = $1
       ORDER BY company_name ASC, id ASC`,
@@ -58,6 +72,7 @@ export async function listVendors(tx: Transaction, companyId: number) {
 
   return res.rows.map(r => ({
     id: Number(r.id),
+    vendorCode: r.vendor_code || '',
     name: r.name,
     companyName: r.company_name,
     email: r.email || '',
@@ -65,11 +80,23 @@ export async function listVendors(tx: Transaction, companyId: number) {
     address: r.address || '',
     taxId: r.ein_or_ssn || '',
     is1099Eligible: Boolean(r.is_1099_eligible),
-    defaultExpenseAccountId: r.default_expense_account_id !== null ? Number(r.default_expense_account_id) : null,
+    defaultExpenseAccountId:
+      r.default_expense_account_id !== null ? Number(r.default_expense_account_id) : null,
     paymentTermId: r.payment_term_id !== null ? Number(r.payment_term_id) : null,
     terms: r.terms_label,
     balance: toMoneyNumber(parseDecimal4(r.balance)),
     balanceStr: r.balance,
+    status: r.status || (r.is_active ? 'active' : 'inactive'),
+    currencyCode: r.currency_code || 'ZMW',
+    openingBalanceBillId:
+      r.opening_balance_bill_id !== null ? Number(r.opening_balance_bill_id) : null,
+    notes: r.notes || '',
+    vendorCategory: r.vendor_category || 'goods',
+    isPreferred: Boolean(r.is_preferred),
+    bankName: r.bank_name || '',
+    bankAccountName: r.bank_account_name || '',
+    bankAccountNumber: r.bank_account_number || '',
+    bankBranch: r.bank_branch || '',
     isActive: Boolean(r.is_active),
     createdAt: r.created_at,
   }));
@@ -90,11 +117,68 @@ export async function createVendor(
     defaultExpenseAccountId?: number | null;
     paymentTermId?: number | null;
     terms?: string | null;
+    notes?: string | null;
+    currencyCode?: string | null;
+    openingBalance?: string | number | null;
+    openingBalanceDate?: string | null;
+    openingBalanceExchangeRate?: string | number | null;
+    vendorCategory?: string | null;
+    isPreferred?: boolean;
+    bankName?: string | null;
+    bankAccountName?: string | null;
+    bankAccountNumber?: string | null;
+    bankBranch?: string | null;
   }
 ) {
   const companyName = String(input.companyName || input.name || '').trim();
   if (!companyName) throw new AccountingError(400, 'Vendor companyName is required');
   const name = String(input.name || companyName).trim();
+
+  const vendorCategory = String(input.vendorCategory || 'goods').trim().toLowerCase();
+  if (!['goods', 'services', 'logistics', 'utilities', 'contractor', 'other'].includes(vendorCategory)) {
+    throw new AccountingError(400, `Invalid vendorCategory '${vendorCategory}'`, 'INVALID_VENDOR_CATEGORY');
+  }
+
+  const duplicate = await tx.query<{ id: number; company_name: string }>(
+    `SELECT id, company_name
+       FROM vendors
+      WHERE company_id = $1
+        AND (
+          LOWER(name) = LOWER($2)
+          OR LOWER(company_name) = LOWER($3)
+          OR ($4::VARCHAR IS NOT NULL AND email IS NOT NULL AND LOWER(email) = LOWER($4::VARCHAR))
+          OR ($5::VARCHAR IS NOT NULL AND phone IS NOT NULL AND phone = $5::VARCHAR)
+        )
+      LIMIT 1`,
+    [companyId, name, companyName, input.email?.trim() || null, input.phone?.trim() || null]
+  );
+  if (duplicate.rows.length > 0) {
+    throw new AccountingError(
+      409,
+      `Potential duplicate supplier found: "${duplicate.rows[0].company_name}" (ID: ${duplicate.rows[0].id})`,
+      'DUPLICATE_VENDOR'
+    );
+  }
+
+  const companyCurrencyRes = input.currencyCode
+    ? null
+    : await tx.query<{ base_currency: string }>(
+        `SELECT base_currency FROM companies WHERE id = $1 LIMIT 1`,
+        [companyId]
+      );
+  const currencyCode = String(
+    input.currencyCode || companyCurrencyRes?.rows[0]?.base_currency || 'ZMW'
+  )
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currencyCode)) {
+    throw new AccountingError(400, 'currencyCode must be a 3-letter ISO code', 'INVALID_CURRENCY');
+  }
+
+  const openingBalance4 = parseDecimal4(input.openingBalance ?? 0);
+  if (openingBalance4 < 0n) {
+    throw new AccountingError(400, 'Opening balance cannot be negative', 'INVALID_OPENING_BALANCE');
+  }
 
   let termsLabel = input.terms?.trim() || 'Net 30';
   let termId: number | null = input.paymentTermId ? Number(input.paymentTermId) : null;
@@ -117,12 +201,15 @@ export async function createVendor(
   }
 
   try {
-    const ins = await tx.query<{ id: number }>(
+    const ins = await tx.query<{ id: number; vendor_code: string }>(
       `INSERT INTO vendors (
          company_id, name, company_name, email, phone, address, ein_or_ssn,
-         is_1099_eligible, default_expense_account_id, payment_term_id, terms_label
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING id`,
+         is_1099_eligible, default_expense_account_id, payment_term_id, terms_label,
+         status, currency_code, notes, vendor_category, is_preferred,
+         bank_name, bank_account_name, bank_account_number, bank_branch
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                 'active', $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING id, vendor_code`,
       [
         companyId,
         name,
@@ -135,9 +222,18 @@ export async function createVendor(
         defaultExpId,
         termId,
         termsLabel,
+        currencyCode,
+        input.notes?.trim() || null,
+        vendorCategory,
+        Boolean(input.isPreferred),
+        input.bankName?.trim() || null,
+        input.bankAccountName?.trim() || null,
+        input.bankAccountNumber?.trim() || null,
+        input.bankBranch?.trim() || null,
       ]
     );
     const id = Number(ins.rows[0].id);
+    const vendorCode = ins.rows[0].vendor_code;
 
     await writeAuditLog(tx, {
       companyId,
@@ -146,8 +242,31 @@ export async function createVendor(
       action: 'VENDOR_CREATED',
       tableName: 'vendors',
       recordId: id,
-      newValues: { name, companyName, termsLabel },
+      newValues: {
+        name,
+        companyName,
+        termsLabel,
+        vendorCode,
+        status: 'active',
+        vendorCategory,
+        currencyCode,
+      },
     });
+
+    if (openingBalance4 > 0n) {
+      await postVendorOpeningBalance(tx, companyId, actor, {
+        vendorId: id,
+        vendorCode,
+        vendorName: companyName,
+        openingBalance: openingBalance4,
+        currencyCode,
+        openingDate: input.openingBalanceDate
+          ? assertIsoDate(input.openingBalanceDate, 'openingBalanceDate')
+          : todayIsoDate(),
+        exchangeRate: input.openingBalanceExchangeRate,
+        terms: termsLabel,
+      });
+    }
 
     const all = await listVendors(tx, companyId);
     return all.find(v => v.id === id)!;
@@ -157,6 +276,206 @@ export async function createVendor(
     }
     throw err;
   }
+}
+
+/**
+ * Supplier opening balances are traceable AP documents: an opening bill plus
+ * Dr Opening Balance Equity 3900 / Cr Accounts Payable 2000. The bill's line is
+ * posted to the same equity account so the subledger and GL agree.
+ */
+async function postVendorOpeningBalance(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    vendorId: number;
+    vendorCode: string;
+    vendorName: string;
+    openingBalance: bigint;
+    currencyCode: string;
+    openingDate: string;
+    exchangeRate?: string | number | null;
+    terms: string;
+  }
+): Promise<void> {
+  const ctx = await resolveCommercialContext(tx, companyId, actor);
+  const fx = await resolveExchangeRate6(
+    tx,
+    companyId,
+    input.currencyCode,
+    ctx.baseCurrency,
+    input.openingDate,
+    input.exchangeRate
+  );
+  const base4 = convertForeign4ToBase4(input.openingBalance, fx.rate6, ctx.roundingMode);
+  if (base4 <= 0n) {
+    throw new AccountingError(400, 'Opening balance is too small to post', 'INVALID_OPENING_BALANCE');
+  }
+
+  const netDays = input.terms.toLowerCase().includes('receipt')
+    ? 0
+    : Number(input.terms.match(/\d+/)?.[0] || 30);
+  const dueDate = addDaysToIso(input.openingDate, netDays);
+
+  const baseNumber = `BILL-OPEN-${input.vendorCode}-${input.openingDate.slice(0, 4)}`;
+  let billNumber = baseNumber;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const exists = await tx.query<{ id: number }>(
+      `SELECT id FROM bills WHERE company_id = $1 AND vendor_id = $2 AND bill_number = $3 LIMIT 1`,
+      [companyId, input.vendorId, billNumber]
+    );
+    if (exists.rows.length === 0) break;
+    billNumber = `${baseNumber}-${attempt + 2}`;
+  }
+
+  const ins = await tx.query<{ id: number }>(
+    `INSERT INTO bills (
+       company_id, bill_number, vendor_id, bill_date, due_date, terms_label, status,
+       total, amount_paid, balance_due, currency_code, exchange_rate,
+       foreign_total, foreign_balance_due, memo
+     ) VALUES (
+       $1, $2, $3, $4::DATE, $5::DATE, $6, 'open',
+       $7::NUMERIC(19,4), 0.0000, $7::NUMERIC(19,4),
+       $8, $9::NUMERIC(19,6), $10::NUMERIC(19,4), $10::NUMERIC(19,4), $11
+     ) RETURNING id`,
+    [
+      companyId,
+      billNumber,
+      input.vendorId,
+      input.openingDate,
+      dueDate,
+      input.terms,
+      formatDecimal4(base4),
+      fx.currencyCode,
+      fx.rateStr,
+      formatDecimal4(input.openingBalance),
+      `Opening balance captured at supplier onboarding (${input.vendorCode})`,
+    ]
+  );
+  const billId = Number(ins.rows[0].id);
+
+  await tx.query(
+    `INSERT INTO bill_lines (
+       company_id, bill_id, line_order, account_id, description,
+       quantity, unit_cost, amount, use_tax_rate
+     ) VALUES ($1, $2, 1, $3, 'Opening Balance', 1, $4::NUMERIC(19,6), $4::NUMERIC(19,4), 0)`,
+    [
+      companyId,
+      billId,
+      ctx.openingBalanceEquity3900,
+      formatDecimal4(input.openingBalance),
+    ]
+  );
+
+  const posted = await postJournalEntry(tx, companyId, actor, {
+    txnDate: input.openingDate,
+    description: `Opening AP for ${input.vendorName} (${input.vendorCode})`,
+    reference: billNumber,
+    sourceType: 'opening_balance',
+    sourceId: billId,
+    idempotencyKey: `vendor-opening-balance-${input.vendorId}`,
+    lines: [
+      {
+        accountId: ctx.openingBalanceEquity3900,
+        debit: formatDecimal4(base4),
+        credit: '0.0000',
+        description: `Opening balance equity — ${input.vendorCode}`,
+      },
+      {
+        accountId: ctx.ap2000,
+        debit: '0.0000',
+        credit: formatDecimal4(base4),
+        description: `Opening AP — ${input.vendorName}`,
+        partyType: 'vendor',
+        partyId: input.vendorId,
+      },
+    ],
+  });
+
+  await tx.query(`UPDATE bills SET journal_txn_id = $3 WHERE company_id = $1 AND id = $2`, [
+    companyId,
+    billId,
+    posted.transaction.id,
+  ]);
+  await tx.query(
+    `UPDATE vendors SET opening_balance_bill_id = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, input.vendorId, billId]
+  );
+  await recalculateVendorBalance(tx, companyId, input.vendorId);
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'VENDOR_OPENING_BALANCE_POSTED',
+    tableName: 'bills',
+    recordId: billId,
+    newValues: {
+      vendorId: input.vendorId,
+      billNumber,
+      openingBalance: formatDecimal4(input.openingBalance),
+      baseAmount: formatDecimal4(base4),
+      currencyCode: fx.currencyCode,
+      exchangeRate: fx.rateStr,
+      journalTxnId: posted.transaction.id,
+    },
+  });
+}
+
+export async function addVendorOpeningBalance(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  vendorId: number,
+  input: {
+    openingBalance: string | number;
+    openingBalanceDate?: string;
+    exchangeRate?: string | number | null;
+    terms?: string | null;
+  }
+) {
+  const vRes = await tx.query<{
+    id: number;
+    vendor_code: string;
+    company_name: string;
+    terms_label: string;
+    currency_code: string;
+    opening_balance_bill_id: number | null;
+  }>(
+    `SELECT v.id, v.vendor_code, v.company_name,
+            COALESCE(pt.name, v.terms_label, 'Net 30') AS terms_label,
+            v.currency_code, v.opening_balance_bill_id
+       FROM vendors v
+       LEFT JOIN payment_terms pt
+         ON pt.company_id = v.company_id AND pt.id = v.payment_term_id
+      WHERE v.company_id = $1 AND v.id = $2
+      FOR UPDATE OF v`,
+    [companyId, vendorId]
+  );
+  if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
+  const vendor = vRes.rows[0];
+  if (vendor.opening_balance_bill_id) {
+    throw new AccountingError(409, 'Supplier opening balance has already been posted', 'OPENING_BALANCE_EXISTS');
+  }
+  const openingBalance4 = parseDecimal4(input.openingBalance ?? 0);
+  if (openingBalance4 <= 0n) {
+    throw new AccountingError(400, 'Opening balance must be greater than zero', 'INVALID_OPENING_BALANCE');
+  }
+
+  await postVendorOpeningBalance(tx, companyId, actor, {
+    vendorId,
+    vendorCode: vendor.vendor_code,
+    vendorName: vendor.company_name,
+    openingBalance: openingBalance4,
+    currencyCode: vendor.currency_code,
+    openingDate: input.openingBalanceDate
+      ? assertIsoDate(input.openingBalanceDate, 'openingBalanceDate')
+      : todayIsoDate(),
+    exchangeRate: input.exchangeRate,
+    terms: input.terms?.trim() || vendor.terms_label,
+  });
+
+  return getVendorApProfile(tx, companyId, vendorId);
 }
 
 export async function updateVendor(
@@ -173,8 +492,18 @@ export async function updateVendor(
     taxId?: string | null;
     is1099Eligible?: boolean;
     defaultExpenseAccountId?: number | null;
+    paymentTermId?: number | null;
     terms?: string | null;
     isActive?: boolean;
+    status?: string | null;
+    currencyCode?: string | null;
+    notes?: string | null;
+    vendorCategory?: string | null;
+    isPreferred?: boolean;
+    bankName?: string | null;
+    bankAccountName?: string | null;
+    bankAccountNumber?: string | null;
+    bankBranch?: string | null;
   }
 ) {
   const existing = await tx.query<any>(
@@ -183,6 +512,69 @@ export async function updateVendor(
   );
   if (existing.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
   const prev = existing.rows[0];
+
+  const status = input.status
+    ? String(input.status).trim().toLowerCase()
+    : input.isActive === undefined
+      ? null
+      : input.isActive
+        ? 'active'
+        : 'inactive';
+  if (status && !['active', 'inactive', 'on_hold', 'blocked'].includes(status)) {
+    throw new AccountingError(400, `Invalid vendor status '${status}'`, 'INVALID_VENDOR_STATUS');
+  }
+
+  let currencyCode: string | null = null;
+  if (input.currencyCode) {
+    currencyCode = input.currencyCode.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
+      throw new AccountingError(400, 'currencyCode must be a 3-letter ISO code', 'INVALID_CURRENCY');
+    }
+    if (currencyCode !== prev.currency_code) {
+      const used = await tx.query<{ id: number }>(
+        `SELECT id FROM bills WHERE company_id = $1 AND vendor_id = $2
+         UNION ALL SELECT id FROM bill_payments WHERE company_id = $1 AND vendor_id = $2
+         UNION ALL SELECT id FROM vendor_credits WHERE company_id = $1 AND vendor_id = $2
+         LIMIT 1`,
+        [companyId, vendorId]
+      );
+      if (used.rows.length > 0) {
+        throw new AccountingError(
+          409,
+          'Supplier currency cannot change after AP transactions exist',
+          'VENDOR_CURRENCY_IN_USE'
+        );
+      }
+    }
+  }
+
+  const vendorCategory = input.vendorCategory
+    ? String(input.vendorCategory).trim().toLowerCase()
+    : null;
+  if (
+    vendorCategory &&
+    !['goods', 'services', 'logistics', 'utilities', 'contractor', 'other'].includes(vendorCategory)
+  ) {
+    throw new AccountingError(400, `Invalid vendorCategory '${vendorCategory}'`, 'INVALID_VENDOR_CATEGORY');
+  }
+
+  let termsLabel = input.terms?.trim() || null;
+  let termId: number | null = null;
+  if (input.paymentTermId !== undefined && input.paymentTermId !== null) {
+    termId = Number(input.paymentTermId);
+    const tRes = await tx.query<{ name: string }>(
+      `SELECT name FROM payment_terms WHERE company_id = $1 AND id = $2 LIMIT 1`,
+      [companyId, termId]
+    );
+    if (tRes.rows.length === 0) throw new AccountingError(404, 'Payment term not found');
+    termsLabel = tRes.rows[0].name;
+  }
+
+  const bankChanged =
+    input.bankName !== undefined ||
+    input.bankAccountName !== undefined ||
+    input.bankAccountNumber !== undefined ||
+    input.bankBranch !== undefined;
 
   await tx.query(
     `UPDATE vendors
@@ -195,7 +587,17 @@ export async function updateVendor(
             is_1099_eligible = COALESCE($9, is_1099_eligible),
             default_expense_account_id = COALESCE($10, default_expense_account_id),
             terms_label = COALESCE($11, terms_label),
-            is_active = COALESCE($12, is_active)
+            payment_term_id = COALESCE($12, payment_term_id),
+            status = COALESCE($13, status),
+            is_active = CASE WHEN $13::TEXT IS NULL THEN is_active ELSE $13 = 'active' END,
+            currency_code = COALESCE($14, currency_code),
+            notes = COALESCE($15, notes),
+            vendor_category = COALESCE($16, vendor_category),
+            is_preferred = COALESCE($17, is_preferred),
+            bank_name = COALESCE($18, bank_name),
+            bank_account_name = COALESCE($19, bank_account_name),
+            bank_account_number = COALESCE($20, bank_account_number),
+            bank_branch = COALESCE($21, bank_branch)
       WHERE company_id = $1 AND id = $2`,
     [
       companyId,
@@ -208,8 +610,17 @@ export async function updateVendor(
       input.taxId === undefined ? null : input.taxId?.trim() || null,
       input.is1099Eligible === undefined ? null : Boolean(input.is1099Eligible),
       input.defaultExpenseAccountId === undefined ? null : input.defaultExpenseAccountId,
-      input.terms?.trim() || null,
-      input.isActive === undefined ? null : Boolean(input.isActive),
+      termsLabel,
+      termId,
+      status,
+      currencyCode,
+      input.notes === undefined ? null : input.notes?.trim() || null,
+      vendorCategory,
+      input.isPreferred === undefined ? null : Boolean(input.isPreferred),
+      input.bankName === undefined ? null : input.bankName?.trim() || null,
+      input.bankAccountName === undefined ? null : input.bankAccountName?.trim() || null,
+      input.bankAccountNumber === undefined ? null : input.bankAccountNumber?.trim() || null,
+      input.bankBranch === undefined ? null : input.bankBranch?.trim() || null,
     ]
   );
 
@@ -217,11 +628,23 @@ export async function updateVendor(
     companyId,
     actorUserId: actor.userId,
     actorUsername: actor.username,
-    action: 'VENDOR_UPDATED',
+    action: bankChanged ? 'VENDOR_BANK_DETAILS_CHANGED' : 'VENDOR_UPDATED',
     tableName: 'vendors',
     recordId: vendorId,
-    oldValues: { companyName: prev.company_name, terms: prev.terms_label },
-    newValues: { companyName: input.companyName ?? prev.company_name, terms: input.terms ?? prev.terms_label },
+    oldValues: {
+      companyName: prev.company_name,
+      terms: prev.terms_label,
+      status: prev.status,
+      currencyCode: prev.currency_code,
+      bankAccountNumber: prev.bank_account_number,
+    },
+    newValues: {
+      companyName: input.companyName ?? prev.company_name,
+      terms: termsLabel ?? prev.terms_label,
+      status: status ?? prev.status,
+      currencyCode: currencyCode ?? prev.currency_code,
+      bankAccountNumber: input.bankAccountNumber ?? prev.bank_account_number,
+    },
   });
 
   const all = await listVendors(tx, companyId);
@@ -320,11 +743,24 @@ export async function createPurchaseOrder(
   }
 ) {
   const vendorId = Number(input.vendorId);
-  const vRes = await tx.query<{ id: number; default_expense_account_id: number | null }>(
-    `SELECT id, default_expense_account_id FROM vendors WHERE company_id = $1 AND id = $2 LIMIT 1`,
+  const vRes = await tx.query<{
+    id: number;
+    default_expense_account_id: number | null;
+    status: string;
+    company_name: string;
+  }>(
+    `SELECT id, default_expense_account_id, status, company_name
+       FROM vendors WHERE company_id = $1 AND id = $2 LIMIT 1`,
     [companyId, vendorId]
   );
   if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
+  if (['inactive', 'blocked'].includes(vRes.rows[0].status)) {
+    throw new AccountingError(
+      409,
+      `Supplier ${vRes.rows[0].company_name} is ${vRes.rows[0].status.replace('_', ' ')} and cannot receive purchase orders`,
+      'VENDOR_NOT_ORDERABLE'
+    );
+  }
   if (!Array.isArray(input.lines) || input.lines.length === 0) {
     throw new AccountingError(400, 'Purchase order requires at least one line');
   }
@@ -406,12 +842,23 @@ export async function receivePurchaseOrderToBill(
     vendor_id: number;
     status: string;
   }>(
-    `SELECT id, po_number, vendor_id, status
-       FROM purchase_orders WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    `SELECT po.id, po.po_number, po.vendor_id, po.status, v.status AS vendor_status,
+            v.company_name AS vendor_name
+       FROM purchase_orders po
+       JOIN vendors v ON v.company_id = po.company_id AND v.id = po.vendor_id
+      WHERE po.company_id = $1 AND po.id = $2
+      FOR UPDATE OF po`,
     [companyId, poId]
   );
   if (poRes.rows.length === 0) throw new AccountingError(404, 'Purchase order not found');
-  const po = poRes.rows[0];
+  const po = poRes.rows[0] as typeof poRes.rows[0] & { vendor_status: string; vendor_name: string };
+  if (['inactive', 'blocked'].includes(po.vendor_status)) {
+    throw new AccountingError(
+      409,
+      `Supplier ${po.vendor_name} is ${po.vendor_status.replace('_', ' ')} and cannot be billed`,
+      'VENDOR_NOT_BILLABLE'
+    );
+  }
   if (po.status === 'closed' || po.status === 'cancelled') {
     throw new AccountingError(409, `Purchase order ${po.po_number} is already ${po.status}`);
   }
@@ -624,13 +1071,22 @@ export async function createBill(
     company_name: string;
     default_expense_account_id: number | null;
     terms_label: string;
+    status: string;
+    currency_code: string;
   }>(
-    `SELECT id, company_name, default_expense_account_id, terms_label
+    `SELECT id, company_name, default_expense_account_id, terms_label, status, currency_code
        FROM vendors WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, vendorId]
   );
   if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
   const vendor = vRes.rows[0];
+  if (['inactive', 'blocked'].includes(vendor.status)) {
+    throw new AccountingError(
+      409,
+      `Supplier ${vendor.company_name} is ${vendor.status.replace('_', ' ')} and cannot be billed`,
+      'VENDOR_NOT_BILLABLE'
+    );
+  }
 
   if (!Array.isArray(input.lines) || input.lines.length === 0) {
     throw new AccountingError(400, 'At least one bill line is required');
@@ -649,7 +1105,7 @@ export async function createBill(
   const fx = await resolveExchangeRate6(
     tx,
     companyId,
-    input.currencyCode,
+    input.currencyCode || vendor.currency_code,
     ctx.baseCurrency,
     billDate,
     input.exchangeRate
@@ -1118,12 +1574,23 @@ export async function recordBillPayment(
 
   const ctx = await resolveCommercialContext(tx, companyId, actor);
   const vendorId = Number(input.vendorId);
-  const vRes = await tx.query<{ id: number; company_name: string }>(
-    `SELECT id, company_name FROM vendors WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+  const vRes = await tx.query<{ id: number; company_name: string; status: string }>(
+    `SELECT id, company_name, status FROM vendors WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, vendorId]
   );
   if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
   const vendor = vRes.rows[0];
+  if (vendor.status !== 'active') {
+    const reason =
+      vendor.status === 'on_hold'
+        ? 'is on payment hold'
+        : `is ${vendor.status.replace('_', ' ')}`;
+    throw new AccountingError(
+      409,
+      `Supplier ${vendor.company_name} ${reason}; release the vendor before paying`,
+      'VENDOR_PAYMENT_BLOCKED'
+    );
+  }
 
   const paymentDate = input.paymentDate ? assertIsoDate(input.paymentDate, 'paymentDate') : todayIsoDate();
   const bankAccountId = input.bankAccountId ? Number(input.bankAccountId) : ctx.bank1010;
@@ -1729,99 +2196,345 @@ export async function applyVendorCreditToBill(
 // AP AGING & SUPPLIER STATEMENTS
 // ============================================================================
 
+export interface VendorAgingResult {
+  buckets: {
+    current4: bigint;
+    d1_30_4: bigint;
+    d31_60_4: bigint;
+    d61_90_4: bigint;
+    d90plus4: bigint;
+  };
+  total4: bigint;
+  unappliedCredit4: bigint;
+  unappliedPayment4: bigint;
+  lines: Array<{
+    billId: number;
+    billNumber: string;
+    billDate: string;
+    dueDate: string;
+    daysPastDue: number;
+    originalBalance: number;
+    balanceDue: number;
+    appliedUnapplied: number;
+  }>;
+}
+
+function emptyVendorAging(): VendorAgingResult {
+  return {
+    buckets: { current4: 0n, d1_30_4: 0n, d31_60_4: 0n, d61_90_4: 0n, d90plus4: 0n },
+    total4: 0n,
+    unappliedCredit4: 0n,
+    unappliedPayment4: 0n,
+    lines: [],
+  };
+}
+
+/**
+ * FIFO AP aging as of a date. Open bill balances are reconstructed from the
+ * bill total less payment allocations and vendor-credit applications up to the
+ * date. Any unapplied supplier credits or prepayments are then consumed oldest
+ * bill first, which is how AP controllers expect a supplier position to net.
+ */
+export async function buildVendorAgingBuckets(
+  tx: Transaction,
+  companyId: number,
+  vendorId: number,
+  asOfDate?: string
+): Promise<VendorAgingResult> {
+  const asOf = asOfDate ? assertIsoDate(asOfDate, 'asOfDate') : todayIsoDate();
+  const [billRes, creditRes, paymentRes] = await Promise.all([
+    tx.query<{
+      id: number;
+      bill_number: string;
+      bill_date: string;
+      due_date: string;
+      total: string;
+      paid: string;
+      credited: string;
+    }>(
+      `SELECT b.id, b.bill_number, b.bill_date::text, b.due_date::text, b.total::text,
+              COALESCE(pay.allocated, 0)::NUMERIC(19,4)::text AS paid,
+              COALESCE(vca.applied, 0)::NUMERIC(19,4)::text AS credited
+         FROM bills b
+         LEFT JOIN (
+           SELECT a.bill_id, SUM(a.amount) AS allocated
+             FROM bill_payment_allocations a
+             JOIN bill_payments p
+               ON p.company_id = a.company_id AND p.id = a.bill_payment_id
+            WHERE a.company_id = $1 AND p.is_voided = FALSE AND p.payment_date <= $3::DATE
+            GROUP BY a.bill_id
+         ) pay ON pay.bill_id = b.id
+         LEFT JOIN (
+           SELECT bill_id, SUM(amount) AS applied
+             FROM vendor_credit_applications
+            WHERE company_id = $1 AND applied_date <= $3::DATE
+            GROUP BY bill_id
+         ) vca ON vca.bill_id = b.id
+        WHERE b.company_id = $1 AND b.vendor_id = $2
+          AND b.status <> 'voided' AND b.bill_date <= $3::DATE
+        ORDER BY b.due_date ASC, b.id ASC`,
+      [companyId, vendorId, asOf]
+    ),
+    tx.query<{ s: string }>(
+      `SELECT COALESCE(SUM(vc.total - COALESCE(app.applied, 0)), 0)::NUMERIC(19,4)::text AS s
+         FROM vendor_credits vc
+         LEFT JOIN (
+           SELECT vendor_credit_id, SUM(amount) AS applied
+             FROM vendor_credit_applications
+            WHERE company_id = $1 AND applied_date <= $3::DATE
+            GROUP BY vendor_credit_id
+         ) app ON app.vendor_credit_id = vc.id
+        WHERE vc.company_id = $1 AND vc.vendor_id = $2
+          AND vc.status <> 'voided' AND vc.credit_date <= $3::DATE`,
+      [companyId, vendorId, asOf]
+    ),
+    tx.query<{ s: string }>(
+      `SELECT COALESCE(SUM(bp.amount - COALESCE(alloc.allocated, 0)), 0)::NUMERIC(19,4)::text AS s
+         FROM bill_payments bp
+         LEFT JOIN (
+           SELECT bill_payment_id, SUM(amount) AS allocated
+             FROM bill_payment_allocations
+            WHERE company_id = $1
+            GROUP BY bill_payment_id
+         ) alloc ON alloc.bill_payment_id = bp.id
+        WHERE bp.company_id = $1 AND bp.vendor_id = $2
+          AND bp.is_voided = FALSE AND bp.payment_date <= $3::DATE`,
+      [companyId, vendorId, asOf]
+    ),
+  ]);
+
+  const result = emptyVendorAging();
+  result.unappliedCredit4 = parseDecimal4(creditRes.rows[0].s);
+  result.unappliedPayment4 = parseDecimal4(paymentRes.rows[0].s);
+
+  const openBills: Array<{
+    billId: number;
+    billNumber: string;
+    billDate: string;
+    dueDate: string;
+    original4: bigint;
+    balance4: bigint;
+    daysPastDue: number;
+  }> = [];
+  for (const b of billRes.rows) {
+    const original4 = parseDecimal4(b.total);
+    const balance4 = original4 - parseDecimal4(b.paid) - parseDecimal4(b.credited);
+    if (balance4 > 0n) {
+      const dueMs = Date.parse(`${b.due_date}T00:00:00Z`);
+      const asOfMs = Date.parse(`${asOf}T00:00:00Z`);
+      openBills.push({
+        billId: Number(b.id),
+        billNumber: b.bill_number,
+        billDate: b.bill_date,
+        dueDate: b.due_date,
+        original4,
+        balance4,
+        daysPastDue: Math.max(0, Math.floor((asOfMs - dueMs) / 86_400_000)),
+      });
+    }
+  }
+
+  let availableCredit4 = result.unappliedCredit4;
+  let availablePayment4 = result.unappliedPayment4;
+  for (const bill of openBills) {
+    const fromCredit4 = availableCredit4 >= bill.balance4 ? bill.balance4 : availableCredit4;
+    availableCredit4 -= fromCredit4;
+    let billRemaining4 = bill.balance4 - fromCredit4;
+    const fromPayment4 = availablePayment4 >= billRemaining4 ? billRemaining4 : availablePayment4;
+    availablePayment4 -= fromPayment4;
+    billRemaining4 -= fromPayment4;
+    const applied4 = fromCredit4 + fromPayment4;
+    const remaining4 = billRemaining4;
+    if (remaining4 <= 0n) continue;
+
+    if (bill.daysPastDue <= 0) result.buckets.current4 += remaining4;
+    else if (bill.daysPastDue <= 30) result.buckets.d1_30_4 += remaining4;
+    else if (bill.daysPastDue <= 60) result.buckets.d31_60_4 += remaining4;
+    else if (bill.daysPastDue <= 90) result.buckets.d61_90_4 += remaining4;
+    else result.buckets.d90plus4 += remaining4;
+    result.total4 += remaining4;
+    result.lines.push({
+      billId: bill.billId,
+      billNumber: bill.billNumber,
+      billDate: bill.billDate,
+      dueDate: bill.dueDate,
+      daysPastDue: bill.daysPastDue,
+      originalBalance: toMoneyNumber(bill.original4),
+      balanceDue: toMoneyNumber(remaining4),
+      appliedUnapplied: toMoneyNumber(applied4),
+    });
+  }
+
+  // Unapplied supplier credits/prepayments beyond open bills are a net
+  // supplier position, not an ageable payable. Expose them separately.
+  result.unappliedCredit4 = availableCredit4;
+  result.unappliedPayment4 = availablePayment4;
+  return result;
+}
+
+export async function getVendorApProfile(
+  tx: Transaction,
+  companyId: number,
+  vendorId: number,
+  asOfDate?: string
+) {
+  const vRes = await tx.query<any>(
+    `SELECT v.*, pt.name AS terms_label
+       FROM vendors v
+       LEFT JOIN payment_terms pt
+         ON pt.company_id = v.company_id AND pt.id = v.payment_term_id
+      WHERE v.company_id = $1 AND v.id = $2 LIMIT 1`,
+    [companyId, vendorId]
+  );
+  if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
+  const vendor = vRes.rows[0];
+  const asOf = asOfDate ? assertIsoDate(asOfDate, 'asOfDate') : todayIsoDate();
+
+  const [exposure, aging, counts, statements] = await Promise.all([
+    getVendorApExposure(tx, companyId, vendorId),
+    buildVendorAgingBuckets(tx, companyId, vendorId, asOf),
+    tx.query<{
+      open_bills: string;
+      open_pos: string;
+      unapplied_credits: string;
+      last_bill_date: string | null;
+      last_payment_date: string | null;
+      ytd_bills: string;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM bills WHERE company_id = $1 AND vendor_id = $2
+            AND status <> 'voided' AND balance_due > 0)::text AS open_bills,
+         (SELECT COUNT(*) FROM purchase_orders WHERE company_id = $1 AND vendor_id = $2
+            AND status = 'open')::text AS open_pos,
+         (SELECT COUNT(*) FROM vendor_credits WHERE company_id = $1 AND vendor_id = $2
+            AND status <> 'voided' AND remaining_credit > 0)::text AS unapplied_credits,
+         (SELECT MAX(bill_date)::text FROM bills WHERE company_id = $1 AND vendor_id = $2
+            AND status <> 'voided') AS last_bill_date,
+         (SELECT MAX(payment_date)::text FROM bill_payments WHERE company_id = $1 AND vendor_id = $2
+            AND is_voided = FALSE) AS last_payment_date,
+         (SELECT COALESCE(SUM(total), 0)::NUMERIC(19,4)::text FROM bills
+           WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided'
+             AND bill_date >= DATE_TRUNC('year', $3::DATE)) AS ytd_bills`,
+      [companyId, vendorId, asOf]
+    ),
+    tx.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM vendor_statements
+        WHERE company_id = $1 AND vendor_id = $2`,
+      [companyId, vendorId]
+    ),
+  ]);
+  const c = counts.rows[0];
+
+  return {
+    vendorId,
+    vendorCode: vendor.vendor_code || '',
+    vendorName: vendor.company_name,
+    email: vendor.email || '',
+    phone: vendor.phone || '',
+    address: vendor.address || '',
+    taxId: vendor.ein_or_ssn || '',
+    is1099Eligible: Boolean(vendor.is_1099_eligible),
+    terms: vendor.terms_label || 'Net 30',
+    status: vendor.status || (vendor.is_active ? 'active' : 'inactive'),
+    currencyCode: vendor.currency_code || 'ZMW',
+    vendorCategory: vendor.vendor_category || 'goods',
+    isPreferred: Boolean(vendor.is_preferred),
+    notes: vendor.notes || '',
+    bankName: vendor.bank_name || '',
+    bankAccountName: vendor.bank_account_name || '',
+    bankAccountNumber: vendor.bank_account_number || '',
+    bankBranch: vendor.bank_branch || '',
+    openingBalanceBillId: vendor.opening_balance_bill_id
+      ? Number(vendor.opening_balance_bill_id)
+      : null,
+    asOfDate: asOf,
+    exposure: {
+      openBillBalance: toMoneyNumber(exposure.openBillBalance4),
+      unappliedVendorCredits: toMoneyNumber(exposure.unappliedVendorCredits4),
+      unappliedBillPayments: toMoneyNumber(exposure.unappliedBillPayments4),
+      netExposure: toMoneyNumber(exposure.exposure4),
+    },
+    aging: {
+      current: toMoneyNumber(aging.buckets.current4),
+      days1To30: toMoneyNumber(aging.buckets.d1_30_4),
+      days31To60: toMoneyNumber(aging.buckets.d31_60_4),
+      days61To90: toMoneyNumber(aging.buckets.d61_90_4),
+      daysOver90: toMoneyNumber(aging.buckets.d90plus4),
+      total: toMoneyNumber(aging.total4),
+      unappliedCredit: toMoneyNumber(aging.unappliedCredit4),
+      unappliedPayment: toMoneyNumber(aging.unappliedPayment4),
+      bills: aging.lines,
+    },
+    counts: {
+      openBills: Number(c.open_bills),
+      openPurchaseOrders: Number(c.open_pos),
+      unappliedCredits: Number(c.unapplied_credits),
+      statements: Number(statements.rows[0]?.count || 0),
+    },
+    lastBillDate: c.last_bill_date,
+    lastPaymentDate: c.last_payment_date,
+    ytdSpend: toMoneyNumber(parseDecimal4(c.ytd_bills)),
+    createdAt: vendor.created_at,
+  };
+}
+
 export async function getApAgingReport(tx: Transaction, companyId: number, asOfDate?: string) {
   const asOf = asOfDate ? assertIsoDate(asOfDate, 'asOfDate') : todayIsoDate();
-  const res = await tx.query<{
-    bill_id: number;
-    bill_number: string;
-    vendor_id: number;
-    vendor_name: string;
-    bill_date: string;
-    due_date: string;
-    balance_due: string;
-    days_past_due: number;
-  }>(
-    `SELECT b.id AS bill_id, b.bill_number, b.vendor_id, v.company_name AS vendor_name,
-            b.bill_date::text, b.due_date::text, b.balance_due::text,
-            ($2::DATE - b.due_date)::INTEGER AS days_past_due
-       FROM bills b
-       JOIN vendors v ON v.company_id = b.company_id AND v.id = b.vendor_id
-      WHERE b.company_id = $1 AND b.status <> 'voided' AND b.balance_due > 0
-      ORDER BY v.company_name ASC, b.due_date ASC`,
+  const vendorRes = await tx.query<{ id: number; company_name: string }>(
+    `SELECT DISTINCT v.id, v.company_name
+       FROM vendors v
+       JOIN bills b ON b.company_id = v.company_id AND b.vendor_id = v.id
+      WHERE v.company_id = $1 AND b.status <> 'voided' AND b.bill_date <= $2::DATE
+      ORDER BY v.company_name ASC`,
     [companyId, asOf]
   );
 
-  const byVendor = new Map<number, any>();
   let grandCurrent = 0n;
   let grand1_30 = 0n;
   let grand31_60 = 0n;
   let grand61_90 = 0n;
   let grand90plus = 0n;
+  let grandUnappliedCredit = 0n;
+  let grandUnappliedPayment = 0n;
+  const vendors: any[] = [];
 
-  for (const r of res.rows) {
-    const vid = Number(r.vendor_id);
-    const bal4 = parseDecimal4(r.balance_due);
-    const days = Number(r.days_past_due);
-    const entry = byVendor.get(vid) ?? {
-      vendorId: vid,
-      vendorName: r.vendor_name,
-      current4: 0n,
-      d1_30_4: 0n,
-      d31_60_4: 0n,
-      d61_90_4: 0n,
-      d90plus4: 0n,
-      total4: 0n,
-      bills: [],
-    };
-    if (days <= 0) {
-      entry.current4 += bal4;
-      grandCurrent += bal4;
-    } else if (days <= 30) {
-      entry.d1_30_4 += bal4;
-      grand1_30 += bal4;
-    } else if (days <= 60) {
-      entry.d31_60_4 += bal4;
-      grand31_60 += bal4;
-    } else if (days <= 90) {
-      entry.d61_90_4 += bal4;
-      grand61_90 += bal4;
-    } else {
-      entry.d90plus4 += bal4;
-      grand90plus += bal4;
-    }
-    entry.total4 += bal4;
-    entry.bills.push({
-      billId: Number(r.bill_id),
-      billNumber: r.bill_number,
-      billDate: r.bill_date,
-      dueDate: r.due_date,
-      daysPastDue: Math.max(0, days),
-      balanceDue: toMoneyNumber(bal4),
+  for (const v of vendorRes.rows) {
+    const aging = await buildVendorAgingBuckets(tx, companyId, Number(v.id), asOf);
+    grandCurrent += aging.buckets.current4;
+    grand1_30 += aging.buckets.d1_30_4;
+    grand31_60 += aging.buckets.d31_60_4;
+    grand61_90 += aging.buckets.d61_90_4;
+    grand90plus += aging.buckets.d90plus4;
+    grandUnappliedCredit += aging.unappliedCredit4;
+    grandUnappliedPayment += aging.unappliedPayment4;
+    if (aging.total4 === 0n && aging.lines.length === 0) continue;
+    vendors.push({
+      vendorId: Number(v.id),
+      vendorName: v.company_name,
+      current: toMoneyNumber(aging.buckets.current4),
+      days1To30: toMoneyNumber(aging.buckets.d1_30_4),
+      days31To60: toMoneyNumber(aging.buckets.d31_60_4),
+      days61To90: toMoneyNumber(aging.buckets.d61_90_4),
+      daysOver90: toMoneyNumber(aging.buckets.d90plus4),
+      total: toMoneyNumber(aging.total4),
+      unappliedCredit: toMoneyNumber(aging.unappliedCredit4),
+      unappliedPayment: toMoneyNumber(aging.unappliedPayment4),
+      bills: aging.lines,
     });
-    byVendor.set(vid, entry);
   }
 
-  const totalAp4 = grandCurrent + grand1_30 + grand31_60 + grand61_90 + grand90plus;
   return {
     asOfDate: asOf,
-    vendors: Array.from(byVendor.values()).map(v => ({
-      vendorId: v.vendorId,
-      vendorName: v.vendorName,
-      current: toMoneyNumber(v.current4),
-      days1To30: toMoneyNumber(v.d1_30_4),
-      days31To60: toMoneyNumber(v.d31_60_4),
-      days61To90: toMoneyNumber(v.d61_90_4),
-      daysOver90: toMoneyNumber(v.d90plus4),
-      total: toMoneyNumber(v.total4),
-      bills: v.bills,
-    })),
+    vendors,
     totals: {
       current: toMoneyNumber(grandCurrent),
       days1To30: toMoneyNumber(grand1_30),
       days31To60: toMoneyNumber(grand31_60),
       days61To90: toMoneyNumber(grand61_90),
       daysOver90: toMoneyNumber(grand90plus),
-      total: toMoneyNumber(totalAp4),
+      total: toMoneyNumber(grandCurrent + grand1_30 + grand31_60 + grand61_90 + grand90plus),
+      unappliedCredit: toMoneyNumber(grandUnappliedCredit),
+      unappliedPayment: toMoneyNumber(grandUnappliedPayment),
     },
   };
 }
@@ -1829,11 +2542,21 @@ export async function getApAgingReport(tx: Transaction, companyId: number, asOfD
 export async function generateSupplierStatement(
   tx: Transaction,
   companyId: number,
-  input: { vendorId: number; periodStart?: string; periodEnd?: string }
+  actor: ActorContext,
+  input: { vendorId: number; periodStart?: string; periodEnd?: string; saveSnapshot?: boolean }
 ) {
   const vendorId = Number(input.vendorId);
-  const vRes = await tx.query<{ id: number; company_name: string; email: string | null }>(
-    `SELECT id, company_name, email FROM vendors WHERE company_id = $1 AND id = $2 LIMIT 1`,
+  const vRes = await tx.query<{
+    id: number;
+    company_name: string;
+    vendor_code: string | null;
+    email: string | null;
+    address: string | null;
+    ein_or_ssn: string | null;
+    currency_code: string;
+  }>(
+    `SELECT id, company_name, vendor_code, email, address, ein_or_ssn, currency_code
+       FROM vendors WHERE company_id = $1 AND id = $2 LIMIT 1`,
     [companyId, vendorId]
   );
   if (vRes.rows.length === 0) throw new AccountingError(404, 'Vendor not found');
@@ -1841,11 +2564,14 @@ export async function generateSupplierStatement(
 
   const periodEnd = input.periodEnd ? assertIsoDate(input.periodEnd, 'periodEnd') : todayIsoDate();
   const periodStart = input.periodStart ? assertIsoDate(input.periodStart, 'periodStart') : `${periodEnd.slice(0, 7)}-01`;
+  if (periodStart > periodEnd) {
+    throw new AccountingError(400, 'periodStart must be on or before periodEnd', 'INVALID_STATEMENT_PERIOD');
+  }
 
   const [priorBills, priorPmts, priorVcs, activity] = await Promise.all([
     tx.query<{ s: string }>(
       `SELECT COALESCE(SUM(total), 0)::NUMERIC(19,4)::text AS s FROM bills
-        WHERE company_id = $1 AND vendor_id = $2 AND bill_date < $3::DATE`,
+        WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided' AND bill_date < $3::DATE`,
       [companyId, vendorId, periodStart]
     ),
     tx.query<{ s: string }>(
@@ -1855,14 +2581,14 @@ export async function generateSupplierStatement(
     ),
     tx.query<{ s: string }>(
       `SELECT COALESCE(SUM(total), 0)::NUMERIC(19,4)::text AS s FROM vendor_credits
-        WHERE company_id = $1 AND vendor_id = $2 AND credit_date < $3::DATE`,
+        WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided' AND credit_date < $3::DATE`,
       [companyId, vendorId, periodStart]
     ),
     tx.query<{ doc_date: string; doc_type: string; doc_number: string; description: string; amount: string }>(
       `SELECT bill_date::text AS doc_date, 'Bill' AS doc_type, bill_number AS doc_number,
               COALESCE(memo, 'Supplier Bill') AS description, total::text AS amount
          FROM bills
-        WHERE company_id = $1 AND vendor_id = $2
+        WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided'
           AND bill_date BETWEEN $3::DATE AND $4::DATE
        UNION ALL
        SELECT payment_date::text AS doc_date, 'Bill Payment' AS doc_type, payment_number AS doc_number,
@@ -1874,7 +2600,7 @@ export async function generateSupplierStatement(
        SELECT credit_date::text AS doc_date, 'Vendor Credit' AS doc_type, credit_number AS doc_number,
               COALESCE(memo, 'Vendor Credit') AS description, (-total)::text AS amount
          FROM vendor_credits
-        WHERE company_id = $1 AND vendor_id = $2
+        WHERE company_id = $1 AND vendor_id = $2 AND status <> 'voided'
           AND credit_date BETWEEN $3::DATE AND $4::DATE
        ORDER BY doc_date ASC, doc_number ASC`,
       [companyId, vendorId, periodStart, periodEnd]
@@ -1901,15 +2627,194 @@ export async function generateSupplierStatement(
     };
   });
 
-  return {
+  const aging = await buildVendorAgingBuckets(tx, companyId, vendorId, periodEnd);
+  const statement = {
     vendorId,
     vendorName: vendor.company_name,
+    vendorCode: vendor.vendor_code || '',
     vendorEmail: vendor.email || '',
+    remitToAddress: vendor.address || '',
+    taxId: vendor.ein_or_ssn || '',
+    currencyCode: vendor.currency_code || 'ZMW',
     periodStart,
     periodEnd,
     openingBalance: toMoneyNumber(openingBal4),
     closingBalance: toMoneyNumber(running4),
     lines,
+    aging: {
+      current: toMoneyNumber(aging.buckets.current4),
+      days1To30: toMoneyNumber(aging.buckets.d1_30_4),
+      days31To60: toMoneyNumber(aging.buckets.d31_60_4),
+      days61To90: toMoneyNumber(aging.buckets.d61_90_4),
+      daysOver90: toMoneyNumber(aging.buckets.d90plus4),
+      total: toMoneyNumber(aging.total4),
+      unappliedCredit: toMoneyNumber(aging.unappliedCredit4),
+      unappliedPayment: toMoneyNumber(aging.unappliedPayment4),
+      bills: aging.lines,
+    },
+  };
+
+  let statementId: number | null = null;
+  if (input.saveSnapshot) {
+    const ins = await tx.query<{ id: number }>(
+      `INSERT INTO vendor_statements (
+         company_id, vendor_id, statement_date, period_start, period_end, currency_code,
+         opening_balance, closing_balance, snapshot_json, created_by
+       ) VALUES ($1, $2, $3::DATE, $4::DATE, $5::DATE, $6,
+                 $7::NUMERIC(19,4), $8::NUMERIC(19,4), $9::JSONB, $10)
+       RETURNING id`,
+      [
+        companyId,
+        vendorId,
+        todayIsoDate(),
+        periodStart,
+        periodEnd,
+        statement.currencyCode,
+        formatDecimal4(openingBal4),
+        formatDecimal4(running4),
+        JSON.stringify(statement),
+        actor.userId,
+      ]
+    );
+    statementId = Number(ins.rows[0].id);
+    await writeAuditLog(tx, {
+      companyId,
+      actorUserId: actor.userId,
+      actorUsername: actor.username,
+      action: 'VENDOR_STATEMENT_GENERATED',
+      tableName: 'vendor_statements',
+      recordId: statementId,
+      newValues: { vendorId, periodStart, periodEnd, closingBalance: formatDecimal4(running4) },
+    });
+  }
+
+  return { ...statement, statementId };
+}
+
+export async function listVendorStatements(
+  tx: Transaction,
+  companyId: number,
+  vendorId: number,
+  limit = 25
+) {
+  const res = await tx.query<{
+    id: number;
+    statement_date: string;
+    period_start: string;
+    period_end: string;
+    currency_code: string;
+    opening_balance: string;
+    closing_balance: string;
+    emailed_at: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, statement_date::text, period_start::text, period_end::text, currency_code,
+            opening_balance::text, closing_balance::text, emailed_at::text, created_at::text
+       FROM vendor_statements
+      WHERE company_id = $1 AND vendor_id = $2
+      ORDER BY statement_date DESC, id DESC
+      LIMIT $3`,
+    [companyId, vendorId, Math.min(Math.max(Number(limit) || 25, 1), 100)]
+  );
+  return res.rows.map(r => ({
+    statementId: Number(r.id),
+    statementDate: r.statement_date,
+    periodStart: r.period_start,
+    periodEnd: r.period_end,
+    currencyCode: r.currency_code,
+    openingBalance: toMoneyNumber(parseDecimal4(r.opening_balance)),
+    closingBalance: toMoneyNumber(parseDecimal4(r.closing_balance)),
+    emailedAt: r.emailed_at,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function getVendorStatement(
+  tx: Transaction,
+  companyId: number,
+  statementId: number
+) {
+  const res = await tx.query<{ snapshot_json: any }>(
+    `SELECT snapshot_json FROM vendor_statements
+      WHERE company_id = $1 AND id = $2 LIMIT 1`,
+    [companyId, statementId]
+  );
+  if (res.rows.length === 0 || !res.rows[0].snapshot_json) {
+    throw new AccountingError(404, 'Supplier statement not found');
+  }
+  return res.rows[0].snapshot_json;
+}
+
+/**
+ * Queues a supplier statement email for the tenant delivery worker and records
+ * it in email_log. Suppliers need the remit-to and tax context for reconciliation.
+ */
+export async function sendSupplierStatement(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { vendorId: number; periodStart?: string; periodEnd?: string; recipient?: string | null }
+) {
+  const statement = await generateSupplierStatement(tx, companyId, actor, {
+    vendorId: input.vendorId,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    saveSnapshot: true,
+  });
+  const recipient = String(input.recipient || statement.vendorEmail || '').trim();
+  if (!recipient) {
+    throw new AccountingError(400, 'A recipient email address is required', 'MISSING_RECIPIENT');
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipient)) {
+    throw new AccountingError(400, 'Recipient email address is invalid', 'INVALID_RECIPIENT');
+  }
+
+  const subject = `Supplier statement ${statement.periodStart} to ${statement.periodEnd} — ${statement.vendorName}`;
+  const body = [
+    `Supplier: ${statement.vendorName} (${statement.vendorCode})`,
+    `Statement period: ${statement.periodStart} to ${statement.periodEnd}`,
+    `Opening balance: ${statement.openingBalance.toFixed(2)} ${statement.currencyCode}`,
+    `Closing balance: ${statement.closingBalance.toFixed(2)} ${statement.currencyCode}`,
+    '',
+    ...statement.lines.map(
+      l =>
+        `${l.date}  ${l.type} ${l.number}  charge ${l.charge.toFixed(2)}  credit ${l.credit.toFixed(2)}  balance ${l.runningBalance.toFixed(2)}`
+    ),
+  ].join('\n');
+
+  const emailIns = await tx.query<{ id: number }>(
+    `INSERT INTO email_log (company_id, recipient, subject, entity_type, entity_id, status, sent_by, body)
+     VALUES ($1, $2, $3, 'vendor_statement', $4, 'queued', $5, $6)
+     RETURNING id`,
+    [companyId, recipient, subject, statement.statementId, actor.userId, body]
+  );
+  await tx.query(
+    `UPDATE vendor_statements SET emailed_at = NOW() WHERE company_id = $1 AND id = $2`,
+    [companyId, statement.statementId]
+  );
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'VENDOR_STATEMENT_SENT',
+    tableName: 'vendor_statements',
+    recordId: statement.statementId ?? input.vendorId,
+    newValues: {
+      recipient,
+      emailLogId: Number(emailIns.rows[0].id),
+      periodStart: statement.periodStart,
+      periodEnd: statement.periodEnd,
+    },
+  });
+
+  return {
+    statementId: statement.statementId,
+    emailLogId: Number(emailIns.rows[0].id),
+    recipient,
+    subject,
+    periodStart: statement.periodStart,
+    periodEnd: statement.periodEnd,
+    closingBalance: statement.closingBalance,
   };
 }
 

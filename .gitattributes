@@ -1,0 +1,4 @@
+# Keep SQL migration files LF so the migrator's checksums stay stable across
+# platforms. Without this, git's autocrlf can rewrite LF -> CRLF on checkout and
+# trigger false "checksum mismatch" errors for already-applied migrations.
+*.sql text eol=lf

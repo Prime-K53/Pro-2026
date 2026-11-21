@@ -5,6 +5,7 @@ import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { parseDecimal4 } from '../lib/decimal.ts';
 import { consumeApprovalRequest, evaluateApprovalGate, sumLineAmounts4 } from '../services/approvalService.ts';
 import {
+  addVendorOpeningBalance,
   applyVendorCreditToBill,
   createBill,
   createPurchaseOrder,
@@ -12,13 +13,17 @@ import {
   createVendorCredit,
   generateSupplierStatement,
   getApAgingReport,
+  getVendorApProfile,
+  getVendorStatement,
   listBillPayments,
   listBills,
   listPurchaseOrders,
   listVendorCredits,
   listVendors,
+  listVendorStatements,
   receivePurchaseOrderToBill,
   recordBillPayment,
+  sendSupplierStatement,
   updateVendor,
   voidBill,
   voidBillPayment,
@@ -70,9 +75,42 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
 
   router.post('/vendors', requirePermission('vendors:write'), async (req: Request, res: Response) => {
     try {
-      const vendor = await db.withCompanyDb(req.auth!.companyId, tx =>
-        createVendor(tx, req.auth!.companyId, toActor(req), req.body || {})
+      const body = req.body || {};
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || body.idempotencyKey || null;
+      const gate = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateApprovalGate(tx, req.auth!.companyId, toActor(req), {
+          actionType: 'vendor',
+          entityType: 'vendor',
+          amount: parseDecimal4(body.openingBalance ?? 0),
+          businessDate: body.openingBalanceDate || new Date().toISOString().slice(0, 10),
+          payload: body,
+          approvalRequestId: body.approvalRequestId ? Number(body.approvalRequestId) : null,
+          idempotencyKey,
+        })
       );
+      if (gate.requiresApproval) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: gate.request,
+          message: 'Supplier master creation requires approval before it is committed.',
+        });
+      }
+
+      const vendor = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const created = await createVendor(tx, req.auth!.companyId, toActor(req), body);
+        if (gate.request) {
+          await consumeApprovalRequest(
+            tx,
+            req.auth!.companyId,
+            toActor(req),
+            gate.request.id,
+            'vendor',
+            created.id
+          );
+        }
+        return created;
+      });
       return res.status(201).json({ vendor });
     } catch (err) {
       return handlePurchasingError(res, err);
@@ -83,10 +121,107 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
-      const vendor = await db.withCompanyDb(req.auth!.companyId, tx =>
-        updateVendor(tx, req.auth!.companyId, toActor(req), id, req.body || {})
+      const body = req.body || {};
+      const bankChange = ['bankName', 'bankAccountName', 'bankAccountNumber', 'bankBranch'].some(
+        k => body[k] !== undefined
       );
+      const actionType = bankChange
+        ? 'vendor_bank_change'
+        : body.status === 'on_hold'
+          ? 'vendor_payment_hold'
+          : 'vendor';
+      const gate = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateApprovalGate(tx, req.auth!.companyId, toActor(req), {
+          actionType,
+          entityType: 'vendor',
+          amount: 0n,
+          businessDate: new Date().toISOString().slice(0, 10),
+          payload: body,
+          approvalRequestId: body.approvalRequestId ? Number(body.approvalRequestId) : null,
+          idempotencyKey: body.idempotencyKey || null,
+        })
+      );
+      if (gate.requiresApproval) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: gate.request,
+          message: 'Supplier master change requires approval before it is committed.',
+        });
+      }
+
+      const vendor = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const updated = await updateVendor(tx, req.auth!.companyId, toActor(req), id, body);
+        if (gate.request) {
+          await consumeApprovalRequest(
+            tx,
+            req.auth!.companyId,
+            toActor(req),
+            gate.request.id,
+            'vendor',
+            id
+          );
+        }
+        return updated;
+      });
       return res.json({ vendor });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.get('/vendors/:id/ap-profile', requirePermission('vendors:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
+      const asOfDate = req.query.asOfDate ? String(req.query.asOfDate) : undefined;
+      const profile = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getVendorApProfile(tx, req.auth!.companyId, id, asOfDate)
+      );
+      return res.json({ profile });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.post('/vendors/:id/opening-balance', requirePermission('vendors:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
+      const body = req.body || {};
+      const gate = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateApprovalGate(tx, req.auth!.companyId, toActor(req), {
+          actionType: 'vendor',
+          entityType: 'vendor_opening_balance',
+          amount: parseDecimal4(body.openingBalance ?? 0),
+          businessDate: body.openingBalanceDate,
+          payload: { vendorId: id, ...body },
+          approvalRequestId: body.approvalRequestId ? Number(body.approvalRequestId) : null,
+          idempotencyKey: body.idempotencyKey || null,
+        })
+      );
+      if (gate.requiresApproval) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: gate.request,
+          message: 'Supplier opening balance requires approval before posting.',
+        });
+      }
+
+      const profile = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const result = await addVendorOpeningBalance(tx, req.auth!.companyId, toActor(req), id, body);
+        if (gate.request) {
+          await consumeApprovalRequest(
+            tx,
+            req.auth!.companyId,
+            toActor(req),
+            gate.request.id,
+            'vendor',
+            id
+          );
+        }
+        return result;
+      });
+      return res.status(201).json({ profile });
     } catch (err) {
       return handlePurchasingError(res, err);
     }
@@ -97,13 +232,65 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
       const statement = await db.withCompanyDb(req.auth!.companyId, tx =>
-        generateSupplierStatement(tx, req.auth!.companyId, {
+        generateSupplierStatement(tx, req.auth!.companyId, toActor(req), {
           vendorId: id,
           periodStart: req.query.periodStart ? String(req.query.periodStart) : undefined,
           periodEnd: req.query.periodEnd ? String(req.query.periodEnd) : undefined,
+          saveSnapshot: req.query.saveSnapshot === 'true',
         })
       );
       return res.json({ statement });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.get('/vendors/:id/statements', requirePermission('vendors:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
+      const statements = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listVendorStatements(tx, req.auth!.companyId, id, Number(req.query.limit) || 25)
+      );
+      return res.json({ statements });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.get('/vendors/:id/statements/:statementId', requirePermission('vendors:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const statementId = Number(req.params.statementId);
+      if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(statementId) || statementId <= 0) {
+        return res.status(400).json({ error: 'Invalid vendor or statement id' });
+      }
+      const statement = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getVendorStatement(tx, req.auth!.companyId, statementId)
+      );
+      if (Number(statement.vendorId) !== id) {
+        return res.status(404).json({ error: 'Supplier statement not found' });
+      }
+      return res.json({ statement });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.post('/vendors/:id/statement/send', requirePermission('statements:send'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid vendor id' });
+      const body = req.body || {};
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        sendSupplierStatement(tx, req.auth!.companyId, toActor(req), {
+          vendorId: id,
+          periodStart: body.periodStart || undefined,
+          periodEnd: body.periodEnd || undefined,
+          recipient: body.recipient || undefined,
+        })
+      );
+      return res.status(202).json(result);
     } catch (err) {
       return handlePurchasingError(res, err);
     }

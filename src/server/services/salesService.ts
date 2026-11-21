@@ -17,6 +17,7 @@ import {
   divRoundBigInt,
   formatDecimal6,
   generateNextDocNumber,
+  getCustomerCreditExposure,
   multiplyQty6ByRate4,
   parseDecimal6,
   recalculateCustomerBalance,
@@ -25,6 +26,7 @@ import {
   saveRouteIdempotency,
   todayIsoDate,
 } from './commercialHelpers.ts';
+import { hasPermission } from '../permissions.ts';
 import {
   absBigInt,
   formatDecimal2,
@@ -82,14 +84,29 @@ export async function listCustomers(tx: Transaction, companyId: number, includeI
     is_active: boolean;
     customer_code: string | null;
     customer_status: string;
+    currency_code: string;
+    opening_balance_invoice_id: number | null;
+    tax_exemption_valid: boolean;
+    tax_exemption_expiry: string | null;
   }>(
-    `SELECT id, parent_customer_id, customer_type, name, company_name, email, phone,
-            billing_address, shipping_address, payment_term_id, terms_label,
-            credit_limit::text, balance::text, is_tax_exempt, notes, is_active,
-            customer_code, customer_status
-       FROM customers
-      WHERE company_id = $1 ${includeInactive ? '' : 'AND is_active = TRUE'}
-      ORDER BY LOWER(company_name) ASC, id ASC`,
+    `SELECT c.id, c.parent_customer_id, c.customer_type, c.name, c.company_name, c.email, c.phone,
+            c.billing_address, c.shipping_address, c.payment_term_id, c.terms_label,
+            c.credit_limit::text, c.balance::text, c.is_tax_exempt, c.notes, c.is_active,
+            c.customer_code, c.customer_status, c.currency_code, c.opening_balance_invoice_id,
+            EXISTS (
+              SELECT 1 FROM reseller_permits rp
+               WHERE rp.company_id = c.company_id AND rp.customer_id = c.id
+                 AND rp.is_active = TRUE
+                 AND (rp.expires_at IS NULL OR rp.expires_at >= CURRENT_DATE)
+            ) AS tax_exemption_valid,
+            (
+              SELECT MIN(rp.expires_at)::text FROM reseller_permits rp
+               WHERE rp.company_id = c.company_id AND rp.customer_id = c.id
+                 AND rp.is_active = TRUE AND rp.expires_at >= CURRENT_DATE
+            ) AS tax_exemption_expiry
+       FROM customers c
+      WHERE c.company_id = $1 ${includeInactive ? '' : 'AND c.is_active = TRUE'}
+      ORDER BY LOWER(c.company_name) ASC, c.id ASC`,
     [companyId]
   );
   return res.rows.map(r => ({
@@ -108,11 +125,63 @@ export async function listCustomers(tx: Transaction, companyId: number, includeI
     balance: toMoneyNumber(parseDecimal4(r.balance)),
     balanceExact: r.balance,
     isTaxExempt: Boolean(r.is_tax_exempt),
+    taxExemptionValid: Boolean(r.tax_exemption_valid),
+    taxExemptionExpiry: r.tax_exemption_expiry,
     notes: r.notes || '',
     isActive: Boolean(r.is_active),
     customerCode: r.customer_code ?? '',
     customerStatus: r.customer_status,
+    currencyCode: r.currency_code || 'ZMW',
+    openingBalanceInvoiceId:
+      r.opening_balance_invoice_id !== null ? Number(r.opening_balance_invoice_id) : null,
   }));
+}
+
+export async function getCustomerCreditProfile(
+  tx: Transaction,
+  companyId: number,
+  customerId: number
+) {
+  const res = await tx.query<{
+    id: number;
+    company_name: string;
+    customer_code: string | null;
+    customer_status: string;
+    currency_code: string;
+    credit_limit: string | null;
+    balance: string;
+    is_tax_exempt: boolean;
+  }>(
+    `SELECT id, company_name, customer_code, customer_status, currency_code,
+            credit_limit::text, balance::text, is_tax_exempt
+       FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1`,
+    [companyId, customerId]
+  );
+  if (res.rows.length === 0) {
+    throw new AccountingError(404, 'Customer not found', 'CUSTOMER_NOT_FOUND');
+  }
+  const customer = res.rows[0];
+  const exposure = await getCustomerCreditExposure(tx, companyId, customerId);
+  const limit4 = customer.credit_limit !== null ? parseDecimal4(customer.credit_limit) : null;
+  const available4 = limit4 !== null ? limit4 - exposure.exposure4 : null;
+
+  return {
+    customerId,
+    customerName: customer.company_name,
+    customerCode: customer.customer_code ?? '',
+    customerStatus: customer.customer_status,
+    currencyCode: customer.currency_code || 'ZMW',
+    creditLimit: limit4 !== null ? toMoneyNumber(limit4) : null,
+    balance: toMoneyNumber(parseDecimal4(customer.balance)),
+    openInvoiceBalance: toMoneyNumber(exposure.openInvoiceBalance4),
+    unappliedCreditMemos: toMoneyNumber(exposure.unappliedCreditMemos4),
+    unappliedReceipts: toMoneyNumber(exposure.unappliedReceipts4),
+    exposure: toMoneyNumber(exposure.exposure4),
+    availableCredit: available4 !== null ? toMoneyNumber(available4) : null,
+    overLimit: limit4 !== null && exposure.exposure4 > limit4,
+    creditHold: customer.customer_status === 'blocked',
+    isTaxExempt: Boolean(customer.is_tax_exempt),
+  };
 }
 
 export async function createCustomer(
@@ -132,6 +201,10 @@ export async function createCustomer(
     paymentTermId?: number | null;
     creditLimit?: string | number | null;
     isTaxExempt?: boolean;
+    currencyCode?: string | null;
+    openingBalance?: string | number | null;
+    openingBalanceDate?: string | null;
+    openingBalanceExchangeRate?: string | number | null;
     notes?: string | null;
     taxRegistrationNumber?: string | null;
     taxJurisdiction?: string | null;
@@ -175,6 +248,26 @@ export async function createCustomer(
       ? formatDecimal4(parseDecimal4(input.creditLimit))
       : null;
 
+  const openingBalance4 = parseDecimal4(input.openingBalance ?? 0);
+  if (openingBalance4 < 0n) {
+    throw new AccountingError(400, 'Opening balance cannot be negative', 'INVALID_OPENING_BALANCE');
+  }
+
+  const companyCurrencyRes = input.currencyCode
+    ? null
+    : await tx.query<{ base_currency: string }>(
+        `SELECT base_currency FROM companies WHERE id = $1 LIMIT 1`,
+        [companyId]
+      );
+  const currencyCode = String(
+    input.currencyCode || companyCurrencyRes?.rows[0]?.base_currency || 'ZMW'
+  )
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currencyCode)) {
+    throw new AccountingError(400, 'currencyCode must be a 3-letter ISO code', 'INVALID_CURRENCY');
+  }
+
   // Generate server-side customer code: CUST-{6-digit sequence per company}
   const codeSeq = await tx.query<{ seq: number }>(
     `SELECT COALESCE(MAX(CAST(substring(customer_code from 6) AS INTEGER)), 0) + 1 AS seq
@@ -188,10 +281,10 @@ export async function createCustomer(
     `INSERT INTO customers (
        company_id, parent_customer_id, customer_type, name, company_name, email, phone,
        billing_address, shipping_address, payment_term_id, terms_label, credit_limit,
-       is_tax_exempt, notes, customer_code, customer_status,
+       is_tax_exempt, notes, customer_code, customer_status, currency_code,
        tax_registration_number, tax_jurisdiction, exemption_certificate_number,
        exemption_certificate_expiry_date, withholding_tax_classification
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::NUMERIC(19,4), $13, $14, $15, 'active', $16, $17, $18, $19::DATE, $20)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::NUMERIC(19,4), $13, $14, $15, 'active', $21, $16, $17, $18, $19::DATE, $20)
      RETURNING id`,
     [
       companyId,
@@ -214,6 +307,7 @@ export async function createCustomer(
       input.exemptionCertificateNumber?.trim() || null,
       input.exemptionCertificateExpiryDate ?? null,
       input.withholdingTaxClassification?.trim() || null,
+      currencyCode,
     ]
   );
 
@@ -228,8 +322,196 @@ export async function createCustomer(
     newValues: { name, companyName, customerType, customerCode, customerStatus: 'active' },
   });
 
+  if (openingBalance4 > 0n) {
+    await postCustomerOpeningBalance(tx, companyId, actor, {
+      customerId: id,
+      customerCode,
+      customerName: companyName,
+      openingBalance: openingBalance4,
+      currencyCode,
+      openingDate: input.openingBalanceDate
+        ? assertIsoDate(input.openingBalanceDate, 'openingBalanceDate')
+        : todayIsoDate(),
+      exchangeRate: input.openingBalanceExchangeRate,
+      terms: input.terms?.trim() || 'Net 30',
+    });
+  }
+
   const all = await listCustomers(tx, companyId, true);
   return all.find(c => c.id === id)!;
+}
+
+/**
+ * D-1 / D-2: convert an onboarding opening balance into a traceable opening
+ * invoice and post Dr AR 1100 / Cr Opening Balance Equity 3900 exactly once.
+ */
+async function postCustomerOpeningBalance(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    customerId: number;
+    customerCode: string;
+    customerName: string;
+    openingBalance: bigint;
+    currencyCode: string;
+    openingDate: string;
+    exchangeRate?: string | number | null;
+    terms: string;
+  }
+): Promise<void> {
+  const ctx = await resolveCommercialContext(tx, companyId, actor);
+  const fx = await resolveExchangeRate6(
+    tx,
+    companyId,
+    input.currencyCode,
+    ctx.baseCurrency,
+    input.openingDate,
+    input.exchangeRate
+  );
+  const base4 = convertForeign4ToBase4(input.openingBalance, fx.rate6, ctx.roundingMode);
+  if (base4 <= 0n) {
+    throw new AccountingError(400, 'Opening balance is too small to post', 'INVALID_OPENING_BALANCE');
+  }
+
+  const baseNumber = `INV-OPEN-${input.customerCode}-${input.openingDate.slice(0, 4)}`;
+  let invoiceNumber = baseNumber;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const exists = await tx.query<{ id: number }>(
+      `SELECT id FROM invoices WHERE company_id = $1 AND invoice_number = $2 LIMIT 1`,
+      [companyId, invoiceNumber]
+    );
+    if (exists.rows.length === 0) break;
+    invoiceNumber = `${baseNumber}-${attempt + 2}`;
+  }
+
+  const invIns = await tx.query<{ id: number }>(
+    `INSERT INTO invoices (
+       company_id, invoice_number, customer_id, invoice_date, due_date, terms_label,
+       status, is_sales_receipt, is_tax_exempt, subtotal, tax_rate, tax_amount, total,
+       total_cost, amount_paid, balance_due, notes,
+       currency_code, exchange_rate, foreign_total, foreign_balance_due
+     ) VALUES (
+       $1, $2, $3, $4::DATE, $4::DATE, $5,
+       'sent', FALSE, FALSE, $6::NUMERIC(19,4), 0, 0, $6::NUMERIC(19,4),
+       0, 0, $6::NUMERIC(19,4), $7,
+       $8, $9::NUMERIC(19,6), $10::NUMERIC(19,4), $10::NUMERIC(19,4)
+     ) RETURNING id`,
+    [
+      companyId,
+      invoiceNumber,
+      input.customerId,
+      input.openingDate,
+      input.terms,
+      formatDecimal4(base4),
+      `Opening balance captured at customer onboarding (${input.customerCode})`,
+      fx.currencyCode,
+      fx.rateStr,
+      formatDecimal4(input.openingBalance),
+    ]
+  );
+  const invoiceId = Number(invIns.rows[0].id);
+
+  await tx.query(
+    `INSERT INTO invoice_lines (
+       company_id, invoice_id, line_order, description, quantity, rate, amount,
+       unit_cost, total_cost, taxable
+     ) VALUES ($1, $2, 1, 'Opening Balance', 1, $3::NUMERIC(19,4), $3::NUMERIC(19,4), 0, 0, FALSE)`,
+    [companyId, invoiceId, formatDecimal4(base4)]
+  );
+
+  const posted = await postJournalEntry(tx, companyId, actor, {
+    txnDate: input.openingDate,
+    description: `Opening balance for ${input.customerName} (${input.customerCode})`,
+    reference: invoiceNumber,
+    sourceType: 'opening_balance',
+    sourceId: invoiceId,
+    idempotencyKey: `opening-balance-${input.customerId}`,
+    lines: [
+      {
+        accountId: ctx.ar1100,
+        debit: formatDecimal4(base4),
+        credit: '0.0000',
+        description: `Opening AR — ${input.customerName}`,
+        partyType: 'customer',
+        partyId: input.customerId,
+      },
+      {
+        accountId: ctx.openingBalanceEquity3900,
+        debit: '0.0000',
+        credit: formatDecimal4(base4),
+        description: `Opening balance equity — ${input.customerCode}`,
+      },
+    ],
+  });
+
+  await tx.query(
+    `UPDATE invoices SET journal_txn_id = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, invoiceId, posted.transaction.id]
+  );
+  await tx.query(
+    `UPDATE customers SET opening_balance_invoice_id = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, input.customerId, invoiceId]
+  );
+  await recalculateCustomerBalance(tx, companyId, input.customerId);
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'CUSTOMER_OPENING_BALANCE_POSTED',
+    tableName: 'invoices',
+    recordId: invoiceId,
+    newValues: {
+      customerId: input.customerId,
+      invoiceNumber,
+      openingBalance: formatDecimal4(input.openingBalance),
+      baseAmount: formatDecimal4(base4),
+      currencyCode: fx.currencyCode,
+      exchangeRate: fx.rateStr,
+      journalTxnId: posted.transaction.id,
+    },
+  });
+}
+
+/**
+ * D-10: an is_tax_exempt flag is honored only while an active, non-expired
+ * reseller permit exists. The rule can be disabled per company for legacy data.
+ */
+async function resolveCustomerTaxExemption(
+  tx: Transaction,
+  companyId: number,
+  customerId: number,
+  asOfDate: string,
+  requested: boolean
+): Promise<{ valid: boolean; reason: string | null }> {
+  if (!requested) return { valid: false, reason: null };
+
+  const cfgRes = await tx.query<{ require_permit: boolean }>(
+    `SELECT require_tax_exemption_permit AS require_permit FROM companies WHERE id = $1 LIMIT 1`,
+    [companyId]
+  );
+  if (!cfgRes.rows[0]?.require_permit) return { valid: true, reason: null };
+
+  const validPermit = await tx.query<{ id: number }>(
+    `SELECT id FROM reseller_permits
+      WHERE company_id = $1 AND customer_id = $2 AND is_active = TRUE
+        AND (expires_at IS NULL OR expires_at >= $3::DATE)
+      LIMIT 1`,
+    [companyId, customerId, asOfDate]
+  );
+  if (validPermit.rows.length > 0) return { valid: true, reason: null };
+
+  const anyPermit = await tx.query<{ id: number }>(
+    `SELECT id FROM reseller_permits
+      WHERE company_id = $1 AND customer_id = $2 AND is_active = TRUE
+      LIMIT 1`,
+    [companyId, customerId]
+  );
+  return {
+    valid: false,
+    reason: anyPermit.rows.length > 0 ? 'PERMIT_EXPIRED' : 'NO_VALID_PERMIT',
+  };
 }
 
 export async function updateCustomer(
@@ -256,6 +538,27 @@ export async function updateCustomer(
         : formatDecimal4(parseDecimal4(updates.creditLimit))
       : row.credit_limit;
 
+  let nextStatus = row.customer_status;
+  if (updates.customerStatus !== undefined) {
+    const requestedStatus = String(updates.customerStatus);
+    if (!['active', 'inactive', 'blocked'].includes(requestedStatus)) {
+      throw new AccountingError(400, `Invalid customerStatus '${requestedStatus}'`, 'INVALID_CUSTOMER_STATUS');
+    }
+    nextStatus = requestedStatus;
+  }
+  if (updates.isActive !== undefined) {
+    nextStatus = Boolean(updates.isActive) ? 'active' : 'inactive';
+  }
+  const nextIsActive =
+    updates.isActive !== undefined ? Boolean(updates.isActive) : nextStatus !== 'inactive';
+
+  const nextCurrency = String(updates.currencyCode ?? row.currency_code ?? 'ZMW')
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{3}$/.test(nextCurrency)) {
+    throw new AccountingError(400, 'currencyCode must be a 3-letter ISO code', 'INVALID_CURRENCY');
+  }
+
   await tx.query(
     `UPDATE customers
         SET name = $3,
@@ -269,7 +572,14 @@ export async function updateCustomer(
             credit_limit = $11::NUMERIC(19,4),
             is_tax_exempt = $12,
             notes = $13,
-            is_active = $14
+            is_active = $14,
+            customer_status = $15,
+            currency_code = $16,
+            tax_registration_number = $17,
+            tax_jurisdiction = $18,
+            exemption_certificate_number = $19,
+            exemption_certificate_expiry_date = $20::DATE,
+            withholding_tax_classification = $21
       WHERE company_id = $1 AND id = $2`,
     [
       companyId,
@@ -285,7 +595,24 @@ export async function updateCustomer(
       nextCreditLimit,
       updates.isTaxExempt !== undefined ? Boolean(updates.isTaxExempt) : row.is_tax_exempt,
       updates.notes !== undefined ? updates.notes?.trim() || null : row.notes,
-      updates.isActive !== undefined ? Boolean(updates.isActive) : row.is_active,
+      nextIsActive,
+      nextStatus,
+      nextCurrency,
+      updates.taxRegistrationNumber !== undefined
+        ? updates.taxRegistrationNumber?.trim() || null
+        : row.tax_registration_number,
+      updates.taxJurisdiction !== undefined
+        ? updates.taxJurisdiction?.trim() || null
+        : row.tax_jurisdiction,
+      updates.exemptionCertificateNumber !== undefined
+        ? updates.exemptionCertificateNumber?.trim() || null
+        : row.exemption_certificate_number,
+      updates.exemptionCertificateExpiryDate !== undefined
+        ? updates.exemptionCertificateExpiryDate || null
+        : row.exemption_certificate_expiry_date,
+      updates.withholdingTaxClassification !== undefined
+        ? updates.withholdingTaxClassification?.trim() || null
+        : row.withholding_tax_classification,
     ]
   );
 
@@ -296,8 +623,18 @@ export async function updateCustomer(
     action: 'CUSTOMER_UPDATED',
     tableName: 'customers',
     recordId: customerId,
-    oldValues: { name: row.name, terms: row.terms_label, isActive: row.is_active },
-    newValues: updates,
+    oldValues: {
+      name: row.name,
+      terms: row.terms_label,
+      isActive: row.is_active,
+      customerStatus: row.customer_status,
+      creditLimit: row.credit_limit,
+    },
+    newValues: {
+      ...updates,
+      customerStatus: nextStatus,
+      creditLimit: nextCreditLimit,
+    },
   });
 
   const all = await listCustomers(tx, companyId, true);
@@ -413,6 +750,7 @@ export interface CreateInvoiceInput {
   poNumber?: string | null;
   isSalesReceipt?: boolean;
   isTaxExempt?: boolean;
+  creditOverrideReason?: string | null;
   taxRate?: string | number | null;
   depositToAccountId?: number | null;
   currencyCode?: string | null;
@@ -794,8 +1132,10 @@ export async function createInvoiceOrSalesReceipt(
     balance: string;
     is_tax_exempt: boolean;
     customer_status: string;
+    currency_code: string;
   }>(
-    `SELECT id, company_name, terms_label, credit_limit::text, balance::text, is_tax_exempt, customer_status
+    `SELECT id, company_name, terms_label, credit_limit::text, balance::text, is_tax_exempt,
+            customer_status, currency_code
        FROM customers WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, customerId]
   );
@@ -804,9 +1144,12 @@ export async function createInvoiceOrSalesReceipt(
   }
   const customer = custRes.rows[0];
 
-  // Customer status check: blocked customers cannot transact
+  // Customer lifecycle check: only active customers may transact (P2/G-05)
   if (customer.customer_status === 'blocked') {
     throw new AccountingError(409, `Customer ${customer.company_name} is blocked and cannot transact`, 'CUSTOMER_BLOCKED');
+  }
+  if (customer.customer_status === 'inactive') {
+    throw new AccountingError(409, `Customer ${customer.company_name} is inactive and cannot transact`, 'CUSTOMER_INACTIVE');
   }
 
   const invoiceDate = input.invoiceDate ? assertIsoDate(input.invoiceDate, 'invoiceDate') : todayIsoDate();
@@ -826,7 +1169,7 @@ export async function createInvoiceOrSalesReceipt(
   const fx = await resolveExchangeRate6(
     tx,
     companyId,
-    input.currencyCode,
+    input.currencyCode || customer.currency_code || ctx.baseCurrency,
     ctx.baseCurrency,
     invoiceDate,
     input.exchangeRate
@@ -850,7 +1193,16 @@ export async function createInvoiceOrSalesReceipt(
     throw new AccountingError(409, `Document number ${invoiceNumber} already exists`, 'DUPLICATE_INVOICE_NUMBER');
   }
 
-  const isTaxExempt = input.isTaxExempt !== undefined ? Boolean(input.isTaxExempt) : Boolean(customer.is_tax_exempt);
+  const requestedTaxExempt =
+    input.isTaxExempt !== undefined ? Boolean(input.isTaxExempt) : Boolean(customer.is_tax_exempt);
+  const taxExemption = await resolveCustomerTaxExemption(
+    tx,
+    companyId,
+    customerId,
+    invoiceDate,
+    requestedTaxExempt
+  );
+  const isTaxExempt = taxExemption.valid;
   const taxRatePct6 = isTaxExempt ? 0n : parseDecimal6(input.taxRate ?? 0);
 
   let depositAccountId: number | null = null;
@@ -926,16 +1278,37 @@ export async function createInvoiceOrSalesReceipt(
   const baseTax4 = convertForeign4ToBase4(foreignTax4, fx.rate6, ctx.roundingMode);
   const baseTotal4 = baseSubtotal4 + baseTax4;
 
-  // Enforce Customer Credit Limit for open AR invoices
+  // Enforce Customer Credit Limit for open AR invoices (D-9). An approved
+  // override requires customers:change_credit_limit plus a written reason.
   if (!isSalesReceipt && customer.credit_limit !== null) {
     const limit4 = parseDecimal4(customer.credit_limit);
-    const nextAr4 = parseDecimal4(customer.balance) + baseTotal4;
+    const exposure = await getCustomerCreditExposure(tx, companyId, customerId);
+    const nextAr4 = exposure.exposure4 + baseTotal4;
     if (nextAr4 > limit4) {
-      throw new AccountingError(
-        409,
-        `Invoice exceeds ${customer.company_name}'s credit limit (${formatDecimal2(limit4)}).`,
-        'CREDIT_LIMIT_EXCEEDED'
-      );
+      const overrideReason = String(input.creditOverrideReason || '').trim();
+      const canOverride =
+        overrideReason.length > 0 && hasPermission(actor.role, 'customers:change_credit_limit');
+      if (!canOverride) {
+        throw new AccountingError(
+          409,
+          `Invoice exceeds ${customer.company_name}'s credit limit (${formatDecimal2(limit4)}).`,
+          'CREDIT_LIMIT_EXCEEDED'
+        );
+      }
+      await writeAuditLog(tx, {
+        companyId,
+        actorUserId: actor.userId,
+        actorUsername: actor.username,
+        action: 'CREDIT_LIMIT_OVERRIDE',
+        tableName: 'customers',
+        recordId: customerId,
+        oldValues: { exposure: formatDecimal4(exposure.exposure4), creditLimit: formatDecimal4(limit4) },
+        newValues: {
+          invoiceTotal: formatDecimal4(baseTotal4),
+          projectedExposure: formatDecimal4(nextAr4),
+          reason: overrideReason,
+        },
+      });
     }
   }
 
@@ -1744,6 +2117,204 @@ export async function recordCustomerPayment(
   return { payment: created, idempotentReplay: false };
 }
 
+export async function listUnappliedPayments(
+  tx: Transaction,
+  companyId: number,
+  customerId: number
+) {
+  const res = await tx.query<{
+    id: number;
+    payment_number: string;
+    payment_date: string;
+    amount: string;
+    currency_code: string;
+    payment_method: string;
+    reference_number: string | null;
+    unapplied: string;
+  }>(
+    `SELECT p.id, p.payment_number, p.payment_date::text, p.amount::text, p.currency_code,
+            p.payment_method, p.reference_number,
+            (p.amount - COALESCE(alloc.alloc_sum, 0))::NUMERIC(19,4)::text AS unapplied
+       FROM payments p
+       LEFT JOIN (
+         SELECT payment_id, SUM(amount) AS alloc_sum
+           FROM payment_allocations
+          WHERE company_id = $1
+          GROUP BY payment_id
+       ) alloc ON alloc.payment_id = p.id
+      WHERE p.company_id = $1 AND p.customer_id = $2 AND p.is_voided = FALSE
+        AND p.amount - COALESCE(alloc.alloc_sum, 0) > 0
+      ORDER BY p.payment_date ASC, p.id ASC`,
+    [companyId, customerId]
+  );
+  return res.rows.map(r => ({
+    paymentId: Number(r.id),
+    paymentNumber: r.payment_number,
+    paymentDate: r.payment_date,
+    amount: toMoneyNumber(parseDecimal4(r.amount)),
+    unapplied: toMoneyNumber(parseDecimal4(r.unapplied)),
+    currencyCode: r.currency_code,
+    paymentMethod: r.payment_method,
+    referenceNumber: r.reference_number || '',
+  }));
+}
+
+/**
+ * Applies previously-received unapplied cash to a specific open invoice.
+ * The receipt already posted Dr Bank / Cr AR, so this only moves the
+ * allocation record and invoice balances — no second journal is posted (D-5).
+ */
+export async function applyUnappliedPaymentToInvoice(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  paymentId: number,
+  input: { invoiceId: number; amount?: string | number | null }
+) {
+  const paymentRes = await tx.query<{
+    id: number;
+    payment_number: string;
+    customer_id: number;
+    amount: string;
+    is_voided: boolean;
+  }>(
+    `SELECT id, payment_number, customer_id, amount::text, is_voided
+       FROM payments WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, paymentId]
+  );
+  if (paymentRes.rows.length === 0) {
+    throw new AccountingError(404, 'Payment not found', 'PAYMENT_NOT_FOUND');
+  }
+  const payment = paymentRes.rows[0];
+  if (payment.is_voided) {
+    throw new AccountingError(409, 'Voided payments cannot be allocated', 'PAYMENT_VOIDED');
+  }
+
+  const allocatedRes = await tx.query<{ allocated: string }>(
+    `SELECT COALESCE(SUM(amount), 0)::NUMERIC(19,4)::text AS allocated
+       FROM payment_allocations WHERE company_id = $1 AND payment_id = $2`,
+    [companyId, paymentId]
+  );
+  const unapplied4 = parseDecimal4(payment.amount) - parseDecimal4(allocatedRes.rows[0].allocated);
+  if (unapplied4 <= 0n) {
+    throw new AccountingError(409, 'Payment has no unapplied balance', 'PAYMENT_FULLY_ALLOCATED');
+  }
+
+  const invoiceId = Number(input.invoiceId);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+    throw new AccountingError(400, 'Valid invoiceId is required', 'INVALID_INVOICE');
+  }
+  const invoiceRes = await tx.query<{
+    id: number;
+    invoice_number: string;
+    customer_id: number;
+    status: string;
+    is_sales_receipt: boolean;
+    total: string;
+    amount_paid: string;
+    balance_due: string;
+    currency_code: string;
+    exchange_rate: string;
+    foreign_balance_due: string;
+  }>(
+    `SELECT id, invoice_number, customer_id, status, is_sales_receipt, total::text,
+            amount_paid::text, balance_due::text, currency_code, exchange_rate::text,
+            foreign_balance_due::text
+       FROM invoices WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, invoiceId]
+  );
+  if (invoiceRes.rows.length === 0) {
+    throw new AccountingError(404, 'Invoice not found', 'INVOICE_NOT_FOUND');
+  }
+  const invoice = invoiceRes.rows[0];
+  if (Number(invoice.customer_id) !== Number(payment.customer_id)) {
+    throw new AccountingError(400, 'Invoice belongs to a different customer', 'CUSTOMER_MISMATCH');
+  }
+  if (invoice.status === 'voided' || invoice.is_sales_receipt) {
+    throw new AccountingError(409, 'Invoice cannot receive an allocation', 'INVOICE_NOT_ALLOCATABLE');
+  }
+
+  const balanceDue4 = parseDecimal4(invoice.balance_due);
+  const requested4 = input.amount !== undefined && input.amount !== null && input.amount !== ''
+    ? parseDecimal4(input.amount)
+    : (unapplied4 < balanceDue4 ? unapplied4 : balanceDue4);
+  if (requested4 <= 0n) {
+    throw new AccountingError(400, 'Allocation amount must be greater than zero', 'INVALID_ALLOCATION');
+  }
+  if (requested4 > unapplied4) {
+    throw new AccountingError(400, 'Allocation exceeds unapplied payment balance', 'ALLOCATION_EXCEEDS_UNAPPLIED');
+  }
+  if (requested4 > balanceDue4) {
+    throw new AccountingError(400, 'Allocation exceeds invoice balance due', 'ALLOCATION_EXCEEDS_INVOICE');
+  }
+
+  const invRate6 = parseDecimal6(invoice.exchange_rate);
+  const appliedForeign4 =
+    requested4 === balanceDue4
+      ? parseDecimal4(invoice.foreign_balance_due)
+      : parseDecimal4(invoice.foreign_balance_due) === balanceDue4
+      ? requested4
+      : divRoundBigInt(requested4 * 1000000n, invRate6 > 0n ? invRate6 : 1000000n);
+
+  await tx.query(
+    `INSERT INTO payment_allocations (company_id, payment_id, invoice_id, amount, from_remainder)
+     VALUES ($1, $2, $3, $4::NUMERIC(19,4), TRUE)`,
+    [companyId, paymentId, invoiceId, formatDecimal4(requested4)]
+  );
+
+  const nextPaid4 = parseDecimal4(invoice.amount_paid) + requested4;
+  const nextBalance4 = balanceDue4 - requested4;
+  const nextForeignBalance4 =
+    parseDecimal4(invoice.foreign_balance_due) > appliedForeign4
+      ? parseDecimal4(invoice.foreign_balance_due) - appliedForeign4
+      : 0n;
+  await tx.query(
+    `UPDATE invoices
+        SET amount_paid = $3::NUMERIC(19,4),
+            balance_due = $4::NUMERIC(19,4),
+            foreign_balance_due = $5::NUMERIC(19,4),
+            status = $6
+      WHERE company_id = $1 AND id = $2`,
+    [
+      companyId,
+      invoiceId,
+      formatDecimal4(nextPaid4),
+      formatDecimal4(nextBalance4),
+      formatDecimal4(nextForeignBalance4),
+      nextBalance4 === 0n ? 'paid' : 'partial',
+    ]
+  );
+
+  await recalculateCustomerBalance(tx, companyId, Number(payment.customer_id));
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'CUSTOMER_PAYMENT_ALLOCATED',
+    tableName: 'payment_allocations',
+    recordId: paymentId,
+    newValues: {
+      paymentNumber: payment.payment_number,
+      invoiceId,
+      invoiceNumber: invoice.invoice_number,
+      amount: formatDecimal4(requested4),
+      remainingUnapplied: formatDecimal4(unapplied4 - requested4),
+    },
+  });
+
+  return {
+    paymentId,
+    paymentNumber: payment.payment_number,
+    invoiceId,
+    invoiceNumber: invoice.invoice_number,
+    amount: toMoneyNumber(requested4),
+    invoiceBalanceDue: toMoneyNumber(nextBalance4),
+    remainingUnapplied: toMoneyNumber(unapplied4 - requested4),
+    invoiceStatus: nextBalance4 === 0n ? 'paid' : 'partial',
+  };
+}
+
 export async function voidCustomerPayment(
   tx: Transaction,
   companyId: number,
@@ -2536,6 +3107,135 @@ export async function convertEstimateToInvoice(
 // AR AGING, STATEMENTS, COLLECTIONS/REMINDERS, RECURRING INVOICES & EMAIL LOG
 // ============================================================================
 
+interface AgingInvoiceRow {
+  invoiceId: number;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string;
+  balance4: bigint;
+}
+
+function daysBetweenIso(fromIso: string, toIso: string): number {
+  const from = Date.parse(`${fromIso}T00:00:00Z`);
+  const to = Date.parse(`${toIso}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return Math.floor((to - from) / 86400000);
+}
+
+/**
+ * D-3: unapplied receipts are applied FIFO to the oldest open invoices before
+ * aging buckets are computed. Buckets therefore reconcile to the net AR
+ * subledger balance instead of gross invoice balances.
+ */
+function buildAgingBuckets(invoices: AgingInvoiceRow[], unapplied4: bigint, asOf: string) {
+  const buckets = {
+    current4: 0n,
+    d1_30_4: 0n,
+    d31_60_4: 0n,
+    d61_90_4: 0n,
+    d90plus4: 0n,
+  };
+  let remainingCredit4 = unapplied4;
+  let appliedCredit4 = 0n;
+  const lines: Array<{
+    invoiceId: number;
+    invoiceNumber: string;
+    invoiceDate: string;
+    dueDate: string;
+    daysPastDue: number;
+    creditApplied: number;
+    balanceDue: number;
+    originalBalanceDue: number;
+  }> = [];
+
+  for (const inv of invoices) {
+    const applied4 =
+      remainingCredit4 > 0n
+        ? remainingCredit4 < inv.balance4
+          ? remainingCredit4
+          : inv.balance4
+        : 0n;
+    remainingCredit4 -= applied4;
+    appliedCredit4 += applied4;
+    const net4 = inv.balance4 - applied4;
+    const days = daysBetweenIso(inv.dueDate, asOf);
+
+    if (days <= 0) buckets.current4 += net4;
+    else if (days <= 30) buckets.d1_30_4 += net4;
+    else if (days <= 60) buckets.d31_60_4 += net4;
+    else if (days <= 90) buckets.d61_90_4 += net4;
+    else buckets.d90plus4 += net4;
+
+    lines.push({
+      invoiceId: inv.invoiceId,
+      invoiceNumber: inv.invoiceNumber,
+      invoiceDate: inv.invoiceDate,
+      dueDate: inv.dueDate,
+      daysPastDue: Math.max(0, days),
+      creditApplied: toMoneyNumber(applied4),
+      balanceDue: toMoneyNumber(net4),
+      originalBalanceDue: toMoneyNumber(inv.balance4),
+    });
+  }
+
+  return {
+    buckets,
+    lines,
+    appliedCredit4,
+    remainingCredit4,
+    total4:
+      buckets.current4 +
+      buckets.d1_30_4 +
+      buckets.d31_60_4 +
+      buckets.d61_90_4 +
+      buckets.d90plus4,
+  };
+}
+
+async function getCustomerAgingBuckets(
+  tx: Transaction,
+  companyId: number,
+  customerId: number,
+  asOfDate: string
+) {
+  const invRes = await tx.query<{
+    id: number;
+    invoice_number: string;
+    invoice_date: string;
+    due_date: string;
+    balance_due: string;
+  }>(
+    `SELECT id, invoice_number, invoice_date::text, due_date::text, balance_due::text
+       FROM invoices
+      WHERE company_id = $1 AND customer_id = $2
+        AND is_sales_receipt = FALSE AND status <> 'voided'
+        AND balance_due > 0 AND invoice_date <= $3::DATE
+      ORDER BY due_date ASC, id ASC`,
+    [companyId, customerId, asOfDate]
+  );
+  const unappliedRes = await tx.query<{ unapplied: string }>(
+    `SELECT COALESCE(SUM(p.amount - COALESCE(alloc.alloc_sum, 0)), 0)::NUMERIC(19,4)::text AS unapplied
+       FROM payments p
+       LEFT JOIN (
+         SELECT payment_id, SUM(amount) AS alloc_sum
+           FROM payment_allocations WHERE company_id = $1 GROUP BY payment_id
+       ) alloc ON alloc.payment_id = p.id
+      WHERE p.company_id = $1 AND p.customer_id = $2 AND p.is_voided = FALSE
+        AND p.payment_date <= $3::DATE`,
+    [companyId, customerId, asOfDate]
+  );
+  const unapplied4 = parseDecimal4(unappliedRes.rows[0]?.unapplied ?? 0);
+  const rows: AgingInvoiceRow[] = invRes.rows.map(r => ({
+    invoiceId: Number(r.id),
+    invoiceNumber: r.invoice_number,
+    invoiceDate: r.invoice_date,
+    dueDate: r.due_date,
+    balance4: parseDecimal4(r.balance_due),
+  }));
+  const built = buildAgingBuckets(rows, unapplied4, asOfDate);
+  return { ...built, unapplied4 };
+}
+
 export async function getArAgingReport(tx: Transaction, companyId: number, asOfDate?: string) {
   const asOf = asOfDate ? assertIsoDate(asOfDate, 'asOfDate') : todayIsoDate();
   const res = await tx.query<{
@@ -2561,91 +3261,81 @@ export async function getArAgingReport(tx: Transaction, companyId: number, asOfD
     [companyId, asOf]
   );
 
+  const unappliedRes = await tx.query<{ customer_id: number; unapplied: string }>(
+    `SELECT p.customer_id,
+            SUM(p.amount - COALESCE(alloc.alloc_sum, 0))::NUMERIC(19,4)::text AS unapplied
+       FROM payments p
+       LEFT JOIN (
+         SELECT payment_id, SUM(amount) AS alloc_sum
+           FROM payment_allocations WHERE company_id = $1 GROUP BY payment_id
+       ) alloc ON alloc.payment_id = p.id
+      WHERE p.company_id = $1 AND p.is_voided = FALSE
+        AND p.payment_date <= $2::DATE
+      GROUP BY p.customer_id`,
+    [companyId, asOf]
+  );
+  const creditByCustomer = new Map<number, bigint>();
+  for (const r of unappliedRes.rows) {
+    creditByCustomer.set(Number(r.customer_id), parseDecimal4(r.unapplied));
+  }
+
   const byCustomer = new Map<
     number,
-    {
-      customerId: number;
-      customerName: string;
-      current4: bigint;
-      d1_30_4: bigint;
-      d31_60_4: bigint;
-      d61_90_4: bigint;
-      d90plus4: bigint;
-      total4: bigint;
-      invoices: any[];
-    }
+    { customerId: number; customerName: string; invoices: AgingInvoiceRow[] }
   >();
-
-  let grandCurrent = 0n;
-  let grand1_30 = 0n;
-  let grand31_60 = 0n;
-  let grand61_90 = 0n;
-  let grand90plus = 0n;
-
   for (const r of res.rows) {
     const cid = Number(r.customer_id);
-    const bal4 = parseDecimal4(r.balance_due);
-    const days = Number(r.days_past_due);
     const entry = byCustomer.get(cid) ?? {
       customerId: cid,
       customerName: r.customer_name,
-      current4: 0n,
-      d1_30_4: 0n,
-      d31_60_4: 0n,
-      d61_90_4: 0n,
-      d90plus4: 0n,
-      total4: 0n,
       invoices: [],
     };
-    if (days <= 0) {
-      entry.current4 += bal4;
-      grandCurrent += bal4;
-    } else if (days <= 30) {
-      entry.d1_30_4 += bal4;
-      grand1_30 += bal4;
-    } else if (days <= 60) {
-      entry.d31_60_4 += bal4;
-      grand31_60 += bal4;
-    } else if (days <= 90) {
-      entry.d61_90_4 += bal4;
-      grand61_90 += bal4;
-    } else {
-      entry.d90plus4 += bal4;
-      grand90plus += bal4;
-    }
-    entry.total4 += bal4;
     entry.invoices.push({
       invoiceId: Number(r.invoice_id),
       invoiceNumber: r.invoice_number,
       invoiceDate: r.invoice_date,
       dueDate: r.due_date,
-      daysPastDue: Math.max(0, days),
-      balanceDue: toMoneyNumber(bal4),
+      balance4: parseDecimal4(r.balance_due),
     });
     byCustomer.set(cid, entry);
   }
 
-  const totalAr4 = grandCurrent + grand1_30 + grand31_60 + grand61_90 + grand90plus;
-  return {
-    asOfDate: asOf,
-    customers: Array.from(byCustomer.values()).map(c => ({
+  const grand = { current4: 0n, d1_30_4: 0n, d31_60_4: 0n, d61_90_4: 0n, d90plus4: 0n, total4: 0n };
+  const customers = Array.from(byCustomer.values()).map(c => {
+    const unapplied4 = creditByCustomer.get(c.customerId) ?? 0n;
+    const aging = buildAgingBuckets(c.invoices, unapplied4, asOf);
+    grand.current4 += aging.buckets.current4;
+    grand.d1_30_4 += aging.buckets.d1_30_4;
+    grand.d31_60_4 += aging.buckets.d31_60_4;
+    grand.d61_90_4 += aging.buckets.d61_90_4;
+    grand.d90plus4 += aging.buckets.d90plus4;
+    grand.total4 += aging.total4;
+    return {
       customerId: c.customerId,
       customerName: c.customerName,
-      current: toMoneyNumber(c.current4),
-      days1To30: toMoneyNumber(c.d1_30_4),
-      days31To60: toMoneyNumber(c.d31_60_4),
-      days61To90: toMoneyNumber(c.d61_90_4),
-      daysOver90: toMoneyNumber(c.d90plus4),
-      total: toMoneyNumber(c.total4),
-      invoices: c.invoices,
-    })),
+      current: toMoneyNumber(aging.buckets.current4),
+      days1To30: toMoneyNumber(aging.buckets.d1_30_4),
+      days31To60: toMoneyNumber(aging.buckets.d31_60_4),
+      days61To90: toMoneyNumber(aging.buckets.d61_90_4),
+      daysOver90: toMoneyNumber(aging.buckets.d90plus4),
+      total: toMoneyNumber(aging.total4),
+      unappliedCredit: toMoneyNumber(unapplied4),
+      unappliedApplied: toMoneyNumber(aging.appliedCredit4),
+      remainingUnappliedCredit: toMoneyNumber(aging.remainingCredit4),
+      invoices: aging.lines,
+    };
+  });
+
+  return {
+    asOfDate: asOf,
+    customers,
     totals: {
-      current: toMoneyNumber(grandCurrent),
-      days1To30: toMoneyNumber(grand1_30),
-      days31To60: toMoneyNumber(grand31_60),
-      days61To90: toMoneyNumber(grand61_90),
-      daysOver90: toMoneyNumber(grand90plus),
-      total: toMoneyNumber(totalAr4),
+      current: toMoneyNumber(grand.current4),
+      days1To30: toMoneyNumber(grand.d1_30_4),
+      days31To60: toMoneyNumber(grand.d31_60_4),
+      days61To90: toMoneyNumber(grand.d61_90_4),
+      daysOver90: toMoneyNumber(grand.d90plus4),
+      total: toMoneyNumber(grand.total4),
     },
   };
 }
@@ -2654,11 +3344,27 @@ export async function generateCustomerStatement(
   tx: Transaction,
   companyId: number,
   actor: ActorContext,
-  input: { customerId: number; periodStart?: string; periodEnd?: string; saveSnapshot?: boolean }
+  input: {
+    customerId: number;
+    periodStart?: string;
+    periodEnd?: string;
+    saveSnapshot?: boolean;
+  }
 ) {
   const customerId = Number(input.customerId);
-  const custRes = await tx.query<{ id: number; company_name: string; email: string | null; balance: string }>(
-    `SELECT id, company_name, email, balance::text FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1`,
+  const custRes = await tx.query<{
+    id: number;
+    company_name: string;
+    customer_code: string | null;
+    email: string | null;
+    balance: string;
+    currency_code: string;
+    billing_address: string | null;
+    tax_registration_number: string | null;
+  }>(
+    `SELECT id, company_name, customer_code, email, balance::text, currency_code,
+            billing_address, tax_registration_number
+       FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1`,
     [companyId, customerId]
   );
   if (custRes.rows.length === 0) throw new AccountingError(404, 'Customer not found');
@@ -2666,6 +3372,9 @@ export async function generateCustomerStatement(
 
   const periodEnd = input.periodEnd ? assertIsoDate(input.periodEnd, 'periodEnd') : todayIsoDate();
   const periodStart = input.periodStart ? assertIsoDate(input.periodStart, 'periodStart') : `${periodEnd.slice(0, 7)}-01`;
+  if (periodStart > periodEnd) {
+    throw new AccountingError(400, 'periodStart must be on or before periodEnd', 'INVALID_STATEMENT_PERIOD');
+  }
 
   // Opening balance prior to periodStart
   const priorInv = await tx.query<{ s: string }>(
@@ -2730,11 +3439,43 @@ export async function generateCustomerStatement(
     };
   });
 
+  const aging = await getCustomerAgingBuckets(tx, companyId, customerId, periodEnd);
+
+  const statement = {
+    customerId,
+    customerName: cust.company_name,
+    customerCode: cust.customer_code ?? '',
+    customerEmail: cust.email || '',
+    billingAddress: cust.billing_address || '',
+    taxRegistrationNumber: cust.tax_registration_number || '',
+    currencyCode: cust.currency_code || 'ZMW',
+    periodStart,
+    periodEnd,
+    openingBalance: toMoneyNumber(openingBal4),
+    closingBalance: toMoneyNumber(running4),
+    lines,
+    aging: {
+      current: toMoneyNumber(aging.buckets.current4),
+      days1To30: toMoneyNumber(aging.buckets.d1_30_4),
+      days31To60: toMoneyNumber(aging.buckets.d31_60_4),
+      days61To90: toMoneyNumber(aging.buckets.d61_90_4),
+      daysOver90: toMoneyNumber(aging.buckets.d90plus4),
+      total: toMoneyNumber(aging.total4),
+      unappliedCredit: toMoneyNumber(aging.unapplied4),
+      unappliedApplied: toMoneyNumber(aging.appliedCredit4),
+      remainingUnappliedCredit: toMoneyNumber(aging.remainingCredit4),
+      invoices: aging.lines,
+    },
+  };
+
+  let statementId: number | null = null;
   if (input.saveSnapshot) {
-    await tx.query(
+    const ins = await tx.query<{ id: number }>(
       `INSERT INTO customer_statements (
-         company_id, customer_id, statement_date, period_start, period_end, opening_balance, closing_balance
-       ) VALUES ($1, $2, $3::DATE, $4::DATE, $5::DATE, $6::NUMERIC(19,4), $7::NUMERIC(19,4))`,
+         company_id, customer_id, statement_date, period_start, period_end,
+         opening_balance, closing_balance, snapshot_json
+       ) VALUES ($1, $2, $3::DATE, $4::DATE, $5::DATE, $6::NUMERIC(19,4), $7::NUMERIC(19,4), $8::JSONB)
+       RETURNING id`,
       [
         companyId,
         customerId,
@@ -2743,28 +3484,130 @@ export async function generateCustomerStatement(
         periodEnd,
         formatDecimal4(openingBal4),
         formatDecimal4(running4),
+        JSON.stringify(statement),
       ]
     );
+    statementId = Number(ins.rows[0].id);
     await writeAuditLog(tx, {
       companyId,
       actorUserId: actor.userId,
       actorUsername: actor.username,
       action: 'CUSTOMER_STATEMENT_GENERATED',
       tableName: 'customer_statements',
-      recordId: customerId,
-      newValues: { periodStart, periodEnd, closingBalance: formatDecimal4(running4) },
+      recordId: statementId,
+      newValues: { customerId, periodStart, periodEnd, closingBalance: formatDecimal4(running4) },
     });
   }
 
+  return { ...statement, statementId };
+}
+
+export async function listCustomerStatements(
+  tx: Transaction,
+  companyId: number,
+  customerId: number,
+  limit = 25
+) {
+  const res = await tx.query<{
+    id: number;
+    statement_date: string;
+    period_start: string;
+    period_end: string;
+    opening_balance: string;
+    closing_balance: string;
+    emailed_at: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, statement_date::text, period_start::text, period_end::text,
+            opening_balance::text, closing_balance::text, emailed_at::text, created_at::text
+       FROM customer_statements
+      WHERE company_id = $1 AND customer_id = $2
+      ORDER BY statement_date DESC, id DESC
+      LIMIT $3`,
+    [companyId, customerId, Math.min(Math.max(Number(limit) || 25, 1), 100)]
+  );
+  return res.rows.map(r => ({
+    statementId: Number(r.id),
+    statementDate: r.statement_date,
+    periodStart: r.period_start,
+    periodEnd: r.period_end,
+    openingBalance: toMoneyNumber(parseDecimal4(r.opening_balance)),
+    closingBalance: toMoneyNumber(parseDecimal4(r.closing_balance)),
+    emailedAt: r.emailed_at,
+    createdAt: r.created_at,
+  }));
+}
+
+/**
+ * Queues a statement email for the tenant delivery worker and records it in
+ * email_log. Mirrors the existing reminder flow, which is also queued.
+ */
+export async function sendCustomerStatement(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    customerId: number;
+    periodStart?: string;
+    periodEnd?: string;
+    recipient?: string | null;
+  }
+) {
+  const statement = await generateCustomerStatement(tx, companyId, actor, {
+    customerId: input.customerId,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    saveSnapshot: true,
+  });
+  const recipient = String(input.recipient || statement.customerEmail || '').trim();
+  if (!recipient) {
+    throw new AccountingError(400, 'A recipient email address is required', 'MISSING_RECIPIENT');
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipient)) {
+    throw new AccountingError(400, 'Recipient email address is invalid', 'INVALID_RECIPIENT');
+  }
+
+  const subject = `Statement ${statement.periodStart} to ${statement.periodEnd} — ${statement.customerName}`;
+  const body = [
+    `Customer: ${statement.customerName} (${statement.customerCode})`,
+    `Statement period: ${statement.periodStart} to ${statement.periodEnd}`,
+    `Opening balance: ${statement.openingBalance.toFixed(2)} ${statement.currencyCode}`,
+    `Closing balance: ${statement.closingBalance.toFixed(2)} ${statement.currencyCode}`,
+    '',
+    ...statement.lines.map(
+      l =>
+        `${l.date}  ${l.type} ${l.number}  charge ${l.charge.toFixed(2)}  credit ${l.credit.toFixed(2)}  balance ${l.runningBalance.toFixed(2)}`
+    ),
+  ].join('\n');
+
+  const emailIns = await tx.query<{ id: number }>(
+    `INSERT INTO email_log (company_id, recipient, subject, entity_type, entity_id, status, sent_by, body)
+     VALUES ($1, $2, $3, 'customer_statement', $4, 'queued', $5, $6)
+     RETURNING id`,
+    [companyId, recipient, subject, statement.statementId, actor.userId, body]
+  );
+  await tx.query(
+    `UPDATE customer_statements SET emailed_at = NOW() WHERE company_id = $1 AND id = $2`,
+    [companyId, statement.statementId]
+  );
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'CUSTOMER_STATEMENT_SENT',
+    tableName: 'customer_statements',
+    recordId: statement.statementId ?? input.customerId,
+    newValues: { recipient, emailLogId: Number(emailIns.rows[0].id), periodStart: statement.periodStart, periodEnd: statement.periodEnd },
+  });
+
   return {
-    customerId,
-    customerName: cust.company_name,
-    customerEmail: cust.email || '',
-    periodStart,
-    periodEnd,
-    openingBalance: toMoneyNumber(openingBal4),
-    closingBalance: toMoneyNumber(running4),
-    lines,
+    statementId: statement.statementId,
+    emailLogId: Number(emailIns.rows[0].id),
+    recipient,
+    subject,
+    periodStart: statement.periodStart,
+    periodEnd: statement.periodEnd,
+    closingBalance: statement.closingBalance,
   };
 }
 

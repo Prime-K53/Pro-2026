@@ -166,6 +166,14 @@ export interface ExamPaper {
   subjectName: string;
   pages: number;
   copies: number;
+  teacherCopies?: number; // D3: fixed at 2 free teacher copies per paper
+  plannedProductionQuantity?: number; // D3: learner quantity + teacher copies
+  billableQuantity?: number; // D3: accepted billable learner quantity (never invoiced for teacher copies)
+  acceptedLearnerQuantity?: number; // D3: accepted learner copies after QC
+  damagedTeacherCopies?: number;
+  damagedLearnerCopies?: number;
+  replacementTeacherCopies?: number;
+  replacementLearnerCopies?: number;
   paperSize: 'A4' | 'A3' | 'B5' | 'Letter';
   printSide: 'Single-Sided' | 'Duplex';
   bindingType: 'Stapled' | 'Saddle-Stitched' | 'Loose Leaf' | 'Booklet';

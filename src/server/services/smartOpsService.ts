@@ -1092,8 +1092,9 @@ export async function accrueReferralEventAndJournal(
       description: `Referral Reward Accrual — ${params.reference}`,
       reference: params.reference,
       sourceType: 'referral_reward',
-      sourceId: params.posOrderId ?? params.referralCodeId,
-      idempotencyKey: `ref-accrual-${companyId}-${params.posOrderId ?? 'manual'}-${Date.now()}-${Math.random()}`,
+      sourceId: params.posOrderId ?? params.referralCodeId,      idempotencyKey: params.posOrderId != null
+      ? `ref-accrual-${companyId}-${params.posOrderId}`
+      : `ref-accrual-manual-${companyId}-${params.referralCodeId ?? 'unknown'}`,
       lines: [
         {
           accountId: expAcctId,

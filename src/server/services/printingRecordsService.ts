@@ -21,6 +21,7 @@ import {
   reserveJobMaterials,
 } from './productionService.ts';
 import { divRoundBigInt, resolveWorkflowAccounts } from './commercialHelpers.ts';
+import { hasPermission } from '../permissions.ts';
 
 /**
  * Server-owned printing production records: prepaid school retainers and
@@ -1123,6 +1124,9 @@ export interface ExamPaperInput {
   subjectName: string;
   pages: number;
   copies: number;
+  teacherCopies?: number;
+  plannedProductionQuantity?: number;
+  billableQuantity?: number;
   rawPaperItemId: number;
   rawTonerItemId: number;
   printSide?: string;
@@ -1302,12 +1306,17 @@ async function createExamProductionJob(
     subjectName: string;
     pages: number;
     copies: number;
+    teacherCopies?: number;
     printSide: 'Single-Sided' | 'Duplex';
     productionDate: string;
     idempotencyKey: string | null;
   }
 ) {
   const p = params.paper;
+  // D3: the press run produces learner + teacher copies. ordered_qty reflects
+  // the full production quantity so produced_qty never exceeds it.
+  const teacherCopies = params.teacherCopies != null ? Number(params.teacherCopies) : 0;
+  const orderedQty = Number(params.copies) + teacherCopies;
   const job = await createPrintingJob(tx, companyId, actor, {
     jobType: 'exam_paper',
     customerId: params.schoolCustomerId,
@@ -1317,8 +1326,8 @@ async function createExamProductionJob(
     machineId: p.machineId ? Number(p.machineId) : null,
     title: `${params.assessmentName} — ${params.className} — ${params.subjectName}`,
     pages: params.pages,
-    copies: params.copies,
-    orderedQty: params.copies,
+    copies: orderedQty,
+    orderedQty,
     printSide: params.printSide,
     makeReadySheets: p.makeReadySheets != null ? Number(p.makeReadySheets) : 0,
     runningWastePct: p.runningWastePct != null ? Number(p.runningWastePct) : 0,
@@ -1502,15 +1511,20 @@ export async function createExamBatch(
       const productionDate = assertIsoDate(p.productionDate, today);
       const jobNumber = await nextPrintingNumber(tx, companyId, 'exam_paper', 'EXM-', 4);
 
+      const teacherCopies = 2; // D3: fixed rule — exactly two free teacher copies per paper
+      const plannedQty = p.plannedProductionQuantity ?? (copies + teacherCopies);
+      const billableQty = p.billableQuantity ?? copies;
+
       const ins = await tx.query<{ id: number }>(
         `INSERT INTO exam_papers (
            company_id, batch_id, job_number, subject_name, pages, copies,
+           teacher_copies, planned_production_quantity, billable_quantity,
            raw_paper_item_id, raw_toner_item_id, paper_spec_id, print_side, binding_type,
            sheets_used, impressions_used, paper_cost, toner_cost, status, production_date,
            notes, paper_size, printing_item_id, machine_id, created_by, queued_at,
            cost_status, cost_warnings
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                   0, 0, 0, 0, 'queued', $12::DATE, $13, $14, $15, $16, $17, NOW(),
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                   0, 0, 0, 0, 'queued', $15::DATE, $16, $17, $18, $19, $20, NOW(),
                    'estimated', '[]'::jsonb)
          RETURNING id`,
         [
@@ -1520,6 +1534,9 @@ export async function createExamBatch(
           subjectName,
           pages,
           copies,
+          teacherCopies,
+          plannedQty,
+          billableQty,
           rawPaperItemId,
           rawTonerItemId,
           paperItem.paper_spec_id != null ? Number(paperItem.paper_spec_id) : null,
@@ -1540,10 +1557,11 @@ export async function createExamBatch(
         customerName,
         assessmentName,
         className,
-        paper: { ...p, rawPaperItemId, rawTonerItemId },
+paper: { ...p, rawPaperItemId, rawTonerItemId },
         subjectName,
         pages,
         copies,
+        teacherCopies,
         printSide,
         productionDate,
         idempotencyKey: input.idempotencyKey ?? null,
@@ -1595,7 +1613,9 @@ export async function createExamBatch(
         reason: 'Examination paper created from server-authoritative batch',
         journalTxnId: null,
         invoiceId: null,
-        idempotencyKey: input.idempotencyKey ?? null,
+        idempotencyKey: input.idempotencyKey
+          ? `${input.idempotencyKey}:paper:${paperId}`
+          : null,
         metadata: {
           productionJobId: Number(job.id),
           productionJobNumber: job.jobNumber,
@@ -3306,6 +3326,14 @@ type ExamPaperRow = {
   subject_name: string;
   pages: number;
   copies: number;
+  teacher_copies: number | null;
+  planned_production_quantity: number | null;
+  billable_quantity: number | null;
+  accepted_learner_quantity: number | null;
+  damaged_teacher_copies: number | null;
+  damaged_learner_copies: number | null;
+  replacement_teacher_copies: number | null;
+  replacement_learner_copies: number | null;
   paper_spec_id: number | null;
   raw_paper_item_id: number;
   raw_toner_item_id: number;
@@ -3350,7 +3378,11 @@ const EXAM_PAPER_SELECT = `
   SELECT p.id, p.job_number,
          b.school_customer_id, b.contract_id, b.assessment_number,
          b.assessment_name, b.class_name, b.learners_count, b.price_per_learner,
-         p.subject_name, p.pages, p.copies, p.paper_spec_id,
+         p.subject_name, p.pages, p.copies,
+         p.teacher_copies, p.planned_production_quantity, p.billable_quantity,
+         p.accepted_learner_quantity, p.damaged_teacher_copies, p.damaged_learner_copies,
+         p.replacement_teacher_copies, p.replacement_learner_copies,
+         p.paper_spec_id,
          p.raw_paper_item_id, p.raw_toner_item_id, p.print_side, p.binding_type,
          p.paper_size, p.printing_item_id, p.production_job_id,
          p.sheets_used, p.impressions_used, p.paper_cost, p.toner_cost, p.material_cost,
@@ -3382,6 +3414,14 @@ function serializeExamPaper(r: ExamPaperRow) {
     subjectName: r.subject_name,
     pages: Number(r.pages),
     copies: Number(r.copies),
+    teacherCopies: r.teacher_copies != null ? Number(r.teacher_copies) : undefined,
+    plannedProductionQuantity: r.planned_production_quantity != null ? Number(r.planned_production_quantity) : undefined,
+    billableQuantity: r.billable_quantity != null ? Number(r.billable_quantity) : undefined,
+    acceptedLearnerQuantity: r.accepted_learner_quantity != null ? Number(r.accepted_learner_quantity) : undefined,
+    damagedTeacherCopies: r.damaged_teacher_copies != null ? Number(r.damaged_teacher_copies) : undefined,
+    damagedLearnerCopies: r.damaged_learner_copies != null ? Number(r.damaged_learner_copies) : undefined,
+    replacementTeacherCopies: r.replacement_teacher_copies != null ? Number(r.replacement_teacher_copies) : undefined,
+    replacementLearnerCopies: r.replacement_learner_copies != null ? Number(r.replacement_learner_copies) : undefined,
     paperSize: r.paper_size,
     printSide: r.print_side,
     bindingType: r.binding_type,
@@ -3426,6 +3466,229 @@ function serializeExamPaper(r: ExamPaperRow) {
     createdBy: r.created_by != null ? Number(r.created_by) : undefined,
     notes: r.notes ?? undefined,
   };
+}
+
+/**
+ * Edit an examination paper's details before production begins.
+ *
+ * Guardrails:
+ *  - Only editable while the paper is `queued` and the batch spec is not frozen
+ *    (once the specification is approved/production starts, use a controlled
+ *    reprint instead).
+ *  - D3: teacher copies are fixed (never user-editable); planned production =
+ *    learner copies + teacher copies and billable = learner copies.
+ *  - The linked printing job's ordered quantity is kept in sync so the press run
+ *    produces the edited quantity.
+ *  - Every edit is appended to the immutable `exam_paper_events` timeline.
+ */
+export async function updateExamPaperDetails(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  paperId: number,
+  input: {
+    subjectName?: string;
+    pages?: number;
+    copies?: number;
+    printSide?: string;
+    bindingType?: string;
+    paperSize?: string;
+    productionDate?: string | null;
+    notes?: string | null;
+    reason?: string | null;
+    idempotencyKey?: string | null;
+  }
+) {
+  const route = 'exam_paper_edit';
+  const claim = await claimPrintingIdempotency(
+    tx,
+    companyId,
+    route,
+    input.idempotencyKey,
+    actor.userId,
+    { paperId, ...input }
+  );
+  if (claim.replay) return claim.replay.body.paper;
+
+  const res = await tx.query<{
+    id: number;
+    batch_id: number;
+    job_number: string;
+    status: string;
+    subject_name: string;
+    pages: number;
+    copies: number;
+    teacher_copies: number | null;
+    print_side: string;
+    binding_type: string;
+    paper_size: string;
+    production_job_id: number | null;
+    spec_frozen: boolean;
+  }>(
+    `SELECT p.id, p.batch_id, p.job_number, p.status, p.subject_name, p.pages, p.copies,
+            p.teacher_copies, p.print_side, p.binding_type, p.paper_size, p.production_job_id,
+            b.spec_frozen
+       FROM exam_papers p
+       JOIN exam_assessment_batches b
+         ON b.company_id = p.company_id AND b.id = p.batch_id
+      WHERE p.company_id = $1 AND p.id = $2
+      FOR UPDATE OF p`,
+    [companyId, paperId]
+  );
+  if (res.rows.length === 0) {
+    throw new AccountingError(404, 'Examination paper not found in active company', 'EXAM_PAPER_NOT_FOUND');
+  }
+  const p = res.rows[0];
+
+  if (p.status !== 'queued') {
+    throw new AccountingError(
+      409,
+      `Examination paper ${p.job_number} can only be edited while queued (current status: ${p.status})`,
+      'EXAM_PAPER_NOT_EDITABLE'
+    );
+  }
+  if (p.spec_frozen) {
+    throw new AccountingError(
+      409,
+      `The production specification for ${p.job_number} is frozen; cancel and raise a controlled reprint to change it`,
+      'EXAM_SPEC_FROZEN'
+    );
+  }
+
+  const teacherCopies = p.teacher_copies != null ? Number(p.teacher_copies) : 2;
+
+  const nextCopies = input.copies != null ? Number(input.copies) : Number(p.copies);
+  if (!Number.isInteger(nextCopies) || nextCopies <= 0) {
+    throw new AccountingError(400, 'copies must be a positive integer', 'INVALID_PAPER_QUANTITY');
+  }
+  const nextPages = input.pages != null ? Number(input.pages) : Number(p.pages);
+  if (!Number.isInteger(nextPages) || nextPages <= 0) {
+    throw new AccountingError(400, 'pages must be a positive integer', 'INVALID_PAPER_PAGES');
+  }
+  const nextSubject =
+    input.subjectName != null ? String(input.subjectName).trim() : p.subject_name;
+  if (!nextSubject) {
+    throw new AccountingError(400, 'subjectName cannot be blank', 'MISSING_BATCH_FIELDS');
+  }
+  const nextProductionDate =
+    input.productionDate != null ? assertIsoDate(input.productionDate, 'productionDate') : null;
+
+  // D3: teacher copies are fixed; planned = learner + teacher, billable = learner.
+  const nextPlanned = nextCopies + teacherCopies;
+  const nextBillable = nextCopies;
+
+  const changed =
+    nextSubject !== p.subject_name ||
+    nextPages !== Number(p.pages) ||
+    nextCopies !== Number(p.copies) ||
+    input.printSide !== undefined ||
+    input.bindingType !== undefined ||
+    input.paperSize !== undefined ||
+    input.productionDate !== undefined ||
+    input.notes !== undefined;
+
+  if (changed) {
+    await tx.query(
+      `UPDATE exam_papers
+          SET subject_name = $3,
+              pages = $4,
+              copies = $5,
+              planned_production_quantity = $6,
+              billable_quantity = $7,
+              print_side = COALESCE($8, print_side),
+              binding_type = COALESCE($9, binding_type),
+              paper_size = COALESCE($10, paper_size),
+              production_date = COALESCE($11::DATE, production_date),
+              notes = COALESCE($12, notes),
+              updated_at = NOW()
+        WHERE company_id = $1 AND id = $2`,
+      [
+        companyId,
+        paperId,
+        nextSubject,
+        nextPages,
+        nextCopies,
+        nextPlanned,
+        nextBillable,
+        input.printSide ?? null,
+        input.bindingType ?? null,
+        input.paperSize ?? null,
+        nextProductionDate,
+        input.notes != null ? String(input.notes).trim() || null : null,
+      ]
+    );
+
+    // Keep the linked production job in sync so it produces the edited quantity.
+    if (p.production_job_id != null) {
+      await tx.query(
+        `UPDATE printing_jobs
+            SET pages = $3,
+                copies = $4,
+                ordered_qty = $5,
+                updated_at = NOW()
+          WHERE company_id = $1 AND id = $2`,
+        [companyId, Number(p.production_job_id), nextPages, nextPlanned, nextPlanned]
+      );
+    }
+
+    await insertExamPaperEvent(tx, {
+      companyId,
+      batchId: Number(p.batch_id),
+      paperId,
+      eventType: 'edited',
+      fromStatus: p.status,
+      toStatus: p.status,
+      actorUserId: actor.userId,
+      reason: input.reason ?? 'Examination paper details edited',
+      idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}:edit:${paperId}` : null,
+      metadata: {
+        previous: {
+          subjectName: p.subject_name,
+          pages: Number(p.pages),
+          copies: Number(p.copies),
+          printSide: p.print_side,
+          bindingType: p.binding_type,
+          paperSize: p.paper_size,
+        },
+        updated: {
+          subjectName: nextSubject,
+          pages: nextPages,
+          copies: nextCopies,
+          plannedProductionQuantity: nextPlanned,
+          billableQuantity: nextBillable,
+        },
+      },
+    });
+
+    await writeAuditLog(tx, {
+      companyId,
+      actorUserId: actor.userId,
+      actorUsername: actor.username,
+      action: 'EXAM_PAPER_EDITED',
+      tableName: 'exam_papers',
+      recordId: paperId,
+      newValues: {
+        jobNumber: p.job_number,
+        previousCopies: Number(p.copies),
+        copies: nextCopies,
+        pages: nextPages,
+        plannedProductionQuantity: nextPlanned,
+      },
+    });
+  }
+
+  const updated = await tx.query<ExamPaperRow>(
+    `${EXAM_PAPER_SELECT}
+      WHERE p.company_id = $1 AND p.id = $2`,
+    [companyId, paperId]
+  );
+  if (updated.rows.length === 0) {
+    throw new AccountingError(404, 'Examination paper not found in active company', 'EXAM_PAPER_NOT_FOUND');
+  }
+  const paper = serializeExamPaper(updated.rows[0]);
+
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 200, { paper });
+  return paper;
 }
 
 export async function listExamPapers(tx: Transaction, companyId: number) {
@@ -3498,11 +3761,14 @@ export async function updateExamPaperStatus(
     job_number: string;
     status: string;
     copies: number;
+    teacher_copies: number | null;
+    planned_production_quantity: number | null;
     production_job_id: number | null;
     sheets_used: string;
     impressions_used: string;
   }>(
-    `SELECT id, batch_id, job_number, status, copies, production_job_id,
+    `SELECT id, batch_id, job_number, status, copies,
+            teacher_copies, planned_production_quantity, production_job_id,
             sheets_used::text, impressions_used::text
        FROM exam_papers
       WHERE company_id = $1 AND id = $2
@@ -3540,10 +3806,16 @@ export async function updateExamPaperStatus(
     );
   }
 
+  const teacherCopies = paper.teacher_copies != null ? Number(paper.teacher_copies) : 2;
+  const plannedQty =
+    paper.planned_production_quantity != null
+      ? Number(paper.planned_production_quantity)
+      : Number(paper.copies) + teacherCopies;
+
   const goodCopies =
     options.goodCopies != null && Number.isInteger(Number(options.goodCopies))
       ? Number(options.goodCopies)
-      : Number(paper.copies);
+      : plannedQty;
   const spoiledCopies =
     options.spoiledCopies != null && Number.isInteger(Number(options.spoiledCopies))
       ? Number(options.spoiledCopies)
@@ -3551,16 +3823,21 @@ export async function updateExamPaperStatus(
   if (
     goodCopies < 0 ||
     spoiledCopies < 0 ||
-    spoiledCopies > Number(paper.copies) ||
+    spoiledCopies > plannedQty ||
     ((nextStatus === 'completed' || nextStatus === 'qc_passed') &&
-      goodCopies + spoiledCopies > Number(paper.copies))
+      goodCopies + spoiledCopies > plannedQty)
   ) {
     throw new AccountingError(
       400,
-      'Good and spoiled copies must be non-negative and cannot exceed the ordered copies',
+      'Good and spoiled copies must be non-negative and cannot exceed the planned production quantity',
       'INVALID_QC_QUANTITY'
     );
   }
+
+  // D3: teacher copies are fulfilled first and never invoiced. The accepted
+  // (billable) learner quantity is the good output minus the teacher allowance,
+  // clamped to zero so a short run reduces billable learner copies.
+  const acceptedLearnerQty = Math.max(0, goodCopies - teacherCopies);
 
   let productionJobId: number | null = paper.production_job_id ? Number(paper.production_job_id) : null;
   let journalTxnId: number | null = null;
@@ -3601,7 +3878,7 @@ export async function updateExamPaperStatus(
 
         await recordProductionOperation(tx, companyId, actor, productionJobId, {
           stage: 'press_run',
-          producedQtyAdded: Number(paper.copies),
+          producedQtyAdded: plannedQty,
           goodSheets: Number(paper.sheets_used),
           spoilageSheets: 0,
           impressionsRun: Number(paper.impressions_used),
@@ -3633,7 +3910,7 @@ export async function updateExamPaperStatus(
         );
       }
       await recordQualityInspection(tx, companyId, actor, productionJobId, {
-        sampleSize: Number(paper.copies),
+        sampleSize: plannedQty,
         defectCount: spoiledCopies,
         registrationOk: true,
         printDensityOk: true,
@@ -3646,13 +3923,14 @@ export async function updateExamPaperStatus(
         `UPDATE exam_papers
             SET status = $4, qc_status = 'passed',
                 qc_approved_copies = $3, good_copies = $3, spoiled_copies = $5,
-                qc_notes = $6, completed_at = COALESCE(completed_at, NOW())
+                accepted_learner_quantity = $6, billable_quantity = $6,
+                qc_notes = $7, completed_at = COALESCE(completed_at, NOW())
           WHERE company_id = $1 AND id = $2`,
-        [companyId, paperId, goodCopies, nextStatus, spoiledCopies, options.qcNotes ?? null]
+        [companyId, paperId, goodCopies, nextStatus, spoiledCopies, acceptedLearnerQty, options.qcNotes ?? null]
       );
     } else if (nextStatus === 'qc_hold') {
       await recordQualityInspection(tx, companyId, actor, productionJobId, {
-        sampleSize: Number(paper.copies),
+        sampleSize: plannedQty,
         defectCount: spoiledCopies > 0 ? spoiledCopies : 1,
         registrationOk: false,
         printDensityOk: false,
@@ -3939,16 +4217,22 @@ export async function createExamReprint(
   const jobNumber = await nextPrintingNumber(tx, companyId, 'exam_paper', 'EXM-', 4);
   const productionVersion = Number(parent.production_version || 1) + 1;
 
+  // D3: reprints do not automatically grant teacher copies; they are replacements/additional production.
+  const teacherCopies = 0;
+  const plannedQty = copies;
+  const billableQty = copies;
+
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO exam_papers (
        company_id, batch_id, job_number, subject_name, pages, copies,
+       teacher_copies, planned_production_quantity, billable_quantity,
        raw_paper_item_id, raw_toner_item_id, paper_spec_id, print_side, binding_type,
        sheets_used, impressions_used, paper_cost, toner_cost, status, production_date,
        notes, paper_size, printing_item_id, machine_id, created_by, queued_at,
        cost_status, cost_warnings, reprint_of_paper_id, reprint_reason, production_version
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               0, 0, 0, 0, 'queued', $12::DATE, $13, $14, $15, $16, $17, NOW(),
-               'estimated', '[]'::jsonb, $18, $19, $20)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+               0, 0, 0, 0, 'queued', $15::DATE, $16, $17, $18, $19, $20, NOW(),
+               'estimated', '[]'::jsonb, $21, $22, $23)
      RETURNING id`,
     [
       companyId,
@@ -3957,6 +4241,9 @@ export async function createExamReprint(
       parent.subject_name,
       Number(parent.pages),
       copies,
+      teacherCopies,
+      plannedQty,
+      billableQty,
       Number(parent.raw_paper_item_id),
       Number(parent.raw_toner_item_id),
       parent.paper_spec_id != null ? Number(parent.paper_spec_id) : null,
@@ -4053,7 +4340,9 @@ export async function createExamReprint(
     toStatus: 'queued',
     actorUserId: actor.userId,
     reason,
-    idempotencyKey: input.idempotencyKey ?? null,
+    idempotencyKey: input.idempotencyKey
+      ? `${input.idempotencyKey}:reprint:${newPaperId}`
+      : null,
     metadata: { parentPaperId: paperId, parentJobNumber: parent.job_number, productionVersion },
   });
 
@@ -4224,7 +4513,9 @@ export async function approveExamBatchSpecification(
     };
   }
   const papers = await tx.query<any>(
-    `SELECT id, subject_name, pages, copies, paper_size, print_side, binding_type,
+    `SELECT id, subject_name, pages, copies,
+            teacher_copies, planned_production_quantity, billable_quantity,
+            paper_size, print_side, binding_type,
             raw_paper_item_id, raw_toner_item_id, printing_item_id
        FROM exam_papers
       WHERE company_id = $1 AND batch_id = $2
@@ -4238,6 +4529,9 @@ export async function approveExamBatchSpecification(
     subjectName: p.subject_name,
     pages: Number(p.pages),
     copies: Number(p.copies),
+    teacherCopies: p.teacher_copies != null ? Number(p.teacher_copies) : 2,
+    plannedProductionQuantity: p.planned_production_quantity != null ? Number(p.planned_production_quantity) : Number(p.copies) + 2,
+    billableQuantity: p.billable_quantity != null ? Number(p.billable_quantity) : Number(p.copies),
     paperSize: p.paper_size,
     printSide: p.print_side,
     bindingType: p.binding_type,
@@ -4570,6 +4864,11 @@ export async function linkExamPapersToInvoice(
   if (ids.length === 0) {
     throw new AccountingError(400, 'At least one examination paper id is required for invoice linking', 'NO_EXAM_PAPERS');
   }
+  // Segregation of duties: exam invoicing requires the dedicated exams:invoice
+  // permission, not just the generic invoices:write gate on the route.
+  if (!hasPermission(actor.role, 'exams:invoice')) {
+    throw new AccountingError(403, 'Invoicing examination papers requires the exams:invoice permission', 'EXAMS_INVOICE_PERMISSION_REQUIRED');
+  }
   const invRes = await tx.query<{ id: number; invoice_number: string; customer_id: number; total_cost: string }>(
     `SELECT id, invoice_number, customer_id, total_cost::text
        FROM invoices WHERE company_id = $1 AND id = $2 FOR UPDATE`,
@@ -4589,6 +4888,7 @@ export async function linkExamPapersToInvoice(
     status: string;
     invoice_id: number | null;
     copies: number;
+    billable_quantity: number | null;
     production_job_id: number | null;
     school_customer_id: number;
     learners_count: number;
@@ -4597,7 +4897,9 @@ export async function linkExamPapersToInvoice(
     wip_accumulated: string | null;
     wip_relieved: string | null;
   }>(
-    `SELECT p.id, p.batch_id, p.status, p.invoice_id, p.copies, p.production_job_id,
+    `SELECT p.id, p.batch_id, p.status, p.invoice_id, p.copies,
+            COALESCE(p.billable_quantity, p.copies) AS billable_quantity,
+            p.production_job_id,
             b.school_customer_id, b.learners_count, b.price_per_learner::text,
             (SELECT COUNT(*)::text FROM exam_papers x
               WHERE x.company_id = p.company_id AND x.batch_id = p.batch_id) AS subject_count,
@@ -4667,11 +4969,12 @@ export async function linkExamPapersToInvoice(
     );
     const subjectCount = Math.max(1, Number(p.subject_count));
     const allocation4 = divRoundBigInt(classRevenue4, BigInt(subjectCount), 'HALF_EVEN');
+    const billableQty = Number(p.billable_quantity ?? p.copies);
     allocations.push({
       paperId: Number(p.id),
       batchId: Number(p.batch_id),
       productionJobId: Number(p.production_job_id),
-      quantity: formatDecimal4(parseDecimal4(Number(p.copies))),
+      quantity: formatDecimal4(parseDecimal4(billableQty)),
       amount: formatDecimal4(allocation4),
     });
   }

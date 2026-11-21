@@ -210,8 +210,9 @@ async function main() {
           `INSERT INTO exam_papers (
              company_id, batch_id, job_number, subject_name, pages, copies,
              raw_paper_item_id, raw_toner_item_id, print_side, binding_type,
-             sheets_used, impressions_used, paper_cost, toner_cost, status, production_date
-           ) VALUES ($1, $2, 'EXM-DOC-101', 'Mathematics', 12, 150, $3, $4, 'Duplex', 'Stapled', 900, 1800, 825.0000, 300.0000, 'completed', '2026-11-12')`,
+             sheets_used, impressions_used, paper_cost, toner_cost, status, production_date,
+             delivered_at
+           ) VALUES ($1, $2, 'EXM-DOC-101', 'Mathematics', 12, 150, $3, $4, 'Duplex', 'Stapled', 900, 1800, 825.0000, 300.0000, 'delivered', '2026-11-12', NOW())`,
           [companyAId, examBatchId, rawPaperId, rawTonerId]
         );
 

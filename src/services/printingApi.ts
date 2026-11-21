@@ -457,6 +457,31 @@ export const printingApi = {
     return d.papers || [];
   },
 
+  /** Edit an examination paper's details before production begins (requires exams:edit). */
+  async updateExamPaper(
+    id: number,
+    payload: {
+      subjectName?: string;
+      pages?: number;
+      copies?: number;
+      printSide?: string;
+      bindingType?: string;
+      paperSize?: string;
+      productionDate?: string | null;
+      notes?: string | null;
+      reason?: string | null;
+      idempotencyKey?: string | null;
+    }
+  ): Promise<any> {
+    const d = await requestJson<any>(`/api/printing/exam-papers/${id}`, {
+      method: 'PATCH',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+
   /** Move an examination paper through the server-enforced transition matrix. */
   async updateExamPaperStatus(
     id: number,

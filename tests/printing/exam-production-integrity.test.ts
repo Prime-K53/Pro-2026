@@ -256,15 +256,24 @@ test('exam production: multi-class, server costing, stock/WIP, QC, delivery and 
     assert.equal(completed.status, 'completed');
     const paperAfterQc = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {
       const r = await tx.query(
-        `SELECT status, qc_status, qc_approved_copies, good_copies
+        `SELECT status, qc_status, qc_approved_copies, good_copies,
+                teacher_copies, planned_production_quantity, billable_quantity,
+                accepted_learner_quantity
            FROM exam_papers WHERE company_id = $1 AND id = $2`,
         [ctx.companyId, Number(form1.backendId)]
       );
       return r.rows[0];
     });
     assert.equal(paperAfterQc.qc_status, 'passed');
-    assert.equal(Number(paperAfterQc.qc_approved_copies), 20);
-    assert.equal(Number(paperAfterQc.good_copies), 20);
+    // D3: total good output includes the 2 free teacher copies (20 learner + 2 teacher = 22).
+    assert.equal(Number(paperAfterQc.qc_approved_copies), 22);
+    assert.equal(Number(paperAfterQc.good_copies), 22);
+    // D3: teacher copies are fixed at 2 and never invoiced.
+    assert.equal(Number(paperAfterQc.teacher_copies), 2);
+    assert.equal(Number(paperAfterQc.planned_production_quantity), 22);
+    // D3: billable/accepted learner quantity excludes teacher copies.
+    assert.equal(Number(paperAfterQc.billable_quantity), 20);
+    assert.equal(Number(paperAfterQc.accepted_learner_quantity), 20);
 
     // Invoicing before delivery must fail and leave no invoice behind.
     const invoiceCountBefore = await ctx.db.withCompanyDb(ctx.companyId, async (tx: any) => {

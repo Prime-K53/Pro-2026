@@ -1309,6 +1309,8 @@ export async function getDocumentPreviewPayload(
           subjectName: p.subject_name,
           pages: Number(p.pages),
           copies: Number(p.copies),
+          teacherCopies: p.teacher_copies != null ? Number(p.teacher_copies) : undefined,
+          billableQuantity: p.billable_quantity != null ? Number(p.billable_quantity) : undefined,
           printSide: p.print_side,
           bindingType: p.binding_type,
           sheetsUsed: Number(p.sheets_used),
@@ -1520,29 +1522,35 @@ export async function generateInvoiceFromWorkflow(
     ? input.postgresExamPaperIds.map(Number).filter(n => Number.isInteger(n) && n > 0)
     : [];
   if (examPaperIds.length === 0 && input.postgresExamBatchId) {
+    // P1-07: Batch-level eligibility must match the paper-level rule. If any
+    // paper in the batch is not delivered (and not cancelled/invoiced), the
+    // batch cannot be invoiced — regardless of whether it has a production job.
+    const undelivered = await tx.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM exam_papers
+        WHERE company_id = $1 AND batch_id = $2
+          AND status NOT IN ('delivered', 'invoiced', 'cancelled')`,
+      [companyId, Number(input.postgresExamBatchId)]
+    );
+    if (Number(undelivered.rows[0]?.count ?? 0) > 0) {
+      throw new AccountingError(
+        409,
+        'Examination papers must be produced, QC-approved and delivered before this batch can be invoiced',
+        'EXAM_BATCH_NOT_DELIVERED'
+      );
+    }
+
+    // Only link papers that have a production job (WIP to relieve). Legacy
+    // papers without a production job are delivered but have no WIP, so they
+    // are invoiced via the invoice lines alone without exam linkage.
     const batchPapers = await tx.query<{ id: number }>(
       `SELECT id FROM exam_papers
         WHERE company_id = $1 AND batch_id = $2
           AND status = 'delivered' AND invoice_id IS NULL
+          AND production_job_id IS NOT NULL
         ORDER BY id ASC`,
       [companyId, Number(input.postgresExamBatchId)]
     );
     examPaperIds = batchPapers.rows.map(r => Number(r.id));
-    if (examPaperIds.length === 0) {
-      const controlled = await tx.query<{ id: number }>(
-        `SELECT id FROM exam_papers
-          WHERE company_id = $1 AND batch_id = $2 AND production_job_id IS NOT NULL
-          LIMIT 1`,
-        [companyId, Number(input.postgresExamBatchId)]
-      );
-      if (controlled.rows.length > 0) {
-        throw new AccountingError(
-          409,
-          'Examination papers must be produced, QC-approved and delivered before this batch can be invoiced',
-          'EXAM_BATCH_NOT_DELIVERED'
-        );
-      }
-    }
   }
 
   const created = await createInvoiceOrSalesReceipt(tx, companyId, actor, {

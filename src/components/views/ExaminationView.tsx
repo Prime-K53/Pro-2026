@@ -68,6 +68,8 @@ export const ExaminationView: React.FC = () => {
     examPapers,
     printingContracts,
     addExamPapersBatch,
+    updateExamPaper,
+    editExamPaper,
     updateExamPaperStatus,
     deliverExamPaper,
     deleteExamPaper,
@@ -799,6 +801,24 @@ export const ExaminationView: React.FC = () => {
       },
     ];
     if (paper.status === 'queued') {
+      defs.push({ id: 'exam.edit-paper', label: 'Edit Paper Details (before production)', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'exams:edit', execute: async () => {
+        const subjectRaw = window.prompt(`Subject name for ${paper.jobNumber}:`, paper.subjectName);
+        if (subjectRaw == null) return;
+        const copiesRaw = window.prompt(`Learner copies for ${paper.jobNumber} (teacher copies stay fixed at ${paper.teacherCopies ?? 2}):`, String(paper.copies));
+        if (copiesRaw == null) return;
+        const copies = Number(copiesRaw);
+        if (!Number.isInteger(copies) || copies <= 0) { triggerShortcutNotice('Copies must be a positive integer.', 'error'); return; }
+        const pagesRaw = window.prompt(`Pages for ${paper.jobNumber}:`, String(paper.pages));
+        if (pagesRaw == null) return;
+        const pages = Number(pagesRaw);
+        if (!Number.isInteger(pages) || pages <= 0) { triggerShortcutNotice('Pages must be a positive integer.', 'error'); return; }
+        try {
+          await editExamPaper(paper.id, { subjectName: subjectRaw.trim(), copies, pages, reason: 'Edited before production' });
+          triggerShortcutNotice(`Updated ${paper.jobNumber}.`);
+        } catch (err: any) {
+          triggerShortcutNotice(err?.message || 'The server rejected the edit.', 'error');
+        }
+      } });
       defs.push({ id: 'exam.start-printing', label: 'Start Press Printing (Reserve & Issue Materials)', icon: <Printer className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Production', requiredPermission: 'exams:produce', execute: async () => { try { await updateExamPaperStatus(paper.id, 'printing'); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the production start.', 'error'); } } });
     }
     if (paper.status === 'printing') {

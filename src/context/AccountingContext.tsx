@@ -165,6 +165,20 @@ interface AccountingContextType {
     options?: { submissionId?: string }
   ) => Promise<ExamPaper[]>;
   updateExamPaper: (paperId: string, updates: Partial<ExamPaper>) => void;
+  editExamPaper: (
+    paperId: string,
+    updates: {
+      subjectName?: string;
+      pages?: number;
+      copies?: number;
+      printSide?: string;
+      bindingType?: string;
+      paperSize?: string;
+      productionDate?: string | null;
+      notes?: string | null;
+      reason?: string | null;
+    }
+  ) => Promise<ExamPaper>;
   updateExamPaperStatus: (
     paperId: string,
     status: ExamPaperStatus,
@@ -773,8 +787,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         for (const c of backendCustomers) byId.set(c.id, c);
         return Array.from(byId.values());
       });
-    } catch {
-      // Keep bundled demo customers when the backend is unreachable.
+    } catch (err) {
+      // P1-06: Surface backend failures so demo data is never silently
+      // presented as live.
+      console.warn('Failed to refresh customers from backend:', err);
     }
   };
 
@@ -783,8 +799,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       const list = await printingApi.listContracts();
       if (!list || list.length === 0) return;
       setPrintingContracts(list.map(mapApiContract));
-    } catch {
-      // Keep bundled demo contracts when the backend is unreachable.
+    } catch (err) {
+      // P1-06: Surface backend failures so demo data is never silently
+      // presented as live.
+      console.warn('Failed to refresh printing contracts from backend:', err);
     }
   };
 
@@ -793,8 +811,15 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       const list = await printingApi.listExamPapers();
       if (!list || list.length === 0) return;
       setExamPapers(list.map(mapApiExamPaper));
-    } catch {
-      // Keep bundled demo exam papers when the backend is unreachable.
+    } catch (err) {
+      // P1-06: Surface backend failures so stale/demo data is never silently
+      // presented as live. Demo papers are kept for offline UX but the user is
+      // warned that the displayed data may not reflect the server.
+      console.warn('Failed to refresh examination papers from backend:', err);
+      triggerShortcutNotice(
+        'Could not refresh examination papers from the server. Displayed data may be stale or demo-only.',
+        'error'
+      );
     }
   };
 
@@ -1842,112 +1867,94 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     >[],
     options?: { submissionId?: string }
   ): Promise<ExamPaper[]> => {
-    const year = new Date().getFullYear();
-    const baseIdx = 100 + examPapers.length;
-
-    // Attempt server-side creation first when every referenced id is a real
-    // backend record (numeric). The server is the sole authority for costs,
-    // stock, job numbers and ids; never fall back to local success if it fails.
+    // Ensure all referenced ids are real backend records
     const backendCustomerId = toBackendId(papersData[0]?.schoolCustomerId);
+    if (!backendCustomerId) {
+      throw new Error('All referenced customer and material ids must be real backend records. No local records were created.');
+    }
+
     const allServerIds =
       papersData.length > 0 &&
       papersData.every(p => toBackendId(p.rawPaperItemId) && toBackendId(p.rawTonerItemId));
-    if (backendCustomerId && allServerIds) {
-      const sample = papersData[0];
-      const grouped = new Map<string, typeof papersData>();
-      for (const paper of papersData) {
-        const key = `${paper.className.trim().toLowerCase()}__${paper.assessmentName.trim().toLowerCase()}`;
-        const rows = grouped.get(key) || [];
-        rows.push(paper);
-        grouped.set(key, rows);
-      }
-      const classes = Array.from(grouped.values()).map(rows => {
-        const lead = rows[0];
-        return {
-          className: lead.className,
-          learnersCount: lead.learnersCount,
-          pricePerLearner: lead.pricePerLearner,
-          contractId: toBackendId(lead.contractId),
-          assessmentNumber: lead.assessmentNumber ?? null,
-          papers: rows.map(p => ({
-            subjectName: p.subjectName,
-            pages: p.pages,
-            copies: p.copies,
-            rawPaperItemId: toBackendId(p.rawPaperItemId)!,
-            rawTonerItemId: toBackendId(p.rawTonerItemId)!,
-            printSide: p.printSide,
-            bindingType: p.bindingType,
-            paperSize: p.paperSize,
-            printingItemId: toBackendId(p.printingItemId),
-            productionDate: p.productionDate,
-            notes: p.notes ?? null,
-          })),
-        };
-      });
-      let hash = 0;
-      const seed = `${backendCustomerId}|${sample.assessmentName}|${options?.submissionId || ''}|${papersData
-        .map(p => `${p.className}|${p.subjectName}|${p.pages}|${p.copies}`)
-        .join(';')}`;
-      for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-      const res = await printingApi.createExamBatch({
-        schoolCustomerId: backendCustomerId,
-        assessmentName: sample.assessmentName,
-        classes,
-        idempotencyKey: `exam-batch-${backendCustomerId}-${Math.abs(hash)}`,
-      });
-      const serverPapers: any[] = res?.papers || [];
-      const byKey = new Map<string, any>();
-      for (const sp of serverPapers) {
-        byKey.set(`${String(sp.className).toLowerCase()}__${String(sp.subjectName).toLowerCase()}`, sp);
-      }
-      const created: ExamPaper[] = papersData.map((paperData, idx) => {
-        const sp = byKey.get(
-          `${paperData.className.trim().toLowerCase()}__${paperData.subjectName.trim().toLowerCase()}`
-        );
-        if (!sp?.backendId) {
-          throw new Error(
-            `Server did not return the created examination paper for ${paperData.className} · ${paperData.subjectName}. No local record was created.`
-          );
-        }
-        return {
-          ...paperData,
-          id: String(sp.backendId),
-          backendId: Number(sp.backendId),
-          jobNumber: sp.jobNumber,
-          paperSize: sp.paperSize ?? paperData.paperSize,
-          printingItemId: sp.printingItemId ?? paperData.printingItemId,
-          productionJobId: sp.productionJobId,
-          sheetsUsed: Number(sp.sheetsUsed ?? 0),
-          impressionsUsed: Number(sp.impressionsUsed ?? 0),
-          paperCost: Number(sp.paperCost ?? 0),
-          tonerCost: Number(sp.tonerCost ?? 0),
-          materialCost: Number(sp.materialCost ?? 0),
-          costStatus: sp.costStatus,
-          costWarnings: Array.isArray(sp.costWarnings) ? sp.costWarnings : [],
-          totalAmount: Number(sp.totalAmount ?? 0),
-          status: (sp.status ?? 'queued') as ExamPaperStatus,
-          productionDate: sp.productionDate ?? paperData.productionDate,
-        };
-      });
-      setExamPapers(prev => [...created.slice().reverse(), ...prev]);
-      await logAuditAction(
-        'BATCH_EXAM_JOBS',
-        'ExamPaper',
-        created[0]?.id || 'batch',
-        `Added ${created.length} class/subject examination print jobs`
-      );
-      return created;
+    if (!allServerIds) {
+      throw new Error('All referenced material ids must be real backend records. No local records were created.');
     }
 
-    // Local-only (bundled demo) path. This path is only reachable when the
-    // referenced customer/material ids are not real backend records.
+    // Server-side creation
+    const sample = papersData[0];
+    const grouped = new Map<string, typeof papersData>();
+    for (const paper of papersData) {
+      const key = `${paper.className.trim().toLowerCase()}__${paper.assessmentName.trim().toLowerCase()}`;
+      const rows = grouped.get(key) || [];
+      rows.push(paper);
+      grouped.set(key, rows);
+    }
+    const classes = Array.from(grouped.values()).map(rows => {
+      const lead = rows[0];
+      return {
+        className: lead.className,
+        learnersCount: lead.learnersCount,
+        pricePerLearner: lead.pricePerLearner,
+        contractId: toBackendId(lead.contractId),
+        assessmentNumber: lead.assessmentNumber ?? null,
+        papers: rows.map(p => ({
+          subjectName: p.subjectName,
+          pages: p.pages,
+          copies: p.copies,
+          rawPaperItemId: toBackendId(p.rawPaperItemId)!,
+          rawTonerItemId: toBackendId(p.rawTonerItemId)!,
+          printSide: p.printSide,
+          bindingType: p.bindingType,
+          paperSize: p.paperSize,
+          printingItemId: toBackendId(p.printingItemId),
+          productionDate: p.productionDate,
+          notes: p.notes ?? null,
+        })),
+      };
+    });
+    let hash = 0;
+    const seed = `${backendCustomerId}|${sample.assessmentName}|${options?.submissionId || ''}|${papersData
+      .map(p => `${p.className}|${p.subjectName}|${p.pages}|${p.copies}`)
+      .join(';')}`;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+    const res = await printingApi.createExamBatch({
+      schoolCustomerId: backendCustomerId,
+      assessmentName: sample.assessmentName,
+      classes,
+      idempotencyKey: `exam-batch-${backendCustomerId}-${Math.abs(hash)}`,
+    });
+    const serverPapers: any[] = res?.papers || [];
+    const byKey = new Map<string, any>();
+    for (const sp of serverPapers) {
+      byKey.set(`${String(sp.className).toLowerCase()}__${String(sp.subjectName).toLowerCase()}`, sp);
+    }
     const created: ExamPaper[] = papersData.map((paperData, idx) => {
-      const computed = buildExamPaperComputedFields(paperData);
+      const sp = byKey.get(
+        `${paperData.className.trim().toLowerCase()}__${paperData.subjectName.trim().toLowerCase()}`
+      );
+      if (!sp?.backendId) {
+        throw new Error(
+          `Server did not return the created examination paper for ${paperData.className} · ${paperData.subjectName}. No local record was created.`
+        );
+      }
       return {
         ...paperData,
-        ...computed,
-        id: `exm-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
-        jobNumber: `EXM-${year}-${baseIdx + idx + 1}`,
+        id: String(sp.backendId),
+        backendId: Number(sp.backendId),
+        jobNumber: sp.jobNumber,
+        paperSize: sp.paperSize ?? paperData.paperSize,
+        printingItemId: sp.printingItemId ?? paperData.printingItemId,
+        productionJobId: sp.productionJobId,
+        sheetsUsed: Number(sp.sheetsUsed ?? 0),
+        impressionsUsed: Number(sp.impressionsUsed ?? 0),
+        paperCost: Number(sp.paperCost ?? 0),
+        tonerCost: Number(sp.tonerCost ?? 0),
+        materialCost: Number(sp.materialCost ?? 0),
+        costStatus: sp.costStatus,
+        costWarnings: Array.isArray(sp.costWarnings) ? sp.costWarnings : [],
+        totalAmount: Number(sp.totalAmount ?? 0),
+        status: (sp.status ?? 'queued') as ExamPaperStatus,
+        productionDate: sp.productionDate ?? paperData.productionDate,
       };
     });
     setExamPapers(prev => [...created.slice().reverse(), ...prev]);
@@ -1969,6 +1976,41 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         return { ...merged, ...computed };
       })
     );
+  };
+
+  // Edit a backend examination paper's details before production begins. The
+  // server enforces the guardrails (queued only, spec not frozen, teacher copies
+  // fixed); the browser never simulates the change locally.
+  const editExamPaper = async (
+    paperId: string,
+    updates: {
+      subjectName?: string;
+      pages?: number;
+      copies?: number;
+      printSide?: string;
+      bindingType?: string;
+      paperSize?: string;
+      productionDate?: string | null;
+      notes?: string | null;
+      reason?: string | null;
+    }
+  ): Promise<ExamPaper> => {
+    const target = examPapers.find(p => p.id === paperId);
+    if (!target) throw new Error(`Examination paper ${paperId} was not found.`);
+    const backendId = toBackendId(paperId);
+    if (!backendId) {
+      throw new Error('Only backend examination papers can be edited.');
+    }
+    const updated = await printingApi.updateExamPaper(backendId, {
+      ...updates,
+      idempotencyKey: `exam-edit-${backendId}-${Date.now()}`,
+    });
+    await refreshExamPapersFromBackend();
+    const mapped = updated as ExamPaper;
+    setExamPapers(prev =>
+      prev.map(p => (p.id === paperId ? { ...p, ...mapped, id: p.id } : p))
+    );
+    return mapped;
   };
 
   const updateExamPaperStatus = async (
@@ -2123,7 +2165,21 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     if (!sameSchool) {
       throw new Error('All selected examination papers must belong to the same school');
     }
-    const useBackend = selectedPapers.every(p => Boolean(p.backendId));
+
+    // P1-05: Never silently fall back to a local invoice. Every selected paper
+    // must have a real backend record; otherwise the server cannot relieve WIP,
+    // link the invoice, or post the COGS journal, and a local-only invoice would
+    // report success while leaving the ledger inconsistent.
+    const missingBackend = selectedPapers.filter(p => !p.backendId);
+    if (missingBackend.length > 0) {
+      throw new Error(
+        `Cannot create a consolidated invoice: ${missingBackend.length} examination paper(s) have no backend record. ` +
+          `All papers must be created on the server before invoicing: ${missingBackend
+            .map(p => `${p.jobNumber} (${p.className} · ${p.subjectName})`)
+            .join(', ')}`
+      );
+    }
+    const useBackend = true;
 
     const school = customers.find(c => c.id === schoolId);
     const includeTax = options?.includeTax ?? false;
@@ -3662,6 +3718,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         addExamPaper,
         addExamPapersBatch,
         updateExamPaper,
+        editExamPaper,
         updateExamPaperStatus,
         deliverExamPaper,
         deleteExamPaper,

@@ -25,6 +25,24 @@ ALTER TABLE exam_papers DROP CONSTRAINT IF EXISTS ck_exam_papers_qc_status;
 ALTER TABLE exam_papers DROP CONSTRAINT IF EXISTS ck_exam_papers_paper_size;
 ALTER TABLE exam_papers DROP CONSTRAINT IF EXISTS exam_papers_status_check;
 
+-- P1-11: Papers created under the 0024 forward schema may carry statuses
+-- outside the legacy four-value set (delivered, packed, dispatched, qc_passed,
+-- cancelled, reprinted, ...). Restoring the legacy CHECK constraint would fail
+-- on any such row. Normalize out-of-range rows to 'completed' (the furthest
+-- legacy state) first so the rollback always succeeds.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM exam_papers
+    WHERE status NOT IN ('queued', 'printing', 'completed', 'invoiced')
+  ) THEN
+    RAISE NOTICE 'Normalizing out-of-range exam_papers.status values to completed before restoring legacy status_check constraint';
+    UPDATE exam_papers
+      SET status = 'completed'
+      WHERE status NOT IN ('queued', 'printing', 'completed', 'invoiced');
+  END IF;
+END $$;
+
 ALTER TABLE exam_papers
   ADD CONSTRAINT exam_papers_status_check CHECK (status IN ('queued', 'printing', 'completed', 'invoiced'));
 

@@ -26,10 +26,20 @@ import {
 } from 'lucide-react';
 
 export const CustomersView: React.FC = () => {
-  const { companyProfile, setCurrentView, triggerShortcutNotice, openDocumentPreview } = useAccounting();
+  const {
+    companyProfile,
+    setCurrentView,
+    triggerShortcutNotice,
+    openDocumentPreview,
+    setIsNewCustomerOpen,
+  } = useAccounting();
   const { activeCompany, hasPermission, authenticated, permissions } = useAuth();
   const currency = companyProfile.currency || 'K';
   const canWrite = hasPermission('customers:write');
+  const canChangeCredit = hasPermission('customers:change_credit_limit');
+  const canAllocate = hasPermission('payments:allocate');
+  const canSendStatements = hasPermission('statements:send');
+  const canRevalueFx = hasPermission('fx:revalue');
 
   const [customers, setCustomers] = useState<ApiCustomer[]>([]);
   const [invoices, setInvoices] = useState<ApiInvoice[]>([]);
@@ -39,18 +49,19 @@ export const CustomersView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Add Customer Modal
-  const [showAddCustomer, setShowAddCustomer] = useState(false);
-  const [newCust, setNewCust] = useState({
-    companyName: '',
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    terms: 'Net 30',
-    creditLimit: '',
-    taxExempt: false,
-  });
+  // Credit exposure, open cash, statements, and FX revaluation
+  const [creditProfile, setCreditProfile] = useState<any | null>(null);
+  const [unappliedPayments, setUnappliedPayments] = useState<any[]>([]);
+  const [statements, setStatements] = useState<any[]>([]);
+  const [allocation, setAllocation] = useState({ paymentId: '', invoiceId: '', amount: '' });
+  const [showFxPanel, setShowFxPanel] = useState(false);
+  const [fx, setFx] = useState<{
+    asOfDate: string;
+    currencyCode: string;
+    preview: any | null;
+    runs: any[];
+  }>({ asOfDate: new Date().toISOString().slice(0, 10), currencyCode: '', preview: null, runs: [] });
+  const [busy, setBusy] = useState(false);
 
   // Reseller Permit Modal
   const [showAddPermit, setShowAddPermit] = useState(false);
@@ -58,6 +69,7 @@ export const CustomersView: React.FC = () => {
 
   // Live Statement Modal
   const [statementData, setStatementData] = useState<any | null>(null);
+  const [statementPeriod, setStatementPeriod] = useState({ start: '', end: '' });
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -91,6 +103,40 @@ export const CustomersView: React.FC = () => {
     return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, onUpdated);
   }, [loadData]);
 
+  const loadCustomerDetail = useCallback(async (customerId: number) => {
+    try {
+      const [profile, unapplied, history] = await Promise.all([
+        commercialApi.getCustomerCreditProfile(customerId).catch(() => null),
+        commercialApi.listUnappliedPayments(customerId).catch(() => []),
+        commercialApi.listCustomerStatements(customerId).catch(() => []),
+      ]);
+      setCreditProfile(profile);
+      setUnappliedPayments(unapplied);
+      setStatements(history);
+      setAllocation({ paymentId: '', invoiceId: '', amount: '' });
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to load customer credit details');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedCustomerId) {
+      loadCustomerDetail(selectedCustomerId);
+    } else {
+      setCreditProfile(null);
+      setUnappliedPayments([]);
+      setStatements([]);
+    }
+  }, [selectedCustomerId, loadCustomerDetail]);
+
+  useEffect(() => {
+    if (!showFxPanel || !canRevalueFx) return;
+    commercialApi
+      .listFxRevaluationRuns()
+      .then(runs => setFx(p => ({ ...p, runs })))
+      .catch(() => undefined);
+  }, [showFxPanel, canRevalueFx]);
+
   const filteredCustomers = customers.filter(
     c =>
       c.companyName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -107,43 +153,141 @@ export const CustomersView: React.FC = () => {
     : [];
   const totalOutstanding = customers.reduce((sum, c) => sum + c.balance, 0);
 
-  const handleCreateCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleOpenStatement = async (
+    customerId: number,
+    periodStart?: string,
+    periodEnd?: string
+  ) => {
     try {
-      const created = await commercialApi.createCustomer({
-        companyName: newCust.companyName,
-        name: newCust.name || newCust.companyName,
-        email: newCust.email,
-        phone: newCust.phone,
-        address: newCust.address,
-        terms: newCust.terms,
-        creditLimit: newCust.creditLimit ? Number(newCust.creditLimit) : null,
-        taxExempt: newCust.taxExempt,
+      const stmt = await commercialApi.getCustomerStatement(customerId, {
+        saveSnapshot: true,
+        periodStart,
+        periodEnd,
       });
-      setSelectedCustomerId(created.id);
-      setShowAddCustomer(false);
-      setNewCust({
-        companyName: '',
-        name: '',
-        email: '',
-        phone: '',
-        address: '',
-        terms: 'Net 30',
-        creditLimit: '',
-        taxExempt: false,
-      });
-      triggerShortcutNotice(`Customer ${created.companyName} saved to PostgreSQL`);
+      setStatementData(stmt);
+      setStatementPeriod({ start: stmt.periodStart, end: stmt.periodEnd });
+      setStatements(await commercialApi.listCustomerStatements(customerId).catch(() => statements));
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Failed to create customer');
+      setErrorMsg(err?.message || 'Unable to generate customer statement');
     }
   };
 
-  const handleOpenStatement = async (customerId: number) => {
+  const handleEmailStatement = async (customerId: number) => {
+    if (!canSendStatements) {
+      setErrorMsg('You do not have permission to email statements.');
+      return;
+    }
     try {
-      const stmt = await commercialApi.getCustomerStatement(customerId, { saveSnapshot: true });
-      setStatementData(stmt);
+      setBusy(true);
+      const result = await commercialApi.sendCustomerStatement(customerId, {
+        periodStart: statementData?.periodStart,
+        periodEnd: statementData?.periodEnd,
+      });
+      triggerShortcutNotice(`Statement queued to ${result.recipient}`);
+      await loadCustomerDetail(customerId);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Unable to generate customer statement');
+      setErrorMsg(err?.message || 'Unable to email statement');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleChangeLimit = async () => {
+    if (!selectedCustomer) return;
+    const raw = window.prompt(
+      `New credit limit for ${selectedCustomer.companyName} (leave blank for no limit):`,
+      selectedCustomer.creditLimit === null ? '' : String(selectedCustomer.creditLimit)
+    );
+    if (raw === null) return;
+    const value = raw.trim();
+    try {
+      setBusy(true);
+      await commercialApi.updateCustomer(selectedCustomer.id, {
+        creditLimit: value === '' ? null : Number(value),
+        creditOverrideReason: 'Credit limit revised in Customer Center',
+      } as any);
+      triggerShortcutNotice('Credit limit updated');
+      await loadData();
+      await loadCustomerDetail(selectedCustomer.id);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to change credit limit');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStatusChange = async (status: 'active' | 'blocked') => {
+    if (!selectedCustomer) return;
+    try {
+      setBusy(true);
+      await commercialApi.updateCustomer(selectedCustomer.id, { customerStatus: status });
+      triggerShortcutNotice(
+        status === 'blocked'
+          ? `${selectedCustomer.companyName} placed on credit hold`
+          : `${selectedCustomer.companyName} released from credit hold`
+      );
+      await loadData();
+      await loadCustomerDetail(selectedCustomer.id);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to change customer status');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAllocate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCustomer || !allocation.paymentId || !allocation.invoiceId) return;
+    try {
+      setBusy(true);
+      const result = await commercialApi.applyUnappliedPayment(Number(allocation.paymentId), {
+        invoiceId: Number(allocation.invoiceId),
+        amount: allocation.amount || null,
+      });
+      triggerShortcutNotice(
+        `Applied ${formatCurrency(result.amount, currency)} to ${result.invoiceNumber}`
+      );
+      await loadData();
+      await loadCustomerDetail(selectedCustomer.id);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to apply payment');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePreviewFx = async () => {
+    try {
+      setBusy(true);
+      const preview = await commercialApi.previewFxRevaluation({
+        asOfDate: fx.asOfDate || undefined,
+        currencyCode: fx.currencyCode || undefined,
+      });
+      setFx(p => ({ ...p, preview }));
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to preview FX revaluation');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePostFx = async () => {
+    try {
+      setBusy(true);
+      const result = await commercialApi.postFxRevaluation({
+        asOfDate: fx.asOfDate || undefined,
+        currencyCode: fx.currencyCode || undefined,
+      });
+      triggerShortcutNotice(
+        `FX revaluation posted: gain ${result.totalGain.toFixed(2)}, loss ${result.totalLoss.toFixed(2)}`
+      );
+      setFx(p => ({ ...p, preview: result }));
+      const runs = await commercialApi.listFxRevaluationRuns();
+      setFx(p => ({ ...p, runs }));
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to post FX revaluation');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -280,7 +424,7 @@ export const CustomersView: React.FC = () => {
           )}
           {canWrite && (
             <button
-              onClick={() => setShowAddCustomer(true)}
+              onClick={() => setIsNewCustomerOpen(true)}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm"
             >
               <Plus className="w-4 h-4" />
@@ -338,7 +482,9 @@ export const CustomersView: React.FC = () => {
                     <div className="font-bold text-xs text-slate-900 dark:text-white truncate">
                       {cust.companyName}
                     </div>
-                    <div className="text-[11px] text-slate-500 truncate">{cust.name}</div>
+                    <div className="text-[11px] text-slate-500 truncate">
+                      {cust.customerCode} · {cust.name}
+                    </div>
                   </div>
                   <div className="text-right shrink-0 font-mono">
                     <div
@@ -364,14 +510,36 @@ export const CustomersView: React.FC = () => {
                   <div>
                     <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <span>{selectedCustomer.companyName}</span>
-                      {selectedCustomer.taxExempt && (
+                      {selectedCustomer.isTaxExempt && selectedCustomer.taxExemptionValid && (
                         <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[10px] font-bold">
                           Tax Exempt
+                          {selectedCustomer.taxExemptionExpiry
+                            ? ` · exp ${selectedCustomer.taxExemptionExpiry}`
+                            : ''}
                         </span>
                       )}
+                      {selectedCustomer.isTaxExempt && !selectedCustomer.taxExemptionValid && (
+                        <span
+                          className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 text-[10px] font-bold"
+                          title="No active, unexpired reseller permit — tax will be charged"
+                        >
+                          Exemption Invalid
+                        </span>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                          selectedCustomer.customerStatus === 'blocked'
+                            ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                            : selectedCustomer.customerStatus === 'inactive'
+                            ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                        }`}
+                      >
+                        {selectedCustomer.customerStatus}
+                      </span>
                     </h2>
                     <div className="text-xs text-slate-500">
-                      Primary Contact:{' '}
+                      {selectedCustomer.customerCode} · Primary Contact:{' '}
                       <span className="font-semibold text-slate-700 dark:text-slate-300">
                         {selectedCustomer.name}
                       </span>
@@ -385,6 +553,16 @@ export const CustomersView: React.FC = () => {
                     >
                       Statement
                     </button>
+                    {canSendStatements && selectedCustomer.email && (
+                      <button
+                        disabled={busy}
+                        onClick={() => handleEmailStatement(selectedCustomer.id)}
+                        className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <Mail className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Email Statement</span>
+                      </button>
+                    )}
                     {canWrite && (
                       <button
                         onClick={() => setShowAddPermit(true)}
@@ -392,6 +570,32 @@ export const CustomersView: React.FC = () => {
                       >
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                         <span>Add Permit</span>
+                      </button>
+                    )}
+                    {canChangeCredit && (
+                      <button
+                        disabled={busy}
+                        onClick={handleChangeLimit}
+                        className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs disabled:opacity-50"
+                      >
+                        Change Limit
+                      </button>
+                    )}
+                    {canWrite && selectedCustomer.customerStatus !== 'inactive' && (
+                      <button
+                        disabled={busy}
+                        onClick={() =>
+                          handleStatusChange(
+                            selectedCustomer.customerStatus === 'blocked' ? 'active' : 'blocked'
+                          )
+                        }
+                        className={`px-3 py-1.5 rounded-lg border font-semibold text-xs disabled:opacity-50 ${
+                          selectedCustomer.customerStatus === 'blocked'
+                            ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/40'
+                            : 'border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/40'
+                        }`}
+                      >
+                        {selectedCustomer.customerStatus === 'blocked' ? 'Release Hold' : 'Credit Hold'}
                       </button>
                     )}
                     <button
@@ -432,12 +636,62 @@ export const CustomersView: React.FC = () => {
                   </div>
                 </div>
 
+                {creditProfile && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Net Exposure</div>
+                      <div className="font-mono font-bold text-slate-900 dark:text-white tabular-nums">
+                        {formatCurrency(creditProfile.exposure, selectedCustomer.currencyCode || currency)}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Invoices {formatCurrency(creditProfile.openInvoiceBalance, selectedCustomer.currencyCode || currency)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Available Credit</div>
+                      <div
+                        className={`font-mono font-bold tabular-nums ${
+                          creditProfile.availableCredit !== null && creditProfile.availableCredit < 0
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-emerald-600 dark:text-emerald-400'
+                        }`}
+                      >
+                        {creditProfile.availableCredit === null
+                          ? 'No limit'
+                          : formatCurrency(creditProfile.availableCredit, selectedCustomer.currencyCode || currency)}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Limit{' '}
+                        {creditProfile.creditLimit === null
+                          ? '—'
+                          : formatCurrency(creditProfile.creditLimit, selectedCustomer.currencyCode || currency)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Unapplied Cash</div>
+                      <div className="font-mono font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                        {formatCurrency(creditProfile.unappliedReceipts, selectedCustomer.currencyCode || currency)}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Credit memos {formatCurrency(creditProfile.unappliedCreditMemos, selectedCustomer.currencyCode || currency)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Currency / Terms</div>
+                      <div className="font-mono font-bold text-slate-900 dark:text-white">
+                        {selectedCustomer.currencyCode || currency}
+                      </div>
+                      <div className="text-[10px] text-slate-500">{selectedCustomer.terms}</div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-1 text-xs">
                   <span className="text-slate-400 font-semibold flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5" /> Billing Address
                   </span>
                   <div className="text-slate-700 dark:text-slate-300">
-                    {selectedCustomer.address || 'No address specified'}
+                    {selectedCustomer.billingAddress || 'No address specified'}
                   </div>
                 </div>
 
@@ -524,6 +778,242 @@ export const CustomersView: React.FC = () => {
                   </table>
                 </div>
               </div>
+
+              {/* Unapplied cash allocation workbench (D-3 / D-5) */}
+              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="font-bold text-xs text-slate-900 dark:text-white uppercase tracking-wider">
+                    Unapplied Receipts
+                  </h3>
+                  <span className="text-xs font-mono text-slate-500">{unappliedPayments.length} Available</span>
+                </div>
+                <div className="p-4 space-y-3 text-xs">
+                  {unappliedPayments.length === 0 ? (
+                    <div className="text-slate-400">No unapplied customer receipts.</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs font-mono">
+                        <thead className="text-[10px] uppercase text-slate-500 border-b dark:border-slate-800">
+                          <tr>
+                            <th className="py-2">Payment #</th>
+                            <th className="py-2">Date</th>
+                            <th className="py-2">Method</th>
+                            <th className="py-2 text-right">Unapplied</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {unappliedPayments.map(p => (
+                            <tr key={p.paymentId}>
+                              <td className="py-2 font-bold text-blue-600 dark:text-blue-400">{p.paymentNumber}</td>
+                              <td className="py-2 text-slate-500">{p.paymentDate}</td>
+                              <td className="py-2 text-slate-500">{p.paymentMethod}</td>
+                              <td className="py-2 text-right font-bold text-amber-600 dark:text-amber-400">
+                                {formatCurrency(p.unapplied, p.currencyCode || currency)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {canAllocate && unappliedPayments.length > 0 && customerInvoices.some(i => i.balanceDue > 0) && (
+                    <form onSubmit={handleAllocate} className="flex flex-wrap items-end gap-2 pt-2 border-t dark:border-slate-800">
+                      <div>
+                        <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-400">Receipt</label>
+                        <select
+                          value={allocation.paymentId}
+                          onChange={e => setAllocation(p => ({ ...p, paymentId: e.target.value }))}
+                          className="border rounded px-2 py-1.5 dark:bg-slate-850 dark:border-slate-700 min-w-[140px]"
+                        >
+                          <option value="">Select receipt…</option>
+                          {unappliedPayments.map(p => (
+                            <option key={p.paymentId} value={p.paymentId}>
+                              {p.paymentNumber} · {formatCurrency(p.unapplied, p.currencyCode || currency)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-400">Invoice</label>
+                        <select
+                          value={allocation.invoiceId}
+                          onChange={e => setAllocation(p => ({ ...p, invoiceId: e.target.value }))}
+                          className="border rounded px-2 py-1.5 dark:bg-slate-850 dark:border-slate-700 min-w-[160px]"
+                        >
+                          <option value="">Select invoice…</option>
+                          {customerInvoices
+                            .filter(i => i.balanceDue > 0)
+                            .map(i => (
+                              <option key={i.id} value={i.id}>
+                                {i.invoiceNumber} · {formatCurrency(i.balanceDue, currency)} due
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-400">Amount (optional)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={allocation.amount}
+                          onChange={e => setAllocation(p => ({ ...p, amount: e.target.value }))}
+                          placeholder="Full remaining"
+                          className="border rounded px-2 py-1.5 w-32 font-mono dark:bg-slate-850 dark:border-slate-700"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={busy || !allocation.paymentId || !allocation.invoiceId}
+                        className="px-3 py-1.5 rounded bg-blue-600 text-white font-bold disabled:opacity-50"
+                      >
+                        Apply Receipt
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+
+              {/* Statement archive */}
+              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="font-bold text-xs text-slate-900 dark:text-white uppercase tracking-wider">
+                    Statement History
+                  </h3>
+                  <span className="text-xs font-mono text-slate-500">{statements.length} Saved</span>
+                </div>
+                <div className="p-4 text-xs">
+                  {statements.length === 0 ? (
+                    <div className="text-slate-400">No statements archived yet.</div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {statements.map(s => (
+                        <div key={s.statementId} className="py-2 flex items-center justify-between font-mono">
+                          <div>
+                            <span className="font-bold">{s.statementDate}</span>{' '}
+                            <span className="text-slate-500">
+                              ({s.periodStart} → {s.periodEnd})
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-slate-500">
+                              Close {formatCurrency(s.closingBalance, selectedCustomer.currencyCode || currency)}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${s.emailedAt ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                              {s.emailedAt ? 'Emailed' : 'Archived'}
+                            </span>
+                            <button
+                              onClick={() => handleOpenStatement(selectedCustomer.id, s.periodStart, s.periodEnd)}
+                              className="text-blue-600 dark:text-blue-400 font-bold"
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* FX revaluation (D-8) */}
+              {canRevalueFx && (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+                  <button
+                    onClick={() => setShowFxPanel(v => !v)}
+                    className="w-full px-5 py-3 flex items-center justify-between text-left"
+                  >
+                    <span className="font-bold text-xs text-slate-900 dark:text-white uppercase tracking-wider">
+                      Period-End FX Revaluation
+                    </span>
+                    <span className="text-xs text-slate-500">{showFxPanel ? 'Hide' : 'Open'}</span>
+                  </button>
+                  {showFxPanel && (
+                    <div className="p-4 border-t dark:border-slate-800 space-y-3 text-xs">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div>
+                          <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-400">As of</label>
+                          <input
+                            type="date"
+                            value={fx.asOfDate}
+                            onChange={e => setFx(p => ({ ...p, asOfDate: e.target.value }))}
+                            className="border rounded px-2 py-1.5 dark:bg-slate-850 dark:border-slate-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-400">Currency (optional)</label>
+                          <input
+                            value={fx.currencyCode}
+                            maxLength={3}
+                            onChange={e => setFx(p => ({ ...p, currencyCode: e.target.value.toUpperCase() }))}
+                            placeholder="ALL"
+                            className="border rounded px-2 py-1.5 w-24 font-mono dark:bg-slate-850 dark:border-slate-700"
+                          />
+                        </div>
+                        <button
+                          onClick={handlePreviewFx}
+                          disabled={busy}
+                          className="px-3 py-1.5 rounded border font-bold disabled:opacity-50"
+                        >
+                          Preview
+                        </button>
+                        <button
+                          onClick={handlePostFx}
+                          disabled={busy || !fx.preview || fx.preview.posted}
+                          className="px-3 py-1.5 rounded bg-indigo-600 text-white font-bold disabled:opacity-50"
+                        >
+                          Post Revaluation
+                        </button>
+                      </div>
+
+                      {fx.preview && (
+                        <div className="space-y-2">
+                          <div className="font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                            {fx.preview.invoiceCount} invoices · gain {formatCurrency(fx.preview.totalGain, currency)} · loss{' '}
+                            {formatCurrency(fx.preview.totalLoss, currency)} · net {formatCurrency(fx.preview.netAdjustment, currency)}
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-[11px] font-mono">
+                              <thead className="text-[10px] uppercase text-slate-500 border-b dark:border-slate-800">
+                                <tr>
+                                  <th className="py-1.5">Invoice</th>
+                                  <th className="py-1.5">Ccy</th>
+                                  <th className="py-1.5 text-right">Foreign</th>
+                                  <th className="py-1.5 text-right">Closing Rate</th>
+                                  <th className="py-1.5 text-right">Revalued</th>
+                                  <th className="py-1.5 text-right">Gain/Loss</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {fx.preview.lines.map((l: any) => (
+                                  <tr key={l.invoiceId}>
+                                    <td className="py-1.5 font-bold">{l.invoiceNumber}</td>
+                                    <td className="py-1.5">{l.currencyCode}</td>
+                                    <td className="py-1.5 text-right">{l.foreignBalance.toFixed(2)}</td>
+                                    <td className="py-1.5 text-right">{l.closingRate}</td>
+                                    <td className="py-1.5 text-right">{formatCurrency(l.revaluedBaseBalance, currency)}</td>
+                                    <td className={`py-1.5 text-right font-bold ${l.gainLoss < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                      {formatCurrency(l.gainLoss, currency)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {fx.runs.length > 0 && (
+                        <div className="text-[11px] font-mono text-slate-500">
+                          Last posted: {fx.runs[0].asOfDate} · gain {formatCurrency(fx.runs[0].totalGain, currency)} · loss{' '}
+                          {formatCurrency(fx.runs[0].totalLoss, currency)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <div className="p-12 text-center text-slate-500 bg-white dark:bg-slate-900 rounded-xl border">
@@ -532,108 +1022,6 @@ export const CustomersView: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* Add Customer Modal */}
-      {showAddCustomer && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-slate-900 text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Add Customer</span>
-              <button onClick={() => setShowAddCustomer(false)}><X className="w-4 h-4" /></button>
-            </div>
-            <form onSubmit={handleCreateCustomer} className="p-5 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Company / School Name *</label>
-                  <input
-                    required
-                    value={newCust.companyName}
-                    onChange={e => setNewCust(p => ({ ...p, companyName: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Contact Name</label>
-                  <input
-                    value={newCust.name}
-                    onChange={e => setNewCust(p => ({ ...p, name: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={newCust.email}
-                    onChange={e => setNewCust(p => ({ ...p, email: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Phone</label>
-                  <input
-                    value={newCust.phone}
-                    onChange={e => setNewCust(p => ({ ...p, phone: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Payment Terms</label>
-                  <select
-                    value={newCust.terms}
-                    onChange={e => setNewCust(p => ({ ...p, terms: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  >
-                    <option value="Due on Receipt">Due on Receipt</option>
-                    <option value="Net 15">Net 15</option>
-                    <option value="Net 30">Net 30</option>
-                    <option value="Net 60">Net 60</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Credit Limit ({currency})</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={newCust.creditLimit}
-                    onChange={e => setNewCust(p => ({ ...p, creditLimit: e.target.value }))}
-                    placeholder="Optional"
-                    className="w-full border rounded px-2.5 py-1.5 font-mono dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Billing Address</label>
-                <input
-                  value={newCust.address}
-                  onChange={e => setNewCust(p => ({ ...p, address: e.target.value }))}
-                  className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                />
-              </div>
-              <label className="flex items-center gap-2 font-semibold">
-                <input
-                  type="checkbox"
-                  checked={newCust.taxExempt}
-                  onChange={e => setNewCust(p => ({ ...p, taxExempt: e.target.checked }))}
-                />
-                <span>Customer is Tax Exempt</span>
-              </label>
-              <div className="flex justify-end gap-2 pt-2 border-t dark:border-slate-800">
-                <button type="button" onClick={() => setShowAddCustomer(false)} className="px-3 py-1.5 border rounded">
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-1.5 bg-blue-600 text-white rounded font-bold">
-                  Save Customer
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Add Permit Modal */}
       {showAddPermit && selectedCustomer && (
@@ -694,6 +1082,44 @@ export const CustomersView: React.FC = () => {
               <button onClick={() => setStatementData(null)}><X className="w-4 h-4" /></button>
             </div>
             <div className="p-6 space-y-4 overflow-y-auto text-xs">
+              <div className="flex flex-wrap items-end gap-2 p-2 rounded bg-slate-50 border border-slate-200">
+                <div>
+                  <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-500">From</label>
+                  <input
+                    type="date"
+                    value={statementPeriod.start}
+                    onChange={e => setStatementPeriod(p => ({ ...p, start: e.target.value }))}
+                    className="border rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-500">To</label>
+                  <input
+                    type="date"
+                    value={statementPeriod.end}
+                    onChange={e => setStatementPeriod(p => ({ ...p, end: e.target.value }))}
+                    className="border rounded px-2 py-1"
+                  />
+                </div>
+                <button
+                  onClick={() =>
+                    statementData &&
+                    handleOpenStatement(statementData.customerId, statementPeriod.start, statementPeriod.end)
+                  }
+                  className="px-3 py-1 rounded border bg-white font-bold"
+                >
+                  Rebuild
+                </button>
+                {canSendStatements && (
+                  <button
+                    disabled={busy}
+                    onClick={() => statementData && handleEmailStatement(statementData.customerId)}
+                    className="px-3 py-1 rounded bg-blue-600 text-white font-bold disabled:opacity-50"
+                  >
+                    {busy ? 'Queueing…' : 'Email Statement'}
+                  </button>
+                )}
+              </div>
               <div className="flex justify-between font-mono border-b pb-3">
                 <div>
                   <div className="font-bold text-sm font-sans">{statementData.customerName}</div>
@@ -708,6 +1134,22 @@ export const CustomersView: React.FC = () => {
                   </div>
                 </div>
               </div>
+              {statementData.aging && (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-[11px]">
+                  {[
+                    ['Current', statementData.aging.current],
+                    ['1–30', statementData.aging.days1To30],
+                    ['31–60', statementData.aging.days31To60],
+                    ['61–90', statementData.aging.days61To90],
+                    ['90+', statementData.aging.daysOver90],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="p-2 rounded border bg-slate-50">
+                      <div className="text-[9px] uppercase text-slate-500 font-bold">{label}</div>
+                      <div className="font-bold">{formatCurrency(Number(value), statementData.currencyCode || currency)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <table className="w-full text-left border-collapse border border-slate-200 font-mono">
                 <thead className="bg-slate-100 text-[10px] uppercase">
                   <tr>

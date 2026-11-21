@@ -606,11 +606,26 @@ export async function createSupplierBillFromPo(
     throw new AccountingError(409, `Cannot bill cancelled Purchase Order ${po.po_number}`, 'PO_CANCELLED');
   }
 
-  const vRes = await tx.query<{ id: number; company_name: string; terms_label: string }>(
-    `SELECT id, company_name, terms_label FROM vendors WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+  const vRes = await tx.query<{
+    id: number;
+    company_name: string;
+    terms_label: string;
+    status: string;
+    currency_code: string;
+  }>(
+    `SELECT id, company_name, terms_label, status, currency_code
+       FROM vendors WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, Number(po.vendor_id)]
   );
   const vendor = vRes.rows[0];
+  if (!vendor) throw new AccountingError(404, 'Vendor not found');
+  if (['inactive', 'blocked'].includes(vendor.status)) {
+    throw new AccountingError(
+      409,
+      `Supplier ${vendor.company_name} is ${vendor.status.replace('_', ' ')} and cannot be billed`,
+      'VENDOR_NOT_BILLABLE'
+    );
+  }
 
   const poLinesRes = await tx.query<{
     id: number;
@@ -649,7 +664,7 @@ export async function createSupplierBillFromPo(
   const fx = await resolveExchangeRate6(
     tx,
     companyId,
-    input.currencyCode,
+    input.currencyCode || vendor.currency_code,
     ctx.baseCurrency,
     billDate,
     input.exchangeRate

@@ -1,4 +1,4 @@
--- Rollback 0025: remove examination lifecycle completion additions.
+-- Rollback 0026: remove examination lifecycle completion additions.
 
 DROP INDEX IF EXISTS ix_exam_batches_company_due;
 
@@ -10,9 +10,14 @@ ALTER TABLE exam_assessment_batches
   DROP COLUMN IF EXISTS spec_hash,
   DROP COLUMN IF EXISTS spec_version;
 
+-- P1-11: Use a partial unique index that excludes reprints, matching the
+-- forward migration. A full UNIQUE constraint would fail if any reprint rows
+-- exist (reprints share the parent's batch_id + subject_name).
 DROP INDEX IF EXISTS uq_exam_papers_batch_subject_original;
-ALTER TABLE exam_papers
-  ADD CONSTRAINT uq_exam_papers_batch_subject UNIQUE (company_id, batch_id, subject_name);
+DROP INDEX IF EXISTS uq_exam_papers_batch_subject;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_exam_papers_batch_subject
+  ON exam_papers (company_id, batch_id, subject_name)
+  WHERE reprint_of_paper_id IS NULL;
 
 ALTER TABLE exam_papers DROP CONSTRAINT IF EXISTS ck_exam_papers_package_count;
 ALTER TABLE exam_papers

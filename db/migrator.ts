@@ -15,6 +15,12 @@ export interface MigrationPair {
   upSql: string;
   downSql: string;
   checksumSha256: string;
+  // Line-ending-normalised (LF) checksum. Git's autocrlf can rewrite the
+  // working-tree file from LF to CRLF (or vice-versa) after a migration has
+  // already been applied, which would otherwise look like tampering. Comparing
+  // against both the raw and the normalised hash keeps the guard effective for
+  // real content changes while tolerating pure CRLF/LF churn.
+  checksumSha256Normalized: string;
 }
 
 export interface AppliedMigrationRecord {
@@ -29,6 +35,11 @@ const DEFAULT_MIGRATIONS_DIR = path.resolve(process.cwd(), 'db', 'migrations');
 
 export function sha256(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/** Normalise CRLF/CR to LF so checksums are independent of line-ending style. */
+export function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
 export function loadMigrations(migrationsDir = DEFAULT_MIGRATIONS_DIR): MigrationPair[] {
@@ -61,6 +72,7 @@ export function loadMigrations(migrationsDir = DEFAULT_MIGRATIONS_DIR): Migratio
       upSql,
       downSql,
       checksumSha256: sha256(upSql),
+      checksumSha256Normalized: sha256(normalizeLineEndings(upSql)),
     };
   });
 }
@@ -106,7 +118,13 @@ export async function migrateUp(
 
     const existing = appliedMap.get(mig.version);
     if (existing) {
-      if (existing.checksum_sha256 !== mig.checksumSha256) {
+      // Accept either the raw or the LF-normalised checksum. This tolerates
+      // git autocrlf rewriting line endings after a migration was applied while
+      // still rejecting genuine content changes.
+      const rawMatches = existing.checksum_sha256 === mig.checksumSha256;
+      const normalizedMatches =
+        existing.checksum_sha256 === mig.checksumSha256Normalized;
+      if (!rawMatches && !normalizedMatches) {
         throw new Error(
           `Checksum mismatch for already-applied migration ${mig.version}_${mig.name}: ` +
             `recorded=${existing.checksum_sha256}, disk=${mig.checksumSha256}`

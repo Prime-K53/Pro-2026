@@ -22,6 +22,8 @@
     "test:amendments": "tsx tests/printing/contract-amendments.test.ts",
     "test:printing-contracts": "tsx tests/printing/contracts-gap-closure.test.ts",
     "test:exam-integrity": "tsx tests/printing/exam-production-integrity.test.ts",
+    "test:exam-lifecycle": "tsx tests/printing/exam-lifecycle.test.ts",
+    "test:exam-isolation": "tsx tests/printing/exam-tenant-isolation.test.ts",
     "test:workflows": "tsx tests/workflows/phase9-e2e-workflows.test.ts",
     "test:migration": "tsx tests/migration/slowbooks-migration.test.ts",
     "test:documents": "tsx tests/documents/documents-and-invoicing.test.ts",
