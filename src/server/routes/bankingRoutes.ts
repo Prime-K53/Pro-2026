@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import {
   categorizeImportedTransaction,
@@ -46,7 +47,7 @@ export function createBankingRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Bank & Credit Card Accounts
   router.get('/banking/accounts', requirePermission('banking:read'), async (req: Request, res: Response) => {

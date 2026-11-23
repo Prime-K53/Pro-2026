@@ -29,6 +29,8 @@ export const INITIAL_COMPANY_PROFILE: CompanyProfile = {
   currency: 'K',
   defaultBankAccountId: 'acc-1010',
   salesTaxRate: 0.075,
+  extraTypingFinishingPerPage: 5,
+  manualSellingPricePerSheet: 1.5,
   theme: 'classic',
   isServerEdition: false,
   serverAddress: 'http://192.168.1.140:3000',

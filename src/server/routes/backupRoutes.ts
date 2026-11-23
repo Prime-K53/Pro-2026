@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { createDatabaseBackup, listBackups } from '../services/backupService.ts';
 import { logger } from '../logger.ts';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import path from 'node:path';
 export function createBackupRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, requirePermission } = createAuthMiddleware(db);
-  router.use(requireAuth);
+  router.use(requireAuth, csrfProtection);
 
   router.post('/backup', requirePermission('reports:read'), async (req: Request, res: Response) => {
     try {

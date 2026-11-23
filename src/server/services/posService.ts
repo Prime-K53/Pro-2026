@@ -32,6 +32,9 @@ import {
   interpolateTemplate,
   resolveSmartOpsAccounts,
 } from './smartOpsService.ts';
+import { releaseReservation } from './referralBudgetService.ts';
+import { reverseReferralReward } from './referralReversalService.ts';
+import { serializeTerms } from './referralConfigService.ts';
 
 export interface PosLineInput {
   itemId?: number | null;
@@ -90,7 +93,7 @@ export async function getPosCatalogAndOrders(tx: Transaction, companyId: number)
       tx.query<any>(
         `SELECT id, sku, name, item_type, description, unit_cost::text, avg_cost::text,
                 sales_price::text, on_hand::text, COALESCE(reserved_qty, 0)::text AS reserved_qty,
-                usage_unit, is_taxable, income_account_id
+                usage_unit, is_taxable, income_account_id, barcode
            FROM inventory_items
           WHERE company_id = $1
             AND is_active = TRUE
@@ -216,6 +219,7 @@ export async function getPosCatalogAndOrders(tx: Transaction, companyId: number)
       unitLabel: it.usage_unit || 'Unit',
       isTaxable: Boolean(it.is_taxable),
       incomeAccountId: Number(it.income_account_id),
+      barcode: it.barcode || null,
       variants: variantsByItem.get(Number(it.id)) ?? [],
     })),
     customers: customersRes.rows.map(c => ({
@@ -295,6 +299,8 @@ async function computePosPricing(
     promoCode?: string | null;
     promoId?: number | null;
     referralCode?: string | null;
+    customerId?: number | null;
+    orderRef?: string | null;
   }
 ) {
   if (!Array.isArray(input.lines) || input.lines.length === 0) {
@@ -374,18 +380,23 @@ async function computePosPricing(
     );
   }
 
+  const promoDiscount4 = promoMatch ? promoMatch.discount4 : 0n;
+
   let referralMatch: Awaited<ReturnType<typeof evaluateReferralForOrder>> | null = null;
-  if (input.referralCode && input.referralCode.trim()) {
-    referralMatch = await evaluateReferralForOrder(
-      tx,
-      companyId,
-      input.referralCode,
-      orderDate,
-      grossSubtotal4
-    );
+  // D1-A: a referral discount cannot be combined with another promotional discount.
+  if (input.referralCode && input.referralCode.trim() && promoDiscount4 === 0n) {
+    const eligibleLines = preparedLines.map(l => ({
+      itemId: l.itemId ?? null,
+      itemType: l.itemType ?? null,
+      grossAmount4: l.grossAmount4,
+    }));
+    referralMatch = await evaluateReferralForOrder(tx, companyId, input.referralCode, orderDate, {
+      eligibleLines,
+      customerId: input.customerId ?? null,
+      orderRef: input.orderRef ?? null,
+    });
   }
 
-  const promoDiscount4 = promoMatch ? promoMatch.discount4 : 0n;
   let referralDiscount4 = referralMatch ? referralMatch.refereeDiscount4 : 0n;
   if (promoDiscount4 + referralDiscount4 > grossSubtotal4) {
     referralDiscount4 = grossSubtotal4 - promoDiscount4;
@@ -445,6 +456,7 @@ export async function previewPosOrder(tx: Transaction, companyId: number, input:
     promoCode: input.promoCode,
     promoId: input.promoId,
     referralCode: input.referralCode,
+    customerId: input.customerId ?? null,
   });
 
   return {
@@ -568,6 +580,8 @@ export async function checkoutPosOrder(
     promoCode: input.promoCode,
     promoId: input.promoId,
     referralCode: input.referralCode,
+    customerId,
+    orderRef: null,
   });
 
   if (pricing.total4 <= 0n) {
@@ -886,13 +900,13 @@ export async function checkoutPosOrder(
        gross_subtotal, promo_id, promo_code, promo_discount,
        referral_code_id, referral_discount, total_discount, net_subtotal,
        tax_rate, tax_amount, total, tender_mode, amount_tendered, change_due,
-       deposit_to_account_id, journal_txn_id, status, notes, created_by
+       deposit_to_account_id, journal_txn_id, status, notes, created_by, shift_id
      ) VALUES (
        $1, $2, $3, $4, $5::DATE,
        $6::NUMERIC(19,4), $7, $8, $9::NUMERIC(19,4),
        $10, $11::NUMERIC(19,4), $12::NUMERIC(19,4), $13::NUMERIC(19,4),
        $14::NUMERIC(9,6), $15::NUMERIC(19,4), $16::NUMERIC(19,4), $17, $18::NUMERIC(19,4), $19::NUMERIC(19,4),
-       $20, $21, $22, $23, $24
+       $20, $21, $22, $23, $24, $25
      ) RETURNING id`,
     [
       companyId,
@@ -919,6 +933,7 @@ export async function checkoutPosOrder(
       isOnAccount ? 'on_account' : 'completed',
       input.notes?.trim() || null,
       actor.userId,
+      (await getCurrentUserShift(tx, companyId, actor.userId))?.id ?? null,
     ]
   );
   const posOrderId = Number(posIns.rows[0].id);
@@ -998,7 +1013,7 @@ export async function checkoutPosOrder(
     );
   }
 
-  // Record referral event & accrue reward expense/liability in GL
+  // Record referral event (pending) + reserve budget exposure (F4-A, U3-B).
   if (pricing.referralMatch) {
     await accrueReferralEventAndJournal(tx, companyId, actor, {
       referralCodeId: pricing.referralMatch.referralCodeId,
@@ -1015,7 +1030,9 @@ export async function checkoutPosOrder(
       txnDate: orderDate,
       reference: receiptNumber,
       notes: `POS referral via ${pricing.referralMatch.code}`,
-      status: 'approved',
+      status: 'pending',
+      method: 'code',
+      termsSnapshot: serializeTerms(pricing.referralMatch.terms),
     });
   }
 
@@ -1199,12 +1216,42 @@ export async function voidPosOrder(
     );
   }
 
-  // Void referral event if any and reverse unpaid accrual JE
+  // Void referral event(s) and reverse any reward already credited.
   const refEvs = await tx.query<any>(
     `SELECT * FROM referral_events WHERE company_id = $1 AND pos_order_id = $2 AND status <> 'voided' FOR UPDATE`,
     [companyId, posOrderId]
   );
   for (const rev of refEvs.rows) {
+    if (rev.status === 'credited' && rev.wallet_txn_id != null) {
+      // Reverse the wallet-credited reward (creates a referenced reversal event).
+      await reverseReferralReward(tx, companyId, actor, {
+        eventId: Number(rev.id),
+        reason: `Void POS Order ${po.receipt_number}`,
+      });
+      await tx.query(`UPDATE referral_events SET status = 'voided' WHERE company_id = $1 AND id = $2`, [
+        companyId,
+        Number(rev.id),
+      ]);
+      await tx.query(
+        `UPDATE referral_codes
+            SET conversions_count = GREATEST(0, conversions_count - 1),
+                total_referred_revenue = GREATEST(0, total_referred_revenue - $3::NUMERIC(19,4))
+          WHERE company_id = $1 AND id = $2`,
+        [companyId, Number(rev.referral_code_id), rev.qualifying_amount]
+      );
+      continue;
+    }
+
+    // Release any pending budget reservation.
+    if (rev.reservation_id != null) {
+      try {
+        await releaseReservation(tx, companyId, Number(rev.reservation_id));
+      } catch {
+        // reservation already released/qualified — ignore
+      }
+    }
+
+    // Legacy accrual journal (pre-wallet events) still needs reversal.
     if (rev.accrual_journal_txn_id && !rev.payout_journal_txn_id) {
       await reverseJournalEntry(tx, companyId, actor, Number(rev.accrual_journal_txn_id), {
         reason: `Void POS Order ${po.receipt_number}`,
@@ -1238,4 +1285,859 @@ export async function voidPosOrder(
   });
 
   return { voided: true, posOrderId, receiptNumber: po.receipt_number, reversalJournalId };
+}
+
+// ============================================================================
+// PHASE 1: POS GOVERNANCE — Shift Management, Barcode, Suspended Sales, Split Payments
+// ============================================================================
+
+export interface PosShiftInput {
+  openingFloat?: string | number;
+  notes?: string | null;
+}
+
+export interface PosShiftCloseInput {
+  actualCash: string | number;
+  notes?: string | null;
+  /** Set by the route only when the actor holds `pos:manage_shifts`. */
+  allowOtherCashier?: boolean;
+}
+
+export interface PosSuspendInput {
+  posOrderId: number;
+  notes?: string | null;
+}
+
+export interface PosResumeInput {
+  suspendedSaleId: number;
+}
+
+export interface PosBarcodeLookupResult {
+  found: boolean;
+  item?: {
+    id: number;
+    sku: string | null;
+    name: string;
+    itemType: string;
+    description: string | null;
+    unitCost: number;
+    salesPrice: number;
+    onHand: number;
+    reservedQty: number;
+    usageUnit: string | null;
+    isTaxable: boolean;
+    incomeAccountId: number;
+    barcode: string;
+  };
+  error?: string;
+}
+
+export interface PosShiftSummary {
+  id: number;
+  cashierId: number;
+  cashierName: string;
+  openedAt: string;
+  closedAt: string | null;
+  openingFloat: number;
+  closingFloat: number | null;
+  cashIn: number;
+  cashOut: number;
+  cashRefunds: number;
+  cashDeposits: number;
+  expectedCash: number | null;
+  actualCash: number | null;
+  variance: number | null;
+  status: string;
+  notes: string | null;
+  transactionCount: number;
+  totalSales: number;
+  cashSales: number;
+  cardSales: number;
+  mobileMoneySales: number;
+  otherSales: number;
+}
+
+export type PosCashMovementType =
+  | 'cash_in'
+  | 'cash_out'
+  | 'paid_in'
+  | 'paid_out'
+  | 'deposit';
+
+export interface PosCashMovementInput {
+  movementType: PosCashMovementType;
+  amount: string | number;
+  reason?: string | null;
+}
+
+export interface PosCashMovement {
+  id: number;
+  companyId: number;
+  shiftId: number;
+  movementType: PosCashMovementType;
+  amount: number;
+  reason: string | null;
+  performedBy: number;
+  createdAt: string;
+}
+
+function mapPosCashMovement(r: any): PosCashMovement {
+  return {
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    shiftId: Number(r.shift_id),
+    movementType: r.movement_type,
+    amount: toMoneyNumber(parseDecimal4(r.amount)),
+    reason: r.reason ?? null,
+    performedBy: Number(r.performed_by),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+/**
+ * Record a cash-drawer movement (cash-in, cash-out, paid-in/out, deposit)
+ * against an open shift. Only the shift owner may record movements.
+ */
+export async function recordPosCashMovement(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  shiftId: number,
+  input: PosCashMovementInput
+): Promise<PosCashMovement> {
+  const allowed: PosCashMovementType[] = ['cash_in', 'cash_out', 'paid_in', 'paid_out', 'deposit'];
+  if (!allowed.includes(input.movementType)) {
+    throw new AccountingError(400, 'Invalid cash movement type', 'INVALID_CASH_MOVEMENT_TYPE');
+  }
+
+  const shiftRes = await tx.query<any>(
+    `SELECT id, status, cashier_id FROM pos_shifts
+      WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, shiftId]
+  );
+  if (shiftRes.rows.length === 0) {
+    throw new AccountingError(404, 'Shift not found', 'SHIFT_NOT_FOUND');
+  }
+  const shift = shiftRes.rows[0];
+  if (shift.status !== 'open') {
+    throw new AccountingError(400, 'Shift is not open', 'SHIFT_NOT_OPEN');
+  }
+  if (Number(shift.cashier_id) !== actor.userId) {
+    throw new AccountingError(
+      403,
+      'Only the shift owner may record cash movements',
+      'SHIFT_FORBIDDEN'
+    );
+  }
+
+  const amount = parseDecimal4(input.amount);
+  if (amount <= 0n) {
+    throw new AccountingError(400, 'amount must be greater than zero', 'INVALID_AMOUNT');
+  }
+
+  const ins = await tx.query<any>(
+    `INSERT INTO pos_cash_movements (company_id, shift_id, movement_type, amount, reason, performed_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [companyId, shiftId, input.movementType, formatDecimal4(amount), input.reason || null, actor.userId]
+  );
+  const row = ins.rows[0];
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'POS_CASH_MOVEMENT',
+    tableName: 'pos_cash_movements',
+    recordId: Number(row.id),
+    newValues: {
+      shiftId,
+      movementType: input.movementType,
+      amount: formatDecimal4(amount),
+      reason: input.reason || null,
+    },
+  });
+
+  return mapPosCashMovement(row);
+}
+
+/** List cash-drawer movements for a shift, oldest first. */
+export async function listPosCashMovements(
+  tx: Transaction,
+  companyId: number,
+  shiftId: number
+): Promise<PosCashMovement[]> {
+  const res = await tx.query<any>(
+    `SELECT * FROM pos_cash_movements
+      WHERE company_id = $1 AND shift_id = $2
+      ORDER BY created_at ASC, id ASC`,
+    [companyId, shiftId]
+  );
+  return res.rows.map(mapPosCashMovement);
+}
+
+/**
+ * Open a new POS shift for a cashier.
+ * Sets opening float and initializes cash drawer.
+ */
+export async function openPosShift(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: PosShiftInput
+): Promise<{ shift: PosShiftSummary }> {
+  const cashierId = actor.userId;
+  const openingFloat4 = input.openingFloat != null ? parseDecimal4(input.openingFloat) : 0n;
+
+  // Check if cashier already has an open shift
+  const openShiftRes = await tx.query<{ id: number }>(
+    `SELECT id FROM pos_shifts WHERE company_id = $1 AND cashier_id = $2 AND status = 'open' LIMIT 1`,
+    [companyId, cashierId]
+  );
+  if (openShiftRes.rows.length > 0) {
+    throw new AccountingError(409, 'Cashier already has an open shift', 'SHIFT_ALREADY_OPEN');
+  }
+
+  const shiftIns = await tx.query<{ id: number }>(
+    `INSERT INTO pos_shifts (company_id, cashier_id, opening_float, status)
+     VALUES ($1, $2, $3::NUMERIC(12,2), 'open')
+     RETURNING id`,
+    [companyId, cashierId, formatDecimal4(openingFloat4)]
+  );
+  const shiftId = Number(shiftIns.rows[0].id);
+
+  // Log audit
+  await tx.query(
+    `INSERT INTO pos_shift_audit (company_id, shift_id, action, performed_by, details)
+     VALUES ($1, $2, 'opened', $3, $4)`,
+    [companyId, shiftId, actor.userId, JSON.stringify({ openingFloat: formatDecimal4(openingFloat4), notes: input.notes || null })]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'POS_SHIFT_OPENED',
+    tableName: 'pos_shifts',
+    recordId: shiftId,
+    newValues: { openingFloat: formatDecimal4(openingFloat4), cashierId },
+  });
+
+  const shift = await getPosShiftSummary(tx, companyId, shiftId);
+  return { shift };
+}
+
+/**
+ * Close a POS shift and reconcile cash.
+ * Computes expected cash = opening float + cash sales + cash in - refunds - cash out - deposits.
+ * Records variance and closes the shift.
+ */
+export async function closePosShift(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  shiftId: number,
+  input: PosShiftCloseInput
+): Promise<{ shift: PosShiftSummary; variance: number; varianceStatus: 'balanced' | 'over' | 'short' }> {
+  // Verify shift exists and is open.
+  const shiftRes = await tx.query<any>(
+    `SELECT id, cashier_id, status, opening_float, opened_at, closed_at
+       FROM pos_shifts WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, shiftId]
+  );
+  if (shiftRes.rows.length === 0) {
+    throw new AccountingError(404, 'POS shift not found', 'SHIFT_NOT_FOUND');
+  }
+  const shift = shiftRes.rows[0];
+  if (shift.status !== 'open') {
+    throw new AccountingError(409, 'POS shift is already closed', 'SHIFT_ALREADY_CLOSED');
+  }
+  const isOverride =
+    Number(shift.cashier_id) !== actor.userId && input.allowOtherCashier === true;
+  if (Number(shift.cashier_id) !== actor.userId && !isOverride) {
+    throw new AccountingError(403, 'Only the shift owner can close this shift', 'SHIFT_NOT_OWNER');
+  }
+
+  const actualCash4 = parseDecimal4(input.actualCash);
+
+  // Cash tender legs for completed sales in THIS shift (not a time window).
+  const tenderRes = await tx.query<{ tender_method: string; amount: string }>(
+    `SELECT t.tender_method, COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status = 'completed'
+      GROUP BY t.tender_method`,
+    [companyId, shiftId]
+  );
+  const tenderMap = sumTendersByMethod(tenderRes.rows);
+
+  // Cash tendered on ALL orders that were rung up (completed + later voided),
+  // so a refund can be subtracted without double-counting.
+  const cashGrossRes = await tx.query<{ amount: string }>(
+    `SELECT COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status IN ('completed', 'voided')
+        AND t.tender_method = 'Cash'`,
+    [companyId, shiftId]
+  );
+
+  // Cash refunded on voided orders in this shift.
+  const refundRes = await tx.query<{ amount: string }>(
+    `SELECT COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status = 'voided'
+        AND t.tender_method = 'Cash'`,
+    [companyId, shiftId]
+  );
+
+  // Cash-drawer movements recorded against this shift.
+  const movementRes = await tx.query<{ movement_type: string; amount: string }>(
+    `SELECT movement_type, COALESCE(SUM(amount), 0)::text AS amount
+       FROM pos_cash_movements
+      WHERE company_id = $1 AND shift_id = $2
+      GROUP BY movement_type`,
+    [companyId, shiftId]
+  );
+  const movementMap = sumMovementsByType(movementRes.rows);
+
+  const openingFloat4 = parseDecimal4(shift.opening_float);
+  const grossCashSales4 = parseDecimal4(cashGrossRes.rows[0]?.amount ?? '0');
+  const cashRefunds4 = parseDecimal4(refundRes.rows[0]?.amount ?? '0');
+  const netCashSales4 = grossCashSales4 - cashRefunds4;
+  const cashIn4 = (movementMap.get('cash_in') ?? 0n) + (movementMap.get('paid_in') ?? 0n);
+  const cashOut4 = (movementMap.get('cash_out') ?? 0n) + (movementMap.get('paid_out') ?? 0n);
+  const cashDeposits4 = movementMap.get('deposit') ?? 0n;
+
+  // ExpectedCash = OpeningFloat + CashSales + CashIn - CashRefunds - CashOut - CashDeposits
+  // (CashSales here is gross; net cash = gross - refunds.)
+  const expectedCash4 =
+    openingFloat4 + grossCashSales4 + cashIn4 - cashRefunds4 - cashOut4 - cashDeposits4;
+  const variance4 = actualCash4 - expectedCash4;
+  const variance = toMoneyNumber(variance4);
+
+  let varianceStatus: 'balanced' | 'over' | 'short' = 'balanced';
+  if (variance > 0.01) varianceStatus = 'over';
+  else if (variance < -0.01) varianceStatus = 'short';
+
+  // Persist the reconciliation totals for audit.
+  await tx.query(
+    `UPDATE pos_shifts SET
+       closed_at = NOW(),
+       closing_float = $2::NUMERIC(12,2),
+       cash_in = $3::NUMERIC(12,2),
+       cash_out = $4::NUMERIC(12,2),
+       cash_refunds = $5::NUMERIC(12,2),
+       cash_deposits = $6::NUMERIC(12,2),
+       expected_cash = $7::NUMERIC(12,2),
+       actual_cash = $8::NUMERIC(12,2),
+       variance = $9::NUMERIC(12,2),
+       status = 'closed',
+       notes = $10,
+       updated_at = NOW()
+     WHERE company_id = $1 AND id = $11`,
+    [
+      companyId,
+      formatDecimal4(openingFloat4 + netCashSales4),
+      formatDecimal4(cashIn4),
+      formatDecimal4(cashOut4),
+      formatDecimal4(cashRefunds4),
+      formatDecimal4(cashDeposits4),
+      formatDecimal4(expectedCash4),
+      formatDecimal4(actualCash4),
+      formatDecimal4(variance4),
+      input.notes || null,
+      shiftId,
+    ]
+  );
+
+  await tx.query(
+    `INSERT INTO pos_shift_audit (company_id, shift_id, action, performed_by, details)
+     VALUES ($1, $2, 'reconciled', $3, $4)`,
+    [
+      companyId,
+      shiftId,
+      actor.userId,
+      JSON.stringify({
+        actualCash: formatDecimal4(actualCash4),
+        expectedCash: formatDecimal4(expectedCash4),
+        cashSales: formatDecimal4(grossCashSales4),
+        cashIn: formatDecimal4(cashIn4),
+        cashRefunds: formatDecimal4(cashRefunds4),
+        cashOut: formatDecimal4(cashOut4),
+        cashDeposits: formatDecimal4(cashDeposits4),
+        variance: formatDecimal4(variance4),
+        varianceStatus,
+        override: isOverride,
+        cashierId: Number(shift.cashier_id),
+        notes: input.notes || null,
+      }),
+    ]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'POS_SHIFT_CLOSED',
+    tableName: 'pos_shifts',
+    recordId: shiftId,
+    newValues: {
+      actualCash: formatDecimal4(actualCash4),
+      expectedCash: formatDecimal4(expectedCash4),
+      cashRefunds: formatDecimal4(cashRefunds4),
+      cashDeposits: formatDecimal4(cashDeposits4),
+      variance: formatDecimal4(variance4),
+      varianceStatus,
+      override: isOverride,
+      cashierId: Number(shift.cashier_id),
+    },
+  });
+
+  const shiftSummary = await getPosShiftSummary(tx, companyId, shiftId);
+  return { shift: shiftSummary, variance, varianceStatus };
+}
+
+function sumTendersByMethod(
+  rows: Array<{ tender_method: string; amount: string }>
+): Map<string, bigint> {
+  const map = new Map<string, bigint>();
+  for (const r of rows) {
+    const value = parseDecimal4(r.amount);
+    map.set(r.tender_method, (map.get(r.tender_method) ?? 0n) + value);
+  }
+  return map;
+}
+
+function sumMovementsByType(
+  rows: Array<{ movement_type: string; amount: string }>
+): Map<string, bigint> {
+  const map = new Map<string, bigint>();
+  for (const r of rows) {
+    const value = parseDecimal4(r.amount);
+    map.set(r.movement_type, (map.get(r.movement_type) ?? 0n) + value);
+  }
+  return map;
+}
+
+/**
+ * Get a summary of a POS shift including transaction stats and the cash
+ * reconciliation totals. Stats are scoped to the shift, not a time window.
+ */
+async function getPosShiftSummary(
+  tx: Transaction,
+  companyId: number,
+  shiftId: number
+): Promise<PosShiftSummary> {
+  const shiftRes = await tx.query<any>(
+    `SELECT ps.*, u.username AS cashier_name
+       FROM pos_shifts ps
+       JOIN users u ON u.id = ps.cashier_id
+      WHERE ps.company_id = $1 AND ps.id = $2 LIMIT 1`,
+    [companyId, shiftId]
+  );
+  if (shiftRes.rows.length === 0) {
+    throw new AccountingError(404, 'POS shift not found', 'SHIFT_NOT_FOUND');
+  }
+  const s = shiftRes.rows[0];
+
+  const statsRes = await tx.query<{
+    transaction_count: string;
+    total_sales: string;
+  }>(
+    `SELECT
+       COUNT(*)::text AS transaction_count,
+       COALESCE(SUM(total) FILTER (WHERE status = 'completed'), 0)::text AS total_sales
+     FROM pos_orders
+     WHERE company_id = $1 AND shift_id = $2`,
+    [companyId, shiftId]
+  );
+
+  const tenderRes = await tx.query<{ tender_method: string; amount: string }>(
+    `SELECT t.tender_method, COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status = 'completed'
+      GROUP BY t.tender_method`,
+    [companyId, shiftId]
+  );
+  const tenderMap = sumTendersByMethod(tenderRes.rows);
+
+  const refundRes = await tx.query<{ amount: string }>(
+    `SELECT COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status = 'voided'
+        AND t.tender_method = 'Cash'`,
+    [companyId, shiftId]
+  );
+
+  const cashGrossRes = await tx.query<{ amount: string }>(
+    `SELECT COALESCE(SUM(t.amount), 0)::text AS amount
+       FROM pos_order_tenders t
+       JOIN pos_orders o ON o.company_id = t.company_id AND o.id = t.pos_order_id
+      WHERE t.company_id = $1 AND o.shift_id = $2 AND o.status IN ('completed', 'voided')
+        AND t.tender_method = 'Cash'`,
+    [companyId, shiftId]
+  );
+
+  const movementRes = await tx.query<{ movement_type: string; amount: string }>(
+    `SELECT movement_type, COALESCE(SUM(amount), 0)::text AS amount
+       FROM pos_cash_movements
+      WHERE company_id = $1 AND shift_id = $2
+      GROUP BY movement_type`,
+    [companyId, shiftId]
+  );
+  const movementMap = sumMovementsByType(movementRes.rows);
+
+  const stats = statsRes.rows[0];
+  const openingFloat4 = parseDecimal4(s.opening_float);
+  const totalSales4 = parseDecimal4(stats.total_sales);
+  const cashSales4 = tenderMap.get('Cash') ?? 0n;
+  const cardSales4 = (tenderMap.get('Card') ?? 0n) + (tenderMap.get('Credit Card') ?? 0n);
+  const mobileMoneySales4 = tenderMap.get('Mobile Money') ?? 0n;
+  const otherSales4 = totalSales4 - cashSales4 - cardSales4 - mobileMoneySales4;
+  const cashRefunds4 = parseDecimal4(refundRes.rows[0]?.amount ?? '0');
+  const grossCashSales4 = parseDecimal4(cashGrossRes.rows[0]?.amount ?? '0');
+  const netCashSales4 = grossCashSales4 - cashRefunds4;
+  const cashIn4 = (movementMap.get('cash_in') ?? 0n) + (movementMap.get('paid_in') ?? 0n);
+  const cashOut4 = (movementMap.get('cash_out') ?? 0n) + (movementMap.get('paid_out') ?? 0n);
+  const cashDeposits4 = movementMap.get('deposit') ?? 0n;
+  const expectedCash4 =
+    openingFloat4 + netCashSales4 + cashIn4 - cashOut4 - cashDeposits4;
+
+  return {
+    id: Number(s.id),
+    cashierId: Number(s.cashier_id),
+    cashierName: s.cashier_name,
+    openedAt: s.opened_at,
+    closedAt: s.closed_at,
+    openingFloat: toMoneyNumber(openingFloat4),
+    closingFloat: s.closing_float != null ? toMoneyNumber(parseDecimal4(s.closing_float)) : null,
+    cashIn: toMoneyNumber(cashIn4),
+    cashOut: toMoneyNumber(cashOut4),
+    cashRefunds: toMoneyNumber(cashRefunds4),
+    cashDeposits: toMoneyNumber(cashDeposits4),
+    expectedCash: toMoneyNumber(expectedCash4),
+    actualCash: s.actual_cash != null ? toMoneyNumber(parseDecimal4(s.actual_cash)) : null,
+    variance: s.variance != null ? toMoneyNumber(parseDecimal4(s.variance)) : null,
+    status: s.status,
+    notes: s.notes,
+    transactionCount: Number(stats.transaction_count),
+    totalSales: toMoneyNumber(totalSales4),
+    cashSales: toMoneyNumber(cashSales4),
+    cardSales: toMoneyNumber(cardSales4),
+    mobileMoneySales: toMoneyNumber(mobileMoneySales4),
+    otherSales: toMoneyNumber(otherSales4 < 0n ? 0n : otherSales4),
+  };
+}
+
+/**
+ * List all POS shifts for a company, optionally filtered by status.
+ */
+export async function listPosShifts(
+  tx: Transaction,
+  companyId: number,
+  filters?: { status?: 'open' | 'closed'; cashierId?: number; limit?: number }
+): Promise<{ shifts: PosShiftSummary[] }> {
+  const conditions: string[] = ['ps.company_id = $1'];
+  const params: any[] = [companyId];
+  let paramIdx = 2;
+
+  if (filters?.status) {
+    conditions.push(`ps.status = $${paramIdx++}`);
+    params.push(filters.status);
+  }
+  if (filters?.cashierId) {
+    conditions.push(`ps.cashier_id = $${paramIdx++}`);
+    params.push(filters.cashierId);
+  }
+
+  const limit = Math.min(filters?.limit || 50, 200);
+  const query = `
+    SELECT ps.id
+      FROM pos_shifts ps
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY ps.opened_at DESC
+     LIMIT ${limit}
+  `;
+
+  const shiftsRes = await tx.query<{ id: number }>(query, params);
+  const shifts: PosShiftSummary[] = [];
+  for (const row of shiftsRes.rows) {
+    shifts.push(await getPosShiftSummary(tx, companyId, Number(row.id)));
+  }
+  return { shifts };
+}
+
+/**
+ * Get transactions for a specific shift.
+ */
+export async function getPosShiftTransactions(
+  tx: Transaction,
+  companyId: number,
+  shiftId: number
+): Promise<{
+  transactions: Array<{
+    id: number;
+    receiptNumber: string;
+    amount: number;
+    cashAmount: number;
+    tenderMode: string;
+    status: string;
+    createdAt: string;
+  }>;
+}> {
+  const shiftRes = await tx.query<{ id: number }>(
+    `SELECT id FROM pos_shifts WHERE company_id = $1 AND id = $2 LIMIT 1`,
+    [companyId, shiftId]
+  );
+  if (shiftRes.rows.length === 0) {
+    throw new AccountingError(404, 'POS shift not found', 'SHIFT_NOT_FOUND');
+  }
+
+  const txRes = await tx.query<any>(
+    `SELECT o.id, o.receipt_number, o.total::text, o.tender_mode, o.status, o.created_at,
+            COALESCE(SUM(CASE WHEN t.tender_method = 'Cash' THEN t.amount ELSE 0 END), 0)::text AS cash_amount
+       FROM pos_orders o
+       LEFT JOIN pos_order_tenders t
+         ON t.company_id = o.company_id AND t.pos_order_id = o.id
+      WHERE o.company_id = $1 AND o.shift_id = $2
+      GROUP BY o.id
+      ORDER BY o.created_at DESC`,
+    [companyId, shiftId]
+  );
+
+  return {
+    transactions: txRes.rows.map(r => ({
+      id: Number(r.id),
+      receiptNumber: r.receipt_number,
+      amount: toMoneyNumber(parseDecimal4(r.total)),
+      cashAmount: toMoneyNumber(parseDecimal4(r.cash_amount)),
+      tenderMode: r.tender_mode,
+      status: r.status,
+      createdAt: r.created_at,
+    })),
+  };
+}
+
+/**
+ * Suspend a POS order (park it for later).
+ */
+export async function suspendPosOrder(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: PosSuspendInput
+): Promise<{ suspendedSale: { id: number; posOrderId: number; suspendedAt: string; status: string } }> {
+  const { posOrderId } = input;
+
+  // Verify order exists and belongs to this cashier's open shift
+  const orderRes = await tx.query<any>(
+    `SELECT po.id, po.status, po.created_by,
+            (SELECT ps.id FROM pos_shifts ps
+              WHERE ps.company_id = po.company_id
+                AND ps.cashier_id = po.created_by
+                AND ps.status = 'open'
+              LIMIT 1) AS shift_id,
+            (SELECT ps.status FROM pos_shifts ps
+              WHERE ps.company_id = po.company_id
+                AND ps.cashier_id = po.created_by
+                AND ps.status = 'open'
+              LIMIT 1) AS shift_status
+       FROM pos_orders po
+      WHERE po.company_id = $1 AND po.id = $2 FOR UPDATE OF po`,
+    [companyId, posOrderId]
+  );
+  if (orderRes.rows.length === 0) {
+    throw new AccountingError(404, 'POS order not found', 'POS_ORDER_NOT_FOUND');
+  }
+  const order = orderRes.rows[0];
+  if (order.status !== 'completed') {
+    throw new AccountingError(409, 'Only completed orders can be suspended', 'INVALID_ORDER_STATUS');
+  }
+  if (!order.shift_id) {
+    throw new AccountingError(409, 'No open shift found for cashier', 'NO_OPEN_SHIFT');
+  }
+
+  const suspendIns = await tx.query<{ id: number }>(
+    `INSERT INTO pos_suspended_sales (company_id, shift_id, pos_order_id, status)
+     VALUES ($1, $2, $3, 'suspended')
+     RETURNING id`,
+    [companyId, order.shift_id, posOrderId]
+  );
+
+  // Log audit
+  await tx.query(
+    `INSERT INTO pos_shift_audit (company_id, shift_id, action, performed_by, details)
+     VALUES ($1, $2, 'suspended', $3, $4)`,
+    [companyId, order.shift_id, actor.userId, JSON.stringify({ posOrderId, notes: input.notes || null })]
+  );
+
+  return {
+    suspendedSale: {
+      id: Number(suspendIns.rows[0].id),
+      posOrderId,
+      suspendedAt: new Date().toISOString(),
+      status: 'suspended',
+    },
+  };
+}
+
+/**
+ * Resume a suspended POS order.
+ */
+export async function resumePosOrder(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: PosResumeInput
+): Promise<{ suspendedSale: { id: number; posOrderId: number; resumedAt: string; status: string } }> {
+  const { suspendedSaleId } = input;
+
+  const suspendRes = await tx.query<any>(
+    `SELECT ps.id, ps.shift_id, ps.pos_order_id, ps.status, ps.shift_id, pshift.cashier_id
+       FROM pos_suspended_sales ps
+       JOIN pos_shifts pshift ON pshift.company_id = ps.company_id AND pshift.id = ps.shift_id
+      WHERE ps.company_id = $1 AND ps.id = $2 FOR UPDATE`,
+    [companyId, suspendedSaleId]
+  );
+  if (suspendRes.rows.length === 0) {
+    throw new AccountingError(404, 'Suspended sale not found', 'SUSPENDED_SALE_NOT_FOUND');
+  }
+  const suspended = suspendRes.rows[0];
+  if (suspended.status !== 'suspended') {
+    throw new AccountingError(409, 'Suspended sale is not in suspended status', 'INVALID_STATUS');
+  }
+
+  await tx.query(
+    `UPDATE pos_suspended_sales SET status = 'resumed', resumed_at = NOW()
+       WHERE company_id = $1 AND id = $2`,
+    [companyId, suspendedSaleId]
+  );
+
+  // Log audit
+  await tx.query(
+    `INSERT INTO pos_shift_audit (company_id, shift_id, action, performed_by, details)
+     VALUES ($1, $2, 'resumed', $3, $4)`,
+    [companyId, suspended.shift_id, actor.userId, JSON.stringify({ suspendedSaleId, posOrderId: suspended.pos_order_id })]
+  );
+
+  return {
+    suspendedSale: {
+      id: suspendedSaleId,
+      posOrderId: Number(suspended.pos_order_id),
+      resumedAt: new Date().toISOString(),
+      status: 'resumed',
+    },
+  };
+}
+
+/**
+ * List suspended sales for a company.
+ */
+export async function listSuspendedSales(
+  tx: Transaction,
+  companyId: number,
+  filters?: { status?: 'suspended' | 'resumed'; shiftId?: number }
+): Promise<{ suspendedSales: Array<{ id: number; shiftId: number; posOrderId: number; suspendedAt: string; resumedAt: string | null; status: string }> }> {
+  const conditions: string[] = ['company_id = $1'];
+  const params: any[] = [companyId];
+  let paramIdx = 2;
+
+  if (filters?.status) {
+    conditions.push(`status = $${paramIdx++}`);
+    params.push(filters.status);
+  }
+  if (filters?.shiftId) {
+    conditions.push(`shift_id = $${paramIdx++}`);
+    params.push(filters.shiftId);
+  }
+
+  const res = await tx.query<any>(
+    `SELECT id, shift_id, pos_order_id, suspended_at, resumed_at, status
+       FROM pos_suspended_sales
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY suspended_at DESC
+      LIMIT 100`,
+    params
+  );
+
+  return {
+    suspendedSales: res.rows.map(r => ({
+      id: Number(r.id),
+      shiftId: Number(r.shift_id),
+      posOrderId: Number(r.pos_order_id),
+      suspendedAt: r.suspended_at,
+      resumedAt: r.resumed_at,
+      status: r.status,
+    })),
+  };
+}
+
+/**
+ * Lookup an item by barcode.
+ */
+export async function lookupBarcode(
+  tx: Transaction,
+  companyId: number,
+  barcode: string
+): Promise<PosBarcodeLookupResult> {
+  if (!barcode || barcode.trim().length === 0) {
+    return { found: false, error: 'Barcode is required' };
+  }
+
+  const res = await tx.query<any>(
+    `SELECT id, sku, name, item_type, description, unit_cost::text, sales_price::text,
+            on_hand::text, COALESCE(reserved_qty, 0)::text AS reserved_qty,
+            usage_unit, is_taxable, income_account_id, barcode
+       FROM inventory_items
+      WHERE company_id = $1 AND barcode = $2 AND is_active = TRUE
+      LIMIT 1`,
+    [companyId, barcode.trim()]
+  );
+
+  if (res.rows.length === 0) {
+    return { found: false, error: 'No item found with this barcode' };
+  }
+
+  const item = res.rows[0];
+  return {
+    found: true,
+    item: {
+      id: Number(item.id),
+      sku: item.sku,
+      name: item.name,
+      itemType: item.item_type,
+      description: item.description,
+      unitCost: Number(item.unit_cost),
+      salesPrice: toMoneyNumber(parseDecimal4(item.sales_price)),
+      onHand: Number(item.on_hand) - Number(item.reserved_qty),
+      reservedQty: Number(item.reserved_qty),
+      usageUnit: item.usage_unit,
+      isTaxable: Boolean(item.is_taxable),
+      incomeAccountId: Number(item.income_account_id),
+      barcode: item.barcode,
+    },
+  };
+}
+
+/**
+ * Get or create the current user's open shift.
+ * If no shift is open, this returns null.
+ */
+export async function getCurrentUserShift(
+  tx: Transaction,
+  companyId: number,
+  userId: number
+): Promise<PosShiftSummary | null> {
+  const res = await tx.query<{ id: number }>(
+    `SELECT id FROM pos_shifts WHERE company_id = $1 AND cashier_id = $2 AND status = 'open' LIMIT 1`,
+    [companyId, userId]
+  );
+  if (res.rows.length === 0) {
+    return null;
+  }
+  return getPosShiftSummary(tx, companyId, Number(res.rows[0].id));
 }

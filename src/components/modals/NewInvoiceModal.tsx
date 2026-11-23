@@ -4,7 +4,9 @@ import { formatCurrency } from '../../utils/currency';
 import { commercialApi, ApiCustomer } from '../../services/commercialApi';
 import { accountingApi, ApiAccount } from '../../services/accountingApi';
 import { ModalShell } from '../common/ui';
-import { X, Trash2, Receipt, Sparkles, Printer } from 'lucide-react';
+import { X, Trash2, Receipt, Sparkles, Printer, Copy } from 'lucide-react';
+import { printingApi } from '../../services/printingApi';
+import { QuickPrintJobModal, type QuickPrintJobDraft } from './QuickPrintJobModal';
 
 type Line = {
   id: string;
@@ -13,6 +15,12 @@ type Line = {
   quantity: number;
   rate: number;
   unitCost: number;
+  /**
+   * A desk print job carried by this line. Its quantity/rate are fixed by the
+   * costing preview and the job is posted to production before the invoice is
+   * saved, so the two can never disagree.
+   */
+  quickPrint?: QuickPrintJobDraft;
 };
 
 type SearchItem = {
@@ -141,6 +149,8 @@ export const NewInvoiceModal: React.FC = () => {
   ]);
   const [lastAdded, setLastAdded] = useState<SearchItem | null>(null);
 
+  const [quickPrintOpen, setQuickPrintOpen] = useState(false);
+
   const [discountMode, setDiscountMode] = useState<'K' | '%'>('K');
   const [discountValue, setDiscountValue] = useState('');
   const [otherChargesEnabled, setOtherChargesEnabled] = useState(false);
@@ -248,13 +258,28 @@ export const NewInvoiceModal: React.FC = () => {
     ]);
   };
 
-  const addQuick = (kind: 'P' | 'T') => {
-    const keyword = kind === 'P' ? 'photocopy' : 'type';
-    const found =
-      catalog.find(i => i.name.toLowerCase().includes(keyword)) ||
-      catalog.find(i => i.itemType.includes('service'));
-    if (found) addItem(found);
-    else addCustomLine(kind === 'P' ? 'Photocopy A4 B/W' : 'Type & Print (per page)');
+  const addQuickPrintJob = (draft: QuickPrintJobDraft) => {
+    const jobLabel =
+      draft.jobType === 'quick_photocopy'
+        ? 'Quick Photocopy'
+        : draft.jobType === 'type_and_printing'
+        ? 'Type & Print'
+        : 'General Print';
+    const description = `${jobLabel} — ${draft.title} (${draft.pages} pp × ${draft.copies} copies, ${
+      draft.printSide
+    } · ${draft.estimate.sheetsUsed.toLocaleString()} sheets)`;
+    setLines(prev => [
+      ...prev,
+      {
+        id: `l-qp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        itemId: '',
+        description,
+        quantity: 1,
+        rate: draft.estimate.sellingPriceTotal,
+        unitCost: draft.estimate.totalCost,
+        quickPrint: draft,
+      },
+    ]);
   };
 
   const updateLine = (id: string, patch: Partial<Line>) => {
@@ -297,8 +322,41 @@ export const NewInvoiceModal: React.FC = () => {
     }
     setSubmitting(true);
     setError(null);
+    const postedJobs: number[] = [];
     try {
+      // The document-level discount reduces revenue per line, so the desk job's
+      // selling price is posted net of it. Otherwise the job's reported margin
+      // would ignore the discount the customer actually received.
       const discountFraction = subtotal > 0 ? Math.min(1, discountAmount / subtotal) : 0;
+
+      // Desk print jobs are posted to production first (material issue to WIP), so
+      // the invoice bills real cost instead of inventing one. If a later step
+      // fails the jobs stay in WIP and can be billed again rather than silently
+      // losing their stock movement.
+      for (const line of lines) {
+        if (!line.quickPrint) continue;
+        const draft = line.quickPrint;
+        const { job } = await printingApi.postQuickPrintJob({
+          jobType: draft.jobType,
+          customerId: Number(customerId),
+          title: draft.title,
+          pages: draft.pages,
+          copies: draft.copies,
+          printSide: draft.printSide,
+          rawPaperItemId: Number(draft.rawPaperItemId),
+          rawTonerItemId: Number(draft.rawTonerItemId),
+          typingFeeMode: 'per_page',
+          typingFeeRate: draft.jobType === 'type_and_printing' ? draft.extraCostPerPage : 0,
+          manualSellingPricePerSheet:
+            Math.round(draft.sellingPricePerSheet * (1 - discountFraction) * 10000) / 10000,
+          jobDate: draft.date,
+          notes: draft.notes ?? null,
+          idempotencyKey: `inv-quick-${line.id}`,
+        });
+        const jobId = Number(job?.id);
+        if (Number.isInteger(jobId) && jobId > 0) postedJobs.push(jobId);
+      }
+
       const payloadLines = lines
         .filter(l => l.description.trim().length > 0)
         .map(l => ({
@@ -334,18 +392,38 @@ export const NewInvoiceModal: React.FC = () => {
       if (isSalesReceipt) payload.depositToAccountId = Number(bankAccountId);
 
       const inv = await commercialApi.createInvoice(payload);
+
+      // Bill each posted desk job against this invoice: relieves its WIP to COGS
+      // once and ties that cost to the invoice.
+      for (const jobId of postedJobs) {
+        try {
+          await printingApi.linkJobInvoice(jobId, inv.id);
+        } catch (linkErr: any) {
+          setError(
+            `Invoice ${inv.invoiceNumber} was created but print job #${jobId} could not be linked: ${
+              linkErr?.message || 'unknown error'
+            }`
+          );
+        }
+      }
+
       triggerShortcutNotice?.(
         `${isSalesReceipt ? 'Payment recorded' : 'Invoice created'} · ${inv.invoiceNumber} · ${fmt(total)}`
       );
       setIsNewInvoiceOpen(false);
     } catch (err: any) {
-      setError(err?.message || 'Invoice creation failed');
+      const suffix = postedJobs.length
+        ? ` Print jobs #${postedJobs.join(', #')} were posted to production WIP and still need billing.`
+        : '';
+      setError((err?.message || 'Invoice creation failed') + suffix);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
+    <>
+    {/* Quick print capture lives beside the invoice so its overlay stacks above it. */}
     <ModalShell
       open={isNewInvoiceOpen}
       onClose={close}
@@ -501,17 +579,10 @@ export const NewInvoiceModal: React.FC = () => {
           <div className="mb-3 flex flex-wrap gap-1.5">
             <button
               type="button"
-              onClick={() => addQuick('P')}
-              className="rounded-lg border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-700 transition-colors hover:border-brand-400 hover:text-brand-600 dark:border-white/10 dark:text-slate-200"
+              onClick={() => setQuickPrintOpen(true)}
+              className="flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-700 transition-colors hover:border-brand-400 hover:text-brand-600 dark:border-white/10 dark:text-slate-200"
             >
-              Photocopy
-            </button>
-            <button
-              type="button"
-              onClick={() => addQuick('T')}
-              className="rounded-lg border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-700 transition-colors hover:border-brand-400 hover:text-brand-600 dark:border-white/10 dark:text-slate-200"
-            >
-              Type &amp; Print
+              <Copy className="h-3 w-3" /> Quick Photocopy / Print
             </button>
             <button
               type="button"
@@ -571,36 +642,57 @@ export const NewInvoiceModal: React.FC = () => {
                       {idx + 1}
                     </td>
                     <td className="px-2 py-1.5">
-                      <input
-                        value={line.description}
-                        onChange={e => updateLine(line.id, { description: e.target.value })}
-                        placeholder="Description"
-                        className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
-                      />
+                      {line.quickPrint ? (
+                        <div className="flex items-center gap-1.5">
+                          <Copy className="h-3 w-3 shrink-0 text-brand-500" />
+                          <span className="truncate text-[13px] text-slate-800 dark:text-slate-100">
+                            {line.description}
+                          </span>
+                        </div>
+                      ) : (
+                        <input
+                          value={line.description}
+                          onChange={e => updateLine(line.id, { description: e.target.value })}
+                          placeholder="Description"
+                          className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
+                        />
+                      )}
                     </td>
                     <td className="px-2 py-1.5">
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={line.quantity}
-                        onChange={e =>
-                          updateLine(line.id, { quantity: Math.max(1, Number(e.target.value) || 1) })
-                        }
-                        className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-right font-mono text-[13px] text-slate-800 outline-none hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
-                      />
+                      {line.quickPrint ? (
+                        <div className="text-right font-mono text-[13px] text-slate-600 dark:text-slate-300">
+                          {line.quantity}
+                        </div>
+                      ) : (
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={line.quantity}
+                          onChange={e =>
+                            updateLine(line.id, { quantity: Math.max(1, Number(e.target.value) || 1) })
+                          }
+                          className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-right font-mono text-[13px] text-slate-800 outline-none hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
+                        />
+                      )}
                     </td>
                     <td className="px-2 py-1.5">
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={line.rate}
-                        onChange={e =>
-                          updateLine(line.id, { rate: Math.max(0, Number(e.target.value) || 0) })
-                        }
-                        className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-right font-mono text-[13px] text-slate-800 outline-none hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
-                      />
+                      {line.quickPrint ? (
+                        <div className="text-right font-mono text-[13px] text-slate-600 dark:text-slate-300">
+                          {fmt(line.rate)}
+                        </div>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={line.rate}
+                          onChange={e =>
+                            updateLine(line.id, { rate: Math.max(0, Number(e.target.value) || 0) })
+                          }
+                          className="w-full rounded border-0 border-b border-transparent bg-transparent px-0 py-1 text-right font-mono text-[13px] text-slate-800 outline-none hover:border-slate-200 focus:border-brand-500 dark:text-slate-100"
+                        />
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono text-[13px] font-semibold tabular-nums text-slate-900 dark:text-white">
                       {fmt(line.quantity * line.rate)}
@@ -802,5 +894,13 @@ export const NewInvoiceModal: React.FC = () => {
         </button>
       </footer>
     </ModalShell>
+
+    <QuickPrintJobModal
+      open={isNewInvoiceOpen && quickPrintOpen}
+      onClose={() => setQuickPrintOpen(false)}
+      onAdd={addQuickPrintJob}
+      targetLabel="this invoice"
+    />
+    </>
   );
 };

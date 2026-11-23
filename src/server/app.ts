@@ -20,11 +20,24 @@ import { createMigrationRouter } from './routes/migrationRoutes.ts';
 import { createDocumentsRouter } from './routes/documentsRoutes.ts';
 import { createProtectedBusinessRouter } from './routes/protectedRoutes.ts';
 import { createSmartOpsRouter } from './routes/smartOpsRoutes.ts';
+import { createAiRoutes } from './routes/aiRoutes.ts';
+import { createPayrollRoutes } from './routes/payrollRoutes.ts';
+import { createDocumentQrRoutes } from './routes/documentQrRoutes.ts';
+import { createCustomerRoutes } from './routes/customerRoutes.ts';
+import { createTwoFactorRoutes } from './routes/twoFactorRoutes.ts';
+import { createDeliveryRoutes } from './routes/deliveryRoutes.ts';
+import { createCommunicationsRoutes } from './routes/communicationsRoutes.ts';
+import { createBiRoutes } from './routes/biRoutes.ts';
+import { createAdminRoutes } from './routes/adminRoutes.ts';
+import { csrfProtection, generateCsrfToken } from './middleware/csrf.ts';
+import { createAuthMiddleware } from './middleware/auth.ts';
+import { validateTwilioSignature, twilioRequestUrl } from './services/twilioSignature.ts';
 
 export function createApiExpressApp(db: ServerDatabase): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '6mb' }));
+  app.use(express.urlencoded({ extended: false, type: 'application/x-www-form-urlencoded' }));
   app.use((req: Request, res: Response, next: NextFunction) => {
     const cid = (req.headers['x-request-id'] as string) || newCorrelationId();
     (req as any).correlationId = cid;
@@ -36,7 +49,24 @@ export function createApiExpressApp(db: ServerDatabase): Express {
     next();
   });
 
-  // Expose minimal non-secret client config for Supabase JS signInWithPassword / recovery
+  // Public routes (no auth required) — registered first
+
+  // NOTE: document QR verification lives in documentQrRoutes (/api/qr-verify/:token).
+
+  app.post('/api/twilio-webhook', (req: Request, res: Response) => {
+    const ok = validateTwilioSignature({
+      url: twilioRequestUrl(req),
+      form: (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>,
+      signature: (req.get('x-twilio-signature') as string) || null,
+      authToken: db.config.twilioAuthToken,
+      isProduction: db.config.isProduction,
+    });
+    if (!ok) {
+      return res.status(403).json({ error: 'Invalid Twilio signature' });
+    }
+    return res.status(200).json({ received: true });
+  });
+
   app.get('/api/health', async (_req: Request, res: Response) => {
     try {
       await db.withSystemDb(async (tx: any) => {
@@ -56,14 +86,35 @@ export function createApiExpressApp(db: ServerDatabase): Express {
     });
   });
 
+  // CSRF token endpoint — authenticated, bound to the caller's server session.
+  const { requireAuth: requireAuthForCsrf } = createAuthMiddleware(db);
+  app.get('/api/auth/csrf-token', requireAuthForCsrf, (req: Request, res: Response) => {
+    const sessionId = String(req.auth?.sessionId ?? 'anon');
+    const token = generateCsrfToken(sessionId);
+    res.setHeader('X-CSRF-Token', token);
+    return res.json({ csrfToken: token });
+  });
+
   if (db.config.isProduction) {
     app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }), createAuthRouter(db));
     app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 600 }));
   } else {
     app.use('/api/auth', createAuthRouter(db));
   }
-  app.use('/api/companies', createCompanyRouter(db));
+  app.use('/api', createCommunicationsRoutes(db));
+  app.use('/api', createDocumentQrRoutes(db));
   app.use('/api', createUserRouter(db));
+  app.use('/api', createDocumentsRouter(db));
+  app.use('/api', createProtectedBusinessRouter(db));
+  app.use('/api', createSmartOpsRouter(db));
+  app.use('/api', createAiRoutes(db));
+  app.use('/api', createPayrollRoutes(db));
+  app.use('/api', createCustomerRoutes(db));
+  app.use('/api', createTwoFactorRoutes(db));
+  app.use('/api', createDeliveryRoutes(db));
+  app.use('/api', createBiRoutes(db));
+  app.use('/api', createAdminRoutes(db));
+  app.use('/api/companies', createCompanyRouter(db));
   app.use('/api', createAccountingRouter(db));
   app.use('/api', createSalesRouter(db));
   app.use('/api', createPurchasingRouter(db));
@@ -76,11 +127,7 @@ export function createApiExpressApp(db: ServerDatabase): Express {
   app.use('/api', createPrintingRouter(db));
   app.use('/api', createWalletRouter(db));
   app.use('/api', createMigrationRouter(db));
-  app.use('/api', createDocumentsRouter(db));
-  app.use('/api', createSmartOpsRouter(db));
-  app.use('/api', createProtectedBusinessRouter(db));
 
-  // Fallthrough 404 for unknown API paths so they never hit Vite SPA HTML fallback
   app.use('/api', (_req: Request, res: Response) => {
     res.status(404).json({ error: 'API route not found' });
   });
@@ -93,4 +140,3 @@ export function createApiExpressApp(db: ServerDatabase): Express {
 
   return app;
 }
-

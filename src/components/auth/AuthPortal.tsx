@@ -41,6 +41,7 @@ export const AuthPortal: React.FC = () => {
     requestPasswordRecovery,
     resetPassword,
     authError,
+    twoFactorRequired,
     clearAuthError,
   } = useAuth();
 
@@ -51,6 +52,7 @@ export const AuthPortal: React.FC = () => {
   // Sign-In state
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
 
   // Register state
   const [regUsername, setRegUsername] = useState('');
@@ -78,7 +80,7 @@ export const AuthPortal: React.FC = () => {
     e.preventDefault();
     setSubmitting(true);
     setNotice(null);
-    await login(identifier, password);
+    await login(identifier, password, undefined, twoFactorCode.trim() || undefined);
     setSubmitting(false);
   };
 
@@ -290,6 +292,29 @@ export const AuthPortal: React.FC = () => {
                     className={inputClass}
                   />
                 </div>
+
+                {twoFactorRequired && (
+                  <div>
+                    <label className={labelClass} htmlFor="auth-2fa-code">
+                      Two-Factor Authentication Code
+                    </label>
+                    <input
+                      id="auth-2fa-code"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      autoFocus
+                      required
+                      value={twoFactorCode}
+                      onChange={e => setTwoFactorCode(e.target.value)}
+                      placeholder="Enter the 6-digit code from your authenticator"
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                      You can also use one of your saved backup codes.
+                    </p>
+                  </div>
+                )}
 
                 <button type="submit" disabled={submitting} className="btn btn-primary w-full py-2.5">
                   {submitting ? 'Signing in...' : 'Sign In'}

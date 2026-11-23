@@ -23,23 +23,7 @@ import {
   Keyboard,
   Eye,
 } from 'lucide-react';
-import {
-  buildPaperStockFromInventoryItem,
-  buildTonerSpecFromInventoryItem,
-  calculatePhotocopyWorkflow,
-  calculatePrintingServiceWorkflow,
-  calculateTypeAndPrintingWorkflow,
-} from '../../server/services/printingWorkflows';
-import type { TonerMachineSpec } from '../../server/services/tonerCalc';
-
-const DESK_PRESS_CAPABILITY: TonerMachineSpec = {
-  machineId: 'quick-print-desk-press',
-  name: 'Quick Print Press',
-  processType: 'digital_press',
-  supportsColour: false,
-  supportsDuplex: true,
-  status: 'active',
-};
+import { computeQuickPrintEstimate } from '../../utils/quickPrintCalc';
 
 const JOB_TYPE_LABELS: Record<QuickPrintJobType, string> = {
   quick_photocopy: 'Quick Photocopy',
@@ -90,10 +74,13 @@ export const QuickPrintView: React.FC = () => {
   const [printSide, setPrintSide] = useState<'Single-Sided' | 'Duplex'>('Duplex');
   const [rawPaperItemId, setRawPaperItemId] = useState(defaultPaper?.id || '');
   const [rawTonerItemId, setRawTonerItemId] = useState(defaultToner?.id || '');
-  const [extraCostPerPage, setExtraCostPerPage] = useState<number>(0);
-  const [sellingPricePerSheet, setSellingPricePerSheet] = useState<number>(1.5);
+  // Desk rates are company policy, maintained in Settings only. The desk never
+  // edits them, so every operator quotes the same price.
+  const defaultExtraPerPage = Number(companyProfile.extraTypingFinishingPerPage ?? 0);
+  const defaultPricePerSheet = Number(companyProfile.manualSellingPricePerSheet ?? 0);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [filterType, setFilterType] = useState<'all' | QuickPrintJobType>('all');
 
   const selectedPaperMat = rawMaterials.find(r => r.id === rawPaperItemId);
@@ -101,105 +88,37 @@ export const QuickPrintView: React.FC = () => {
   const paperUnitCost = getRawUsageUnitCost(rawPaperItemId);
   const tonerUnitCost = getRawUsageUnitCost(rawTonerItemId);
 
-  // Live paper + toner calculation through the authoritative shared engine
-  const liveCalc = useMemo(() => {
-    const safePages = Math.max(1, pages);
-    const safeCopies = Math.max(1, copies);
-    const safeExtraPerPage = Math.max(0, extraCostPerPage || 0);
-    const safePricePerSheet = Math.max(0, sellingPricePerSheet || 0);
-    const extraCostTotal = Math.round(safeExtraPerPage * safePages * 100) / 100;
+  // Live paper + toner calculation through the authoritative shared engine.
+  // The same function prices the invoice and POS quick-print modals, so one job
+  // can never be quoted differently depending on which screen opened it.
+  const liveCalc = useMemo(
+    () =>
+      computeQuickPrintEstimate({
+        paperItem: selectedPaperMat,
+        tonerItem: selectedTonerMat,
+        paperUsageUnitCost: paperUnitCost,
+        tonerUsageUnitCost: tonerUnitCost,
+        jobType,
+        pages,
+        copies,
+        printSide,
+        extraCostPerPage: defaultExtraPerPage,
+        sellingPricePerSheet: defaultPricePerSheet,
+      }),
+    [
+      selectedPaperMat,
+      selectedTonerMat,
+      paperUnitCost,
+      tonerUnitCost,
+      jobType,
+      pages,
+      copies,
+      printSide,
+      defaultExtraPerPage,
+      defaultPricePerSheet,
+    ]
+  );
 
-    if (!selectedPaperMat || !selectedTonerMat) {
-      const estSheets =
-        (printSide === 'Duplex' ? Math.ceil(safePages / 2) : safePages) * safeCopies;
-      const estImpressions = safePages * safeCopies;
-      const fallbackPaperCost = Math.round(estSheets * paperUnitCost * 100) / 100;
-      const fallbackTonerCost = Math.round(estImpressions * tonerUnitCost * 100) / 100;
-      const fallbackTotalCost =
-        Math.round((fallbackPaperCost + fallbackTonerCost + extraCostTotal) * 100) / 100;
-      const fallbackSellingTotal = Math.round(safePricePerSheet * estSheets * 100) / 100;
-      const fallbackProfit = Math.round((fallbackSellingTotal - fallbackTotalCost) * 100) / 100;
-      return {
-        safePages,
-        safeCopies,
-        safeExtraPerPage,
-        safePricePerSheet,
-        sheetsUsed: estSheets,
-        impressionsUsed: estImpressions,
-        paperCost: fallbackPaperCost,
-        tonerCost: fallbackTonerCost,
-        extraCostTotal,
-        totalCost: fallbackTotalCost,
-        sellingPriceTotal: fallbackSellingTotal,
-        realProfit: fallbackProfit,
-        profitMarginPct:
-          fallbackSellingTotal > 0 ? (fallbackProfit / fallbackSellingTotal) * 100 : 0,
-      };
-    }
-
-    const common = {
-      paperStock: buildPaperStockFromInventoryItem(selectedPaperMat),
-      tonerChannels: { K: buildTonerSpecFromInventoryItem(selectedTonerMat, 'K') },
-      machine: DESK_PRESS_CAPABILITY,
-      colorMode: 'mono' as const,
-      copies: safeCopies,
-      mode: (printSide === 'Duplex' ? 'duplex' : 'simplex') as 'simplex' | 'duplex',
-      pages: safePages,
-      allowInsufficientStockPreview: true,
-    };
-
-    const res =
-      jobType === 'type_and_printing'
-        ? calculateTypeAndPrintingWorkflow({
-            ...common,
-            typingFee: { mode: 'per_page', rate: safeExtraPerPage, typedPages: safePages },
-          })
-        : jobType === 'general_print'
-        ? calculatePrintingServiceWorkflow(common)
-        : calculatePhotocopyWorkflow(common);
-
-    const calcSheetsUsed = res.paper.quantities.totalSheets;
-    const calcImpressionsUsed = res.paper.quantities.printedSideImpressions;
-    const calcPaperCost = res.paper.quantities.totalPaperCost;
-    const calcTonerCost =
-      res.toner.totalCost !== null
-        ? res.toner.totalCost
-        : Math.round(calcImpressionsUsed * tonerUnitCost * 100) / 100;
-    const calcExtraCost =
-      jobType === 'type_and_printing' && 'typingFee' in res ? res.typingFee.amount : extraCostTotal;
-    const totalCostWithExtra =
-      Math.round((calcPaperCost + calcTonerCost + calcExtraCost) * 100) / 100;
-    const calcSellingTotal = Math.round(safePricePerSheet * calcSheetsUsed * 100) / 100;
-    const profitVal = Math.round((calcSellingTotal - totalCostWithExtra) * 100) / 100;
-    const marginVal = calcSellingTotal > 0 ? (profitVal / calcSellingTotal) * 100 : 0;
-
-    return {
-      safePages,
-      safeCopies,
-      safeExtraPerPage,
-      safePricePerSheet,
-      sheetsUsed: calcSheetsUsed,
-      impressionsUsed: calcImpressionsUsed,
-      paperCost: calcPaperCost,
-      tonerCost: calcTonerCost,
-      extraCostTotal: calcExtraCost,
-      totalCost: totalCostWithExtra,
-      sellingPriceTotal: calcSellingTotal,
-      realProfit: profitVal,
-      profitMarginPct: marginVal,
-    };
-  }, [
-    selectedPaperMat,
-    selectedTonerMat,
-    paperUnitCost,
-    tonerUnitCost,
-    pages,
-    copies,
-    printSide,
-    extraCostPerPage,
-    sellingPricePerSheet,
-    jobType,
-  ]);
 
   const {
     safePages,
@@ -210,6 +129,9 @@ export const QuickPrintView: React.FC = () => {
     paperCost,
     tonerCost,
     extraCostTotal,
+    finishingCost,
+    typingRevenue,
+    photocopyRevenue,
     totalCost,
     sellingPriceTotal,
     realProfit,
@@ -223,49 +145,61 @@ export const QuickPrintView: React.FC = () => {
     setJobType(nextType);
     if (nextType === 'quick_photocopy') {
       setTitle('A4 Document Photocopy Run');
-      setExtraCostPerPage(0);
     } else if (nextType === 'type_and_printing') {
       setTitle('Document Typing, Formatting & Printout');
-      setExtraCostPerPage(5);
     } else {
       setTitle('Custom Press Print Job');
-      setExtraCostPerPage(0);
     }
   };
 
   const handleSubmitJob = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !rawPaperItemId || !rawTonerItemId) return;
+    if (safePricePerSheet <= 0) {
+      triggerShortcutNotice(
+        'Set Manual Selling Price / Sheet in Settings before posting a print job',
+        'error'
+      );
+      return;
+    }
 
     const selectedCust = customers.find(c => c.id === customerId);
     const resolvedName = selectedCust ? selectedCust.companyName : walkInName.trim() || 'Walk-In Customer';
+    const wantsInvoice = Boolean(createInvoice && customerId);
 
-    const created = await addQuickPrintJob(
-      {
-        customerId: customerId || undefined,
-        customerName: resolvedName,
-        jobType,
-        title: title.trim(),
-        pages: safePages,
-        copies: Math.max(1, copies),
-        printSide,
-        rawPaperItemId,
-        rawTonerItemId,
-        extraCostPerPage: safeExtraPerPage,
-        typingFee: jobType === 'type_and_printing' ? extraCostTotal : 0,
-        extraCost: jobType === 'type_and_printing' ? 0 : extraCostTotal,
-        sellingPricePerSheet: safePricePerSheet,
-        sellingPriceTotal,
-        date,
-        notes: notes.trim() || undefined,
-      },
-      { createInvoice: Boolean(createInvoice && customerId) }
-    );
+    setSubmitting(true);
+    try {
+      const created = await addQuickPrintJob(
+        {
+          customerId: customerId || undefined,
+          customerName: resolvedName,
+          jobType,
+          title: title.trim(),
+          pages: safePages,
+          copies: Math.max(1, copies),
+          printSide,
+          rawPaperItemId,
+          rawTonerItemId,
+          extraCostPerPage: safeExtraPerPage,
+          typingFee: jobType === 'type_and_printing' ? extraCostTotal : 0,
+          extraCost: jobType === 'type_and_printing' ? 0 : extraCostTotal,
+          sellingPricePerSheet: safePricePerSheet,
+          sellingPriceTotal,
+          date,
+          notes: notes.trim() || undefined,
+        },
+        { createInvoice: wantsInvoice }
+      );
 
-    triggerShortcutNotice(
-      `Recorded ${created.jobNumber} · Real Profit: ${formatCurrency(created.profit, currency)}`
-    );
-    setNotes('');
+      triggerShortcutNotice(
+        `Posted ${created.jobNumber} to WIP · Real Profit: ${formatCurrency(created.profit, currency)}`
+      );
+      setNotes('');
+    } catch (err: any) {
+      triggerShortcutNotice(err?.message || 'Could not post the print job', 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const openQuickPrintReceiptPreview = (job: QuickPrintJob) => {
@@ -357,17 +291,6 @@ export const QuickPrintView: React.FC = () => {
   };
 
   const duplicateToCalculator = (job: QuickPrintJob) => {
-    const derivedExtraPerPage =
-      job.extraCostPerPage !== undefined
-        ? job.extraCostPerPage
-        : Math.round((((job.typingFee || 0) + (job.extraCost || 0)) / Math.max(1, job.pages)) * 10000) /
-          10000;
-    const derivedPricePerSheet =
-      job.sellingPricePerSheet !== undefined
-        ? job.sellingPricePerSheet
-        : job.sheetsUsed > 0
-        ? Math.round((job.sellingPriceTotal / job.sheetsUsed) * 10000) / 10000
-        : 0;
     setJobType(job.jobType);
     setTitle(`${job.title} (Repeat)`);
     setCustomerId(job.customerId || '');
@@ -377,8 +300,6 @@ export const QuickPrintView: React.FC = () => {
     setPrintSide(job.printSide);
     setRawPaperItemId(job.rawPaperItemId);
     setRawTonerItemId(job.rawTonerItemId);
-    setExtraCostPerPage(derivedExtraPerPage);
-    setSellingPricePerSheet(derivedPricePerSheet);
     triggerShortcutNotice(`Loaded specs from ${job.jobNumber} into desk calculator`);
   };
 
@@ -493,7 +414,7 @@ export const QuickPrintView: React.FC = () => {
             Quick Photocopy, Type & Printing Desk
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Paper and toner costs are automatically driven from Raw Material unit conversions; enter your manual selling price to view real profit on every job.
+            Paper and toner costs are automatically driven from Raw Material unit conversions. Selling price per sheet and the typing rate come from Settings → Print Desk Pricing Defaults.
           </p>
         </div>
       </div>
@@ -520,13 +441,13 @@ export const QuickPrintView: React.FC = () => {
         <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div>
             <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              Paper & Toner Cost
+              Material &amp; Finishing Cost
             </div>
             <div className="text-xl font-bold font-mono text-amber-600 dark:text-amber-400 mt-1 tabular-nums">
               {formatCurrency(totalMaterialAndExtra, currency)}
             </div>
             <div className="text-[11px] text-slate-500 mt-1">
-              Driven from Raw Material units
+              Paper, toner &amp; physical finishing
             </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
@@ -684,7 +605,7 @@ export const QuickPrintView: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="font-semibold text-slate-700 dark:text-slate-300">Pages in Document</label>
               <input
@@ -708,41 +629,23 @@ export const QuickPrintView: React.FC = () => {
                 required
               />
             </div>
+          </div>
 
-            <div className="space-y-1">
-              <label className="font-semibold text-slate-700 dark:text-slate-300">
-                Extra Typing / Finishing / Page ({currencySymbol})
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={extraCostPerPage}
-                onChange={e => setExtraCostPerPage(parseFloat(e.target.value) || 0)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono text-right outline-none"
-              />
-              <div className="text-[10px] font-mono text-slate-500 text-right tabular-nums">
-                × {safePages} pp = {formatCurrency(extraCostTotal, currency)}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="font-bold text-blue-700 dark:text-blue-400">
-                Manual Selling Price / Sheet ({currencySymbol})
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={sellingPricePerSheet}
-                onChange={e => setSellingPricePerSheet(parseFloat(e.target.value) || 0)}
-                className="w-full bg-white dark:bg-slate-900 border-2 border-blue-500 rounded-md px-3 py-2 text-sm font-mono font-bold text-right text-slate-900 dark:text-white outline-none"
-                required
-              />
-              <div className="text-[10px] font-mono text-blue-600 dark:text-blue-400 font-semibold text-right tabular-nums">
-                × {sheetsUsed.toLocaleString()} shts = {formatCurrency(sellingPriceTotal, currency)}
-              </div>
-            </div>
+          <div className="px-3 py-2 rounded-lg bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono">
+            <span className="font-sans font-semibold text-blue-800 dark:text-blue-300">
+              Desk rates from Settings:
+            </span>
+            <span className="tabular-nums text-slate-700 dark:text-slate-200">
+              {formatCurrency(safePricePerSheet, currency)} / sheet × {sheetsUsed.toLocaleString()} ={' '}
+              <strong>{formatCurrency(photocopyRevenue, currency)}</strong>
+            </span>
+            {jobType === 'type_and_printing' && (
+              <span className="tabular-nums text-slate-700 dark:text-slate-200">
+                + typing {formatCurrency(safeExtraPerPage, currency)} / page × {safePages} ={' '}
+                <strong>{formatCurrency(typingRevenue, currency)}</strong>
+                {' '}= total <strong>{formatCurrency(sellingPriceTotal, currency)}</strong>
+              </span>
+            )}
           </div>
 
           <div className="px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
@@ -823,24 +726,38 @@ export const QuickPrintView: React.FC = () => {
               <span className="tabular-nums font-semibold shrink-0">{formatCurrency(tonerCost, currency)}</span>
             </div>
 
-            {extraCostTotal > 0 && (
+            {finishingCost > 0 && (
               <div className="flex justify-between font-mono gap-2">
                 <span className="text-slate-600 dark:text-slate-400 font-sans">
-                  Extra Typing / Finishing ({safePages} pp × {currencySymbol}{safeExtraPerPage.toFixed(2)}/pp):
+                  Physical Finishing ({safePages} pp × {currencySymbol}{safeExtraPerPage.toFixed(2)}/pp):
                 </span>
-                <span className="tabular-nums font-semibold shrink-0">{formatCurrency(extraCostTotal, currency)}</span>
+                <span className="tabular-nums font-semibold shrink-0">{formatCurrency(finishingCost, currency)}</span>
               </div>
             )}
 
             <div className="flex justify-between font-mono pt-2 border-t border-slate-200 dark:border-slate-700 font-bold text-slate-800 dark:text-slate-200 gap-2">
-              <span className="font-sans">Total Calculated Cost:</span>
+              <span className="font-sans">Total Material Cost:</span>
               <span className="tabular-nums shrink-0">{formatCurrency(totalCost, currency)}</span>
             </div>
 
-            <div className="flex justify-between font-mono font-bold text-slate-900 dark:text-white gap-2">
-              <span className="font-sans">
-                Selling Price ({sheetsUsed.toLocaleString()} shts × {currencySymbol}{safePricePerSheet.toFixed(2)}/sht):
+            <div className="flex justify-between font-mono gap-2">
+              <span className="text-slate-600 dark:text-slate-400 font-sans">
+                Photocopying ({sheetsUsed.toLocaleString()} shts × {currencySymbol}{safePricePerSheet.toFixed(2)}/sht):
               </span>
+              <span className="tabular-nums font-semibold shrink-0">{formatCurrency(photocopyRevenue, currency)}</span>
+            </div>
+
+            {typingRevenue > 0 && (
+              <div className="flex justify-between font-mono gap-2">
+                <span className="text-slate-600 dark:text-slate-400 font-sans">
+                  Typing &amp; Printing ({safePages} pp × {currencySymbol}{safeExtraPerPage.toFixed(2)}/pp):
+                </span>
+                <span className="tabular-nums font-semibold shrink-0">{formatCurrency(typingRevenue, currency)}</span>
+              </div>
+            )}
+
+            <div className="flex justify-between font-mono font-bold text-slate-900 dark:text-white gap-2">
+              <span className="font-sans">Total Revenue:</span>
               <span className="tabular-nums shrink-0">{formatCurrency(sellingPriceTotal, currency)}</span>
             </div>
 
@@ -868,13 +785,16 @@ export const QuickPrintView: React.FC = () => {
 
           <button
             type="submit"
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition-all active:scale-95"
+            disabled={submitting}
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold text-xs shadow-sm transition-all active:scale-95"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>
-              {createInvoice && customerId
-                ? 'Record Job, Deduct Stock & Create Invoice'
-                : 'Record Cash Job & Deduct Raw Materials'}
+              {submitting
+                ? 'Posting to production…'
+                : createInvoice && customerId
+                ? 'Post Job to WIP & Create Invoice'
+                : 'Post Job to WIP & Record Cash Sale'}
             </span>
           </button>
         </div>
@@ -939,7 +859,9 @@ export const QuickPrintView: React.FC = () => {
                     <td className="px-4 py-3 font-sans text-slate-700 dark:text-slate-300">
                       <div>{job.customerName}</div>
                       <div className="text-[10px] text-slate-400">
-                        {job.invoiceId ? 'Posted to Invoice' : 'Cash Counter Sale'}
+                        {job.invoiceId || job.backendInvoiceId
+                          ? `Posted to Invoice${job.linkedInvoiceNumber ? ` · ${job.linkedInvoiceNumber}` : ''}`
+                          : 'Cash Counter Sale'}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
@@ -953,7 +875,7 @@ export const QuickPrintView: React.FC = () => {
                       <div className="text-[10px] text-slate-400">
                         P:{formatCurrency(job.paperCost, currency)} · T:{formatCurrency(job.tonerCost, currency)}
                         {(job.typingFee || 0) + (job.extraCost || 0) > 0
-                          ? ` · Ex:${formatCurrency((job.typingFee || 0) + (job.extraCost || 0), currency)}`
+                          ? ` · Typing/Fin:${formatCurrency((job.typingFee || 0) + (job.extraCost || 0), currency)}`
                           : ''}
                       </div>
                     </td>

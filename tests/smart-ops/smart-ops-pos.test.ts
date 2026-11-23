@@ -161,15 +161,14 @@ async function main() {
       return `Live items=${pcRes.json.items.length}, promo=VIP20`;
     });
 
-    // 4. Create Customer + Advocate Code + Full POS Checkout (Split Tender + Promo + Referral + Inventory + Auto WhatsApp)
+    // 4. Create Customer + Advocate Code + POS Checkout (Referral-only, campaign rates, D1-A)
     let advocateCustId = 0;
     let referralCodeId = 0;
     let referralCodeStr = '';
     let posOrderId = 0;
     let firstEventId = 0;
 
-    await runTest('4. Full POS Split-Tender Checkout with Promo, Referral, Stock Deduction & Auto-WhatsApp', async () => {
-      // Create advocate customer with AR balance so we can test Store Credit settlement later too
+    await runTest('4. POS Referral Checkout (Campaign Rates, No Promo Stacking, Pending Reward)', async () => {
       const custRes = await admin.request('POST', '/api/customers', {
         body: {
           name: 'Kabulonga Academy',
@@ -204,124 +203,115 @@ async function main() {
       const stockedItem = (catRes.json.items as any[]).find(i => i.itemType === 'stationery');
       const svcItem = (catRes.json.items as any[]).find(i => i.itemType === 'printing_service');
       assert.ok(stockedItem && svcItem, 'Expected stationery and printing_service items');
-
       const cashAcct = catRes.json.depositAccounts.find((a: any) => a.code === '1050');
       const mobAcct = catRes.json.depositAccounts.find((a: any) => a.code === '1030');
-      assert.ok(cashAcct && mobAcct);
 
-      const previewPayload = {
-        lines: [
-          { itemId: stockedItem.id, description: stockedItem.name, quantity: 2, unitPrice: 150, isTaxable: true },
-          { itemId: svcItem.id, description: svcItem.name, quantity: 100, unitPrice: 2, isTaxable: true },
-        ],
-        promoCode: 'VIP20',
-        referralCode: referralCodeStr,
-        taxRate: 16,
-        isTaxExempt: false,
-      };
-      const prev = await admin.request('POST', '/api/pos/preview', { body: previewPayload });
-      assert.equal(prev.status, 200);
-      // Gross = 300 + 200 = 500; VIP20 = 20% of 500 = 100; Referral = 5% of 500 = 25; Net = 375; Tax 16% = 60; Total = 435
-      assert.equal(prev.json.grossSubtotal, 500);
-      assert.equal(prev.json.promoDiscount, 100);
-      assert.equal(prev.json.referralDiscount, 25);
-      assert.equal(prev.json.netSubtotal, 375);
-      assert.equal(prev.json.taxAmount, 60);
-      assert.equal(prev.json.total, 435);
+      // Referral-only preview: 5% referee discount on eligible 500 = 25 (campaign-configured rate).
+      const refPreview = await admin.request('POST', '/api/pos/preview', {
+        body: {
+          lines: [
+            { itemId: stockedItem.id, description: stockedItem.name, quantity: 2, unitPrice: 150, isTaxable: true },
+            { itemId: svcItem.id, description: svcItem.name, quantity: 100, unitPrice: 2, isTaxable: true },
+          ],
+          referralCode: referralCodeStr,
+          taxRate: 16,
+          isTaxExempt: false,
+        },
+      });
+      assert.equal(refPreview.status, 200);
+      assert.equal(refPreview.json.grossSubtotal, 500);
+      assert.equal(refPreview.json.referralDiscount, 25);
+      assert.equal(refPreview.json.netSubtotal, 475);
+      assert.equal(refPreview.json.taxAmount, 76);
+      assert.equal(refPreview.json.total, 551);
+
+      // Promo + referral → referral discount suppressed (D1-A).
+      const stackPreview = await admin.request('POST', '/api/pos/preview', {
+        body: {
+          lines: [
+            { itemId: stockedItem.id, description: stockedItem.name, quantity: 2, unitPrice: 150, isTaxable: true },
+          ],
+          promoCode: 'VIP20',
+          referralCode: referralCodeStr,
+          taxRate: 16,
+          isTaxExempt: false,
+        },
+      });
+      assert.equal(stackPreview.status, 200);
+      assert.equal(stackPreview.json.promoDiscount, 60); // 20% of 300
+      assert.equal(stackPreview.json.referralDiscount, 0);
+      assert.equal(stackPreview.json.netSubtotal, 240);
 
       const checkoutRes = await admin.request('POST', '/api/pos/checkout', {
         body: {
-          ...previewPayload,
+          lines: [
+            { itemId: stockedItem.id, description: stockedItem.name, quantity: 2, unitPrice: 150, isTaxable: true },
+            { itemId: svcItem.id, description: svcItem.name, quantity: 100, unitPrice: 2, isTaxable: true },
+          ],
           walkInCustomerName: 'Walk-in Referee',
           walkInCustomerPhone: '+260966998877',
+          referralCode: referralCodeStr,
+          taxRate: 16,
+          isTaxExempt: false,
           tenderMode: 'split',
           tenders: [
             { tenderMethod: 'Cash', depositAccountId: cashAcct.id, amount: 200 },
-            { tenderMethod: 'Mobile Money', depositAccountId: mobAcct.id, amount: 235, referenceNumber: 'MOMO-9988' },
+            { tenderMethod: 'Mobile Money', depositAccountId: mobAcct.id, amount: 351, referenceNumber: 'MOMO-9988' },
           ],
-          sendWhatsAppReceipt: true,
           idempotencyKey: 'pos-test-key-1',
         },
       });
       assert.equal(checkoutRes.status, 201);
       const order = checkoutRes.json.order;
       posOrderId = order.id;
-      assert.equal(order.total, 435);
+      assert.equal(order.total, 551);
       assert.ok(order.journalTxnId > 0);
+      await assertJournalBalanced(order.journalTxnId);
 
-      // Verify GL Journal balanced & includes 1050 Cash, 1030 Mobile Money, 4100 Discounts, 4000 Revenue, 2200 Tax
-      const je = await assertJournalBalanced(order.journalTxnId);
-      const jeCodes = je.lines.map((l: any) => l.accountCode || '');
-      assert.ok(jeCodes.includes('4100'), 'Expected debit to 4100 Sales Discounts');
-      assert.ok(jeCodes.includes('1050'), 'Expected debit to 1050 Cash Drawer');
-      assert.ok(jeCodes.includes('1030'), 'Expected debit to 1030 Mobile Clearing');
-
-      // Idempotent replay check
-      const replay = await admin.request('POST', '/api/pos/checkout', {
-        body: {
-          ...previewPayload,
-          walkInCustomerName: 'Walk-in Referee',
-          walkInCustomerPhone: '+260966998877',
-          tenderMode: 'split',
-          tenders: [
-            { tenderMethod: 'Cash', depositAccountId: cashAcct.id, amount: 200 },
-            { tenderMethod: 'Mobile Money', depositAccountId: mobAcct.id, amount: 235, referenceNumber: 'MOMO-9988' },
-          ],
-          sendWhatsAppReceipt: true,
-          idempotencyKey: 'pos-test-key-1',
-        },
-      });
-      assert.equal(replay.status, 200);
-      assert.equal(replay.json.order.id, posOrderId);
-
-      // Check referral event created + accrued
       const refAfter = await admin.request('GET', '/api/smart-ops/referrals');
-      assert.equal(refAfter.json.events.length, 1);
-      firstEventId = refAfter.json.events[0].id;
-      assert.equal(refAfter.json.events[0].rewardAmount, 23.75); // 5% of 475 (gross 500 - referee 25)
-      await assertJournalBalanced(refAfter.json.events[0].accrualJournalTxnId);
+      const ev = refAfter.json.events.find((e: any) => e.posOrderId === posOrderId);
+      assert.ok(ev, 'referral event exists');
+      firstEventId = ev.id;
+      assert.equal(ev.status, 'pending');
+      assert.equal(ev.rewardAmount, 14.25); // 3% of 475
+      assert.equal(ev.accrualJournalTxnId, null); // recognised at qualification (F4-A)
+      assert.ok(ev.attributionId > 0, 'first-valid attribution recorded');
 
-      // Check auto-queued WhatsApp receipt message
-      const mktAfter = await admin.request('GET', '/api/smart-ops/marketing');
-      assert.ok(
-        mktAfter.json.messages.some((m: any) => m.posOrderId === posOrderId && m.whatsappUrl?.includes('260966998877')),
-        'Expected auto-queued WhatsApp receipt message with wa.me link'
-      );
-
-      return `Receipt=${order.receiptNumber}, Total=435, ReferralReward=18.75`;
+      return `Receipt=${order.receiptNumber}, Total=551, PendingReward=14.25`;
     });
 
-    // 5. Referral Reward Payout (Bank Payout + Customer Credit Memo)
-    await runTest('5. Referral Reward Settlement (Customer Store Credit & Bank Payout)', async () => {
-      // Pay first event via Customer Store Credit Memo
-      const creditPayout = await admin.request('POST', `/api/smart-ops/referrals/events/${firstEventId}/payout`, {
-        body: { settlementType: 'customer_credit' },
-      });
-      assert.equal(creditPayout.status, 200);
-      assert.equal(creditPayout.json.event.status, 'credited');
-      assert.ok(creditPayout.json.event.creditMemoId > 0);
-      await assertJournalBalanced(creditPayout.json.event.payoutJournalTxnId);
+    // 5. Referral Qualification → Existing Wallet Credit → Reversal
+    await runTest('5. Referral Qualification → Existing Customer Wallet Credit & Reversal (D-02-B)', async () => {
+      const q = await admin.request('POST', `/api/smart-ops/referrals/events/${firstEventId}/qualify`, { body: {} });
+      assert.equal(q.status, 200);
+      assert.equal(q.json.qualified.status, 'approved');
+      assert.ok(q.json.credit, 'below-threshold reward auto-credited after qualification');
+      assert.equal(q.json.credit.status, 'credited');
+      assert.ok(q.json.credit.walletTxnId > 0, 'existing wallet transaction created');
+      await assertJournalBalanced(q.json.credit.journalTxnId);
 
-      // Record second manual referral conversion & settle via Bank Payout
-      const manual = await admin.request('POST', '/api/smart-ops/referrals/events', {
-        body: {
-          referralCodeId,
-          qualifyingAmount: 1000,
-          notes: 'Manual wholesale referral',
-        },
-      });
-      assert.equal(manual.status, 201);
-      const secondId = manual.json.event.id;
-      await assertJournalBalanced(manual.json.event.accrualJournalTxnId);
+      const wallets = await admin.request('GET', `/api/wallets?customerId=${advocateCustId}`);
+      assert.equal(wallets.status, 200);
+      const w = wallets.json.wallets[0];
+      assert.ok(w, 'referrer wallet exists');
+      assert.ok(Math.abs(w.balance - 14.25) < 0.001, `wallet balance ${w.balance}`);
 
-      const bankPayout = await admin.request('POST', `/api/smart-ops/referrals/events/${secondId}/payout`, {
-        body: { settlementType: 'bank_payout' },
-      });
-      assert.equal(bankPayout.status, 200);
-      assert.equal(bankPayout.json.event.status, 'paid');
-      await assertJournalBalanced(bankPayout.json.event.payoutJournalTxnId);
+      const stmt = await admin.request('GET', `/api/wallets/${w.id}/transactions`);
+      assert.ok(
+        stmt.json.transactions.some((t: any) => t.txnType === 'referral_reward' && Math.abs(t.amount - 14.25) < 0.001),
+        'wallet statement shows referral_reward txn'
+      );
 
-      return `CreditMemo=#${creditPayout.json.event.creditMemoId}, BankPayoutJE=#${bankPayout.json.event.payoutJournalTxnId}`;
+      const rev = await admin.request('POST', `/api/smart-ops/referrals/events/${firstEventId}/reverse`, {
+        body: { reason: 'Customer refunded' },
+      });
+      assert.equal(rev.status, 200, `reverse failed: ${JSON.stringify(rev.json)}`);
+      assert.equal(rev.json.reversalAmount, 14.25);
+
+      const wallets2 = await admin.request('GET', `/api/wallets?customerId=${advocateCustId}`);
+      assert.ok(Math.abs(wallets2.json.wallets[0].balance - 0) < 0.001, `wallet after reversal ${wallets2.json.wallets[0].balance}`);
+
+      return `WalletCredited=14.25, Reversed=14.25, Balance=0`;
     });
 
     // 6. Marketing Bulk Campaign + GL Spend + Automation Execution

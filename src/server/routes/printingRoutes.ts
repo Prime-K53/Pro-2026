@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { rateLimit } from '../rateLimiter.ts';
 import { hasPermission, type Permission } from '../permissions.ts';
@@ -12,6 +13,8 @@ import {
   createMachine,
   createPrintingJob,
   createPrintingJobFromEstimate,
+  linkQuickPrintJobToInvoice,
+  postQuickPrintJob,
   getInventoryValuationReport,
   getJobProfitabilityReport,
   getPrintingJobById,
@@ -105,7 +108,7 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     keyFn: req => `printing:${req.auth?.companyId ?? 'anon'}:${req.auth?.userId ?? req.ip}`,
   });
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Machines
   router.get('/printing/machines', requirePermission('printing:read'), async (req: Request, res: Response) => {
@@ -160,6 +163,46 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         })
       );
       return res.status(result.idempotentReplay ? 200 : 201).json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  /**
+   * Quick-print desk posting: job + budget approval + material issue to WIP in
+   * one transaction. The desk no longer deducts stock in the browser.
+   */
+  router.post('/printing/quick-jobs', requirePermission('printing:write'), async (req: Request, res: Response) => {
+    try {
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        postQuickPrintJob(tx, req.auth!.companyId, toActor(req), {
+          ...(req.body || {}),
+          idempotencyKey,
+        })
+      );
+      return res.status(result.idempotentReplay ? 200 : 201).json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  /**
+   * Attach an already-raised invoice to a quick-print job and relieve its WIP to
+   * COGS. Used when quick-print work is billed on a combined invoice (invoice
+   * modal / POS) instead of through the workflow invoice generator.
+   */
+  router.post('/printing/jobs/:id/invoice-link', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+    try {
+      const jobId = Number(req.params.id);
+      if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Invalid job id' });
+      const invoiceId = Number(req.body?.invoiceId);
+      if (!Number.isInteger(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: 'invoiceId is required' });
+      const link = await db.withCompanyDb(req.auth!.companyId, tx =>
+        linkQuickPrintJobToInvoice(tx, req.auth!.companyId, toActor(req), { jobId, invoiceId })
+      );
+      return res.json({ link });
     } catch (err) {
       return handlePrintingError(res, err);
     }

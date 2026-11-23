@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { hasPermission } from '../permissions.ts';
 import { writeAuditLog } from '../audit.ts';
 import { AccountingError, type ActorContext } from '../services/accountingEngine.ts';
@@ -48,7 +49,7 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
   // Every route below enforces session auth + cross-company parameter guard + role RBAC + PostgreSQL RLS!
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Inventory Catalog (Isolated & RBAC)
   router.get('/inventory', requirePermission('inventory:read'), async (req: Request, res: Response) => {
@@ -235,11 +236,12 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
   });
 
   // Item detail: master record + variants + BOM components + valuation.
-  router.get('/inventory/:id', requirePermission('inventory:read'), async (req: Request, res: Response) => {
+  router.get('/inventory/:id', requirePermission('inventory:read'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const auth = req.auth!;
       const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid inventory item id' });
+      // Non-numeric ids (e.g. /inventory/valuation) belong to another router.
+      if (!Number.isInteger(id) || id <= 0) return next();
       const detail = await db.withCompanyDb(auth.companyId, tx =>
         getInventoryItemDetail(tx, auth.companyId, id)
       );

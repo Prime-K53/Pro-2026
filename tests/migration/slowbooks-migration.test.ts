@@ -31,6 +31,7 @@ function makeConfig(tmpDir: string): ServerConfig {
     idleTimeoutSeconds: 1800,
     cookieName: 'pms_session',
     isProduction: false,
+    twilioAuthToken: null,
   };
 }
 

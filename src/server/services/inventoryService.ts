@@ -272,6 +272,7 @@ export interface UpdateInventoryItemInput {
   purchaseUnit?: string | null;
   usageUnit?: string | null;
   conversionFactor?: string | number | null;
+  barcode?: string | null;
 }
 
 export async function updateInventoryItem(
@@ -357,6 +358,29 @@ export async function updateInventoryItem(
     );
   }
 
+  // Barcode handling
+  let barcode: string | null = null;
+  if (input.barcode === undefined) {
+    barcode = item.barcode;
+  } else if (input.barcode === null || input.barcode === '') {
+    barcode = null;
+  } else {
+    barcode = String(input.barcode).trim();
+    if (barcode) {
+      const barcodeRes = await tx.query<{ id: number }>(
+        `SELECT id FROM inventory_items WHERE company_id = $1 AND barcode = $2 AND id <> $3 LIMIT 1`,
+        [companyId, barcode, id]
+      );
+      if (barcodeRes.rows.length > 0) {
+        throw new AccountingError(
+          409,
+          `Barcode "${barcode}" is already used by another item in this company`,
+          'DUPLICATE_BARCODE'
+        );
+      }
+    }
+  }
+
   const updated = await tx.query<Record<string, any>>(
     `UPDATE inventory_items
         SET sku = $11,
@@ -367,11 +391,12 @@ export async function updateInventoryItem(
             sales_price = $7::NUMERIC(19,4),
             purchase_unit = $8,
             usage_unit = $9,
-            conversion_factor = $10::NUMERIC(19,6)
+            conversion_factor = $10::NUMERIC(19,6),
+            barcode = $12
       WHERE company_id = $1 AND id = $2
       RETURNING id, sku, name, description, unit_cost::text, avg_cost::text, sales_price::text,
-                on_hand::text, reorder_point::text, purchase_unit, usage_unit, conversion_factor::text`,
-    [companyId, id, name, description, reorderPoint, unitCost, salesPrice, purchaseUnit, usageUnit, conversionFactor, sku]
+                on_hand::text, reorder_point::text, purchase_unit, usage_unit, conversion_factor::text, barcode`,
+    [companyId, id, name, description, reorderPoint, unitCost, salesPrice, purchaseUnit, usageUnit, conversionFactor, sku, barcode]
   );
 
   await writeAuditLog(tx, {

@@ -293,6 +293,7 @@ export const commercialApi = {
       openingBalanceDate?: string | null;
       openingBalanceExchangeRate?: string | number | null;
       customerType?: string;
+      referredByCustomerId?: number | null;
     }
   ): Promise<ApiCustomer> {
     const d = await requestJson<{ customer: ApiCustomer }>('/api/customers', {

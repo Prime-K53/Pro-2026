@@ -110,6 +110,8 @@ export type QuickPrintJobType = 'quick_photocopy' | 'type_and_printing' | 'gener
 
 export interface QuickPrintJob {
   id: string;
+  /** Server printing_jobs id — the production record that owns cost and stock. */
+  backendJobId?: number;
   jobNumber: string;
   customerId?: string;
   customerName: string;
@@ -496,6 +498,10 @@ export interface CompanyProfile {
   currency: string;
   defaultBankAccountId: string;
   salesTaxRate: number;
+  /** Company default for extra typing / finishing charged per page on desk jobs. */
+  extraTypingFinishingPerPage?: number;
+  /** Company default manual selling price per sheet on desk jobs. */
+  manualSellingPricePerSheet?: number;
   theme: ThemeStyle;
   isServerEdition: boolean;
   serverAddress: string;

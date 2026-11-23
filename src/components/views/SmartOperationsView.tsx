@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  Banknote,
   BookOpen,
   CheckCircle2,
   Gift,
@@ -21,8 +22,10 @@ import { MarketingMessagesTab } from './smart-ops/MarketingMessagesTab';
 import { PriceCardsTab } from './smart-ops/PriceCardsTab';
 import { ReferralsTab } from './smart-ops/ReferralsTab';
 import { PromotionsTab } from './smart-ops/PromotionsTab';
+import { ShiftManager } from '../pos/ShiftManager';
+import { SuspendedSalesView } from '../pos/SuspendedSalesView';
 
-type SmartOpsTab = 'hub' | 'marketing' | 'price-cards' | 'referrals' | 'promotions';
+type SmartOpsTab = 'hub' | 'marketing' | 'price-cards' | 'referrals' | 'promotions' | 'shift';
 
 export const SmartOperationsView: React.FC = () => {
   const { setIsPosModalOpen, setCurrentView, companyProfile, triggerShortcutNotice } =
@@ -111,6 +114,15 @@ export const SmartOperationsView: React.FC = () => {
       icon: Gift,
       accentClass:
         'bg-amber-50 text-amber-700 ring-amber-200/80 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20',
+    },
+    {
+      id: 'shift',
+      title: 'Cashier Shift',
+      subtitle: 'Open/close the till, record cash-in/out and deposits, and reconcile expected cash',
+      metric: 'Float · Cash Movements · Reconciliation',
+      icon: Banknote,
+      accentClass:
+        'bg-sky-50 text-sky-700 ring-sky-200/80 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/20',
     },
     {
       id: 'promotions',
@@ -388,6 +400,12 @@ export const SmartOperationsView: React.FC = () => {
       {activeTab === 'marketing' && <MarketingMessagesTab onDataChanged={loadOverview} />}
       {activeTab === 'price-cards' && <PriceCardsTab />}
       {activeTab === 'referrals' && <ReferralsTab onDataChanged={loadOverview} />}
+      {activeTab === 'shift' && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ShiftManager />
+          <SuspendedSalesView />
+        </div>
+      )}
       {activeTab === 'promotions' && <PromotionsTab onDataChanged={loadOverview} />}
     </div>
   );

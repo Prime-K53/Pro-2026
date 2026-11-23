@@ -11,6 +11,7 @@ import {
   Download,
   Loader2,
   Lock,
+  Printer,
   RefreshCw,
   Save,
   Server,
@@ -53,6 +54,12 @@ export const SettingsView: React.FC = () => {
   const [taxPercent, setTaxPercent] = useState(
     String(Math.round(companyProfile.salesTaxRate * 10000) / 100)
   );
+  const [extraTypingPerPage, setExtraTypingPerPage] = useState(
+    String(companyProfile.extraTypingFinishingPerPage ?? 0)
+  );
+  const [sellingPricePerSheet, setSellingPricePerSheet] = useState(
+    String(companyProfile.manualSellingPricePerSheet ?? 0)
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -67,12 +74,16 @@ export const SettingsView: React.FC = () => {
         setLegalName(settings.legalName || settings.name);
         setEin(settings.ein || '');
         setTaxPercent(String(settings.salesTaxRate));
+        setExtraTypingPerPage(String(settings.extraTypingFinishingPerPage ?? 0));
+        setSellingPricePerSheet(String(settings.manualSellingPricePerSheet ?? 0));
         updateCompanyProfile({
           name: settings.name,
           legalName: settings.legalName || settings.name,
           ein: settings.ein || '',
           accountingMethod: settings.accountingMethod === 'cash' ? 'cash' : 'accrual',
           salesTaxRate: settings.salesTaxRate / 100,
+          extraTypingFinishingPerPage: settings.extraTypingFinishingPerPage ?? 0,
+          manualSellingPricePerSheet: settings.manualSellingPricePerSheet ?? 0,
           fiscalYearStartMonth: settings.fiscalYearStartMonth,
           currency: settings.currencySymbol || companyProfile.currency,
         });
@@ -96,6 +107,16 @@ export const SettingsView: React.FC = () => {
       setSaveError('Sales tax rate must be between 0 and 100 percent.');
       return;
     }
+    const extraTyping = Number(extraTypingPerPage);
+    const sheetPrice = Number(sellingPricePerSheet);
+    if (!Number.isFinite(extraTyping) || extraTyping < 0) {
+      setSaveError('Extra typing / finishing per page must be zero or more.');
+      return;
+    }
+    if (!Number.isFinite(sheetPrice) || sheetPrice < 0) {
+      setSaveError('Manual selling price per sheet must be zero or more.');
+      return;
+    }
 
     setSaving(true);
     setSaveError(null);
@@ -106,12 +127,16 @@ export const SettingsView: React.FC = () => {
         legalName: legalName.trim(),
         ein: ein.trim(),
         salesTaxRate: percent,
+        extraTypingFinishingPerPage: extraTyping,
+        manualSellingPricePerSheet: sheetPrice,
       });
       updateCompanyProfile({
         name: res.company.name,
         legalName: res.company.legalName || res.company.name,
         ein: res.company.ein || '',
         salesTaxRate: res.company.salesTaxRate / 100,
+        extraTypingFinishingPerPage: res.company.extraTypingFinishingPerPage ?? extraTyping,
+        manualSellingPricePerSheet: res.company.manualSellingPricePerSheet ?? sheetPrice,
       });
       await refreshStatus();
       setSavedAt(new Date().toLocaleTimeString());
@@ -323,9 +348,58 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
+        <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Printer className="w-4 h-4 text-purple-600" />
+              <span>Print Desk Pricing Defaults</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              The only place these desk rates are set. The Quick Photocopy desk and the print job forms on invoices and
+              POS read them automatically, so every operator quotes the same price. Material cost always comes from
+              the raw material inventory, never from these rates.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="app-label">Extra Typing / Finishing per Page ({companyProfile.currency})</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={extraTypingPerPage}
+                onChange={e => setExtraTypingPerPage(e.target.value)}
+                className="app-input app-input-mono"
+                disabled={!canEdit}
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Applied per document page for Type &amp; Print jobs only. Quick Photocopy carries no extra charge —
+                it is priced per sheet.
+              </p>
+            </div>
+            <div>
+              <label className="app-label">Manual Selling Price per Sheet ({companyProfile.currency})</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={sellingPricePerSheet}
+                onChange={e => setSellingPricePerSheet(e.target.value)}
+                className="app-input app-input-mono"
+                disabled={!canEdit}
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Selling rate multiplied by the sheets actually used (duplex-aware). Used by Quick Photocopy, Type
+                &amp; Print and POS print jobs.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <p className="text-[11px] text-slate-500">
-          Contact details are workspace preferences. Company name, legal name, tax ID and tax rate are saved to the
-          server company record.
+          Contact details are workspace preferences. Company name, legal name, tax ID, tax rate and print desk pricing
+          defaults are saved to the server company record.
         </p>
       </form>
 

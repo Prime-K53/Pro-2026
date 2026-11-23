@@ -11,6 +11,7 @@ import {
   listInvoices,
 } from './salesService.ts';
 import { linkExamPapersToInvoice } from './printingRecordsService.ts';
+import { linkQuickPrintJobToInvoice } from './productionService.ts';
 
 export type UnifiedDocumentKind =
   | 'invoice'
@@ -1598,12 +1599,31 @@ export async function generateInvoiceFromWorkflow(
     );
   }
   if (input.postgresPrintingJobId) {
+    // The first invoice owns the job. Keeping the original link means a second
+    // attempt to bill the same job is rejected by the WIP relief below instead
+    // of silently moving the job to the newer invoice.
     await tx.query(
       `UPDATE printing_jobs
-          SET invoice_id = $3
+          SET invoice_id = COALESCE(invoice_id, $3)
         WHERE company_id = $1 AND id = $2`,
       [companyId, Number(input.postgresPrintingJobId), invoiceId]
     );
+  }
+
+  // A quick-print job already moved its materials into WIP when the desk posted
+  // it (inventory out, WIP in). Billing must relieve that WIP to COGS once, the
+  // same way examination papers and delivered production jobs do. Without this
+  // the job's cost never reaches COGS and the invoice carries a phantom cost.
+  let quickPrintLink: Awaited<ReturnType<typeof linkQuickPrintJobToInvoice>> | null = null;
+  if (
+    input.sourceKind === 'quick_print' &&
+    input.postgresPrintingJobId &&
+    !created.idempotentReplay
+  ) {
+    quickPrintLink = await linkQuickPrintJobToInvoice(tx, companyId, actor, {
+      jobId: Number(input.postgresPrintingJobId),
+      invoiceId,
+    });
   }
 
   await writeAuditLog(tx, {
@@ -1620,8 +1640,9 @@ export async function generateInvoiceFromWorkflow(
       customerId: resolvedCustomerId,
       examPaperIds,
       examLink,
+      quickPrintLink,
     },
   });
 
-  return { ...created, examLink };
+  return { ...created, examLink, quickPrintLink };
 }

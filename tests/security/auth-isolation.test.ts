@@ -330,7 +330,7 @@ async function main() {
       const accRes = await viewerClient.request('POST', '/api/invitations/accept', {
         body: { token: oneTimeToken, password: 'ViewerPassword#2026' },
       });
-      assert.equal(accRes.status, 200);
+      assert.equal(accRes.status, 200, `accept: ${accRes.status} ${accRes.text}`);
 
       // Token cannot be reused a second time
       const reuseRes = await viewerClient.request('POST', '/api/invitations/accept', {
@@ -343,7 +343,7 @@ async function main() {
         (await viewerClient.request('POST', '/api/auth/login', { body: { identifier: 'viewer', password: 'ViewerPassword#2026' } })).status,
         200
       );
-      assert.equal((await viewerClient.request('GET', '/api/invoices')).status, 200);
+      assert.equal((await viewerClient.request('GET', '/api/invoices')).status, 200, `invoices: ${(await viewerClient.request('GET','/api/invoices')).status}`);
       assert.equal(
         (await viewerClient.request('POST', '/api/invoices', { body: { customerId: 1, invoiceNumber: 'RO-1', total: 10 } })).status,
         403,

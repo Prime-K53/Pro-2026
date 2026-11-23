@@ -44,8 +44,8 @@ async function main() {
 
     // Get raw material item
     const rawMat = await db.withCompanyDb(companyId, async tx => {
-      const r = await tx.query(`SELECT id, name, item_type FROM inventory_items WHERE company_id = $1 AND item_type = 'raw_material' LIMIT 1`, [companyId]);
-      return r.rows[0];
+      const rows = await tx.query(`SELECT id, name, item_type FROM inventory_items WHERE company_id = $1 AND item_type = 'raw_material' LIMIT 1`, [companyId]);
+      return rows.rows[0] as { id: number; name: string; item_type: string };
     });
     console.log('Raw material item:', rawMat);
 

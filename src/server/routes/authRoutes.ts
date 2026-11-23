@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase, createCompanyInTx } from '../db.ts';
 import { createAuthMiddleware, clearSessionCookie, getClientIp } from '../middleware/auth.ts';
+import { csrfProtection, generateCsrfToken } from '../middleware/csrf.ts';
 import { getRolePermissions, CompanyRole } from '../permissions.ts';
 import {
   authenticateWithSupabasePassword,
@@ -13,6 +14,7 @@ import {
   verifySupabaseJwt,
 } from '../supabaseAuth.ts';
 import { recordLoginAttempt, writeAuditLog } from '../audit.ts';
+import { getTwoFactorStatus, verifyTwoFactorLogin } from '../services/twoFactorService.ts';
 import { SqlExecutor } from '../../../db/migrator.ts';
 
 function isHttpsRequest(req: Request): boolean {
@@ -399,6 +401,34 @@ export function createAuthRouter(db: ServerDatabase): Router {
         }
       }
 
+      // Enforce two-factor authentication when the account has it enabled.
+      // A valid TOTP code or single-use backup code is required before a
+      // session is issued. The client is told to prompt for a code via the
+      // `twoFactorRequired` flag on the 401 response.
+      const twoFactorCode = String(req.body?.twoFactorCode ?? req.body?.code ?? '').trim();
+      const tfStatus = await getTwoFactorStatus(tx, Number(u.id));
+      if (tfStatus.enabled) {
+        if (!twoFactorCode) {
+          await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
+          return {
+            ok: false as const,
+            status: 401,
+            error: 'Two-factor authentication code required',
+            twoFactorRequired: true,
+          };
+        }
+        const tfOk = await verifyTwoFactorLogin(tx, Number(u.id), twoFactorCode);
+        if (!tfOk) {
+          await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: false });
+          return {
+            ok: false as const,
+            status: 401,
+            error: 'Invalid two-factor authentication code',
+            twoFactorRequired: true,
+          };
+        }
+      }
+
       const memRes = await tx.query<{
         membership_id: number;
         company_id: number;
@@ -465,6 +495,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
 
       return {
         ok: true as const,
+        csrfToken: generateCsrfToken(String(sessionId)),
         user: {
           id: Number(u.id),
           username: u.username,
@@ -484,11 +515,14 @@ export function createAuthRouter(db: ServerDatabase): Router {
     });
 
     if (!result.ok) {
-      return res.status(result.status).json({ error: result.error });
+      const body: Record<string, unknown> = { error: result.error };
+      if ((result as any).twoFactorRequired) body.twoFactorRequired = true;
+      return res.status(result.status).json(body);
     }
 
     return res.json({
       authenticated: true,
+      csrfToken: (result as any).csrfToken ?? null,
       user: result.user,
       activeCompany: result.activeCompany,
       permissions: result.permissions,
@@ -584,6 +618,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
       const companies = await listUserAuthorizedCompanies(tx, Number(u.id));
       return {
         ok: true as const,
+        csrfToken: generateCsrfToken(String(sid)),
         user: {
           id: Number(u.id),
           username: u.username,
@@ -607,7 +642,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
   });
 
   // POST /api/auth/logout — immediately revokes active session server-side
-  router.post('/logout', requireAuth, async (req: Request, res: Response) => {
+  router.post('/logout', requireAuth, csrfProtection, async (req: Request, res: Response) => {
     const auth = req.auth!;
     await db.withSystemDb(async tx => {
       if (auth.sessionId) {
@@ -631,7 +666,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
   });
 
   // POST /api/auth/switch-company — validates target membership and rotates active company binding
-  router.post('/switch-company', requireAuth, async (req: Request, res: Response) => {
+  router.post('/switch-company', requireAuth, csrfProtection, async (req: Request, res: Response) => {
     const auth = req.auth!;
     const targetCompanyId = Number(req.body?.companyId);
     if (!Number.isInteger(targetCompanyId) || targetCompanyId <= 0) {

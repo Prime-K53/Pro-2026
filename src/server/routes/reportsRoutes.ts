@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError } from '../services/accountingEngine.ts';
 import {
   getCogsReconciliationReport,
@@ -31,7 +32,7 @@ function dateOptions(req: Request) {
 export function createReportsRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   router.get('/reports/printing-job-profitability', requirePermission('reports:read'), async (req, res) => {
     try {

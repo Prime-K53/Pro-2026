@@ -401,6 +401,9 @@ export async function createPrintingJob(
     input.finishingCostPerPage !== undefined
       ? Math.round(Number(input.finishingCostPerPage) * pages * 100) / 100
       : Number(input.finishingCost ?? 0);
+  // Typing & printing is customer-facing service revenue, never a material cost.
+  // It is captured here and folded into manual_selling_price below.
+  let typingAmount = 0;
 
   if (input.machineId) {
     const dbToner = await lookupTonerAndMachineFromDb(tx, companyId, {
@@ -436,7 +439,7 @@ export async function createPrintingJob(
       impressionsUsed = wf.paper.quantities.printedSideImpressions;
       paperCost = wf.commercial.materialPaperCost;
       tonerCost = wf.commercial.materialTonerCost ?? 0;
-      extraCost += wf.commercial.typingFee;
+      typingAmount = wf.typingFee.amount;
     } else if (jobType === 'quick_photocopy') {
       const wf = calculatePhotocopyWorkflow({
         paperStock,
@@ -537,19 +540,29 @@ export async function createPrintingJob(
     impressionsUsed = pRes.quantities.printedSideImpressions;
     paperCost = pRes.quantities.totalPaperCost;
     tonerCost = tRes.totalCost ?? 0;
-    if (jobType === 'type_and_printing' && input.typingFeeRate) {
-      extraCost +=
+    // This is the desk / POS path (no machine selected). The typing fee is a
+    // service revenue, computed the same per-page way as the machine path.
+    if (jobType === 'type_and_printing') {
+      typingAmount =
         (input.typingFeeMode || 'flat') === 'per_page'
-          ? Number(input.typingFeeRate) * pages
-          : Number(input.typingFeeRate);
+          ? Math.round(Number(input.typingFeeRate ?? 0) * pages * 100) / 100
+          : Math.round(Number(input.typingFeeRate ?? 0) * 100) / 100;
     }
   }
-
   const orderedQty6 = parseDecimal6(input.orderedQty ?? copies);
-  const resolvedManualSelling =
+  // manual_selling_price is the complete customer-facing selling amount. When the
+  // desk quotes a photocopy rate per sheet, the typing & printing service fee is
+  // added on top of the photocopy revenue. When a caller supplies an explicit
+  // total (estimate path), it is treated as already complete to avoid counting
+  // the typing revenue twice.
+  const photocopySelling =
     input.manualSellingPricePerSheet !== undefined
       ? Math.round(Number(input.manualSellingPricePerSheet) * sheetsUsed * 100) / 100
-      : input.manualSellingPrice ?? 0;
+      : Number(input.manualSellingPrice ?? 0);
+  const resolvedManualSelling =
+    input.manualSellingPricePerSheet !== undefined
+      ? Math.round((photocopySelling + typingAmount) * 100) / 100
+      : photocopySelling;
   const manualSelling4 = input.reprintOfJobId
     ? 0n
     : parseDecimal4(resolvedManualSelling);
@@ -2816,5 +2829,193 @@ export async function getInventoryValuationReport(tx: Transaction, companyId: nu
     glInventory1200Balance: toMoneyNumber(glInventory1200_4),
     valuationVariance: toMoneyNumber(totalSubledgerValuation4 - glInventory1200_4),
     wip1250Balance: toMoneyNumber(wip1250_4),
+  };
+}
+
+// ============================================================================
+// QUICK-PRINT DESK POSTING & WIP→COGS LINK
+// ============================================================================
+
+/**
+ * Quick-print desk posting: create the production job, approve its budget and
+ * issue the planned paper/toner into WIP in one transaction. Stock and the cost
+ * ledger stay in step with the desk.
+ */
+export async function postQuickPrintJob(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: Parameters<typeof createPrintingJob>[3]
+) {
+  const created = await createPrintingJob(tx, companyId, actor, input);
+  if (created.idempotentReplay) {
+    return { job: created.job, wipJournalTxnId: null, idempotentReplay: true };
+  }
+
+const jobId = Number(created.job.id);
+  await approveJobBudget(tx, companyId, actor, jobId, {});
+  const issued = await issueJobMaterials(tx, companyId, actor, jobId, {});
+  // A desk quick-print job is produced immediately; mark it complete.
+  await tx.query(
+    `UPDATE printing_jobs SET status = 'completed', updated_at = NOW()
+      WHERE company_id = $1 AND id = $2 AND status = 'in_production'`,
+    [companyId, jobId]
+  );
+  const job = await getPrintingJobById(tx, companyId, jobId);
+
+  return {
+    job,
+    wipJournalTxnId: issued.journalTxnId,
+    idempotentReplay: false,
+  };
+}
+
+/**
+ * Attach an already-raised invoice to a quick-print job and relieve its WIP to
+ * COGS once. The invoice's item-less cost is replaced with the relieved cost so
+ * gross profit is not doubled.
+ */
+export async function linkQuickPrintJobToInvoice(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  params: { jobId: number; invoiceId: number }
+): Promise<{
+  invoiceId: number;
+  jobId: number;
+  wipRelieved: number;
+  cogsJournalId: number | null;
+}> {
+  const jobRes = await tx.query<{
+    id: number;
+    job_number: string;
+    title: string;
+    customer_id: number | null;
+    invoice_id: number | null;
+    ordered_qty: string;
+    wip_cost_accumulated: string;
+    wip_cost_relieved: string;
+    cogs_journal_txn_id: number | null;
+  }>(
+    `SELECT id, job_number, title, customer_id, invoice_id, ordered_qty::text,
+            wip_cost_accumulated::text, wip_cost_relieved::text, cogs_journal_txn_id
+       FROM printing_jobs
+      WHERE company_id = $1 AND id = $2
+      FOR UPDATE`,
+    [companyId, Number(params.jobId)]
+  );
+  if (jobRes.rows.length === 0) throw new AccountingError(404, 'Printing job not found');
+  const job = jobRes.rows[0];
+
+  const invRes = await tx.query<{
+    id: number;
+    invoice_number: string;
+    customer_id: number;
+    total_cost: string;
+  }>(
+    `SELECT id, invoice_number, customer_id, total_cost::text
+       FROM invoices
+      WHERE company_id = $1 AND id = $2
+      FOR UPDATE`,
+    [companyId, Number(params.invoiceId)]
+  );
+  if (invRes.rows.length === 0) {
+    throw new AccountingError(404, 'Invoice not found in active company', 'INVOICE_NOT_FOUND');
+  }
+  const invoice = invRes.rows[0];
+
+  if (job.customer_id !== null && Number(job.customer_id) !== Number(invoice.customer_id)) {
+    throw new AccountingError(
+      400,
+      'Invoice customer does not match the quick print job customer',
+      'INVOICE_CUSTOMER_MISMATCH'
+    );
+  }
+  if (job.invoice_id !== null && Number(job.invoice_id) !== Number(params.invoiceId)) {
+    throw new AccountingError(
+      409,
+      `Job ${job.job_number} is already linked to invoice ${job.invoice_id}`,
+      'JOB_ALREADY_INVOICED'
+    );
+  }
+
+  const accumulated4 = parseDecimal4(job.wip_cost_accumulated);
+  const relieved4 = parseDecimal4(job.wip_cost_relieved);
+  const relief4 = accumulated4 - relieved4;
+
+  let cogsJournalId: number | null = job.cogs_journal_txn_id;
+  if (relief4 > 0n) {
+    const ctx = await resolveWorkflowAccounts(tx, companyId, actor);
+    const posted = await postJournalEntry(tx, companyId, actor, {
+      txnDate: todayIsoDate(),
+      description: `Quick print WIP relief to COGS — ${job.job_number} (Invoice ${invoice.invoice_number})`,
+      reference: invoice.invoice_number,
+      sourceType: 'quick_print',
+      sourceId: Number(params.invoiceId),
+      idempotencyKey: `quick-cogs-${companyId}-${params.invoiceId}-${Number(params.jobId)}`,
+      lines: [
+        {
+          accountId: ctx.cogs5000,
+          debit: formatDecimal4(relief4),
+          credit: '0.0000',
+          description: `Quick print COGS — ${job.job_number}`,
+        },
+        {
+          accountId: ctx.wip1250,
+          debit: '0.0000',
+          credit: formatDecimal4(relief4),
+          description: `Relieve quick print WIP — ${job.job_number}`,
+        },
+      ],
+    });
+    cogsJournalId = posted.transaction.id;
+  }
+
+  const lineCostRes = await tx.query<{ cost: string }>(
+    `SELECT COALESCE(SUM(total_cost), 0)::text AS cost
+       FROM invoice_lines
+      WHERE company_id = $1 AND invoice_id = $2 AND item_id IS NULL`,
+    [companyId, Number(params.invoiceId)]
+  );
+  const lineCost4 = parseDecimal4(lineCostRes.rows[0]?.cost ?? 0);
+  const nextInvoiceCost4 = parseDecimal4(invoice.total_cost) - lineCost4 + relief4;
+  await tx.query(
+    `UPDATE invoices SET total_cost = $3::NUMERIC(19,4) WHERE company_id = $1 AND id = $2`,
+    [companyId, Number(params.invoiceId), formatDecimal4(nextInvoiceCost4 > 0n ? nextInvoiceCost4 : 0n)]
+  );
+
+  await tx.query(
+    `UPDATE printing_jobs
+        SET invoice_id = $3,
+            invoiced_qty = ordered_qty,
+            produced_good_qty = GREATEST(produced_good_qty, ordered_qty),
+            qc_approved_qty = GREATEST(qc_approved_qty, ordered_qty),
+            delivered_qty = GREATEST(delivered_qty, ordered_qty),
+            wip_cost_relieved = wip_cost_accumulated,
+            cogs_journal_txn_id = COALESCE($4, cogs_journal_txn_id),
+            status = 'completed'
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, Number(params.jobId), Number(params.invoiceId), cogsJournalId]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'QUICK_PRINT_JOB_INVOICED',
+    tableName: 'printing_jobs',
+    recordId: Number(params.jobId),
+    newValues: {
+      invoiceId: Number(params.invoiceId),
+      cogsJournalId,
+      wipRelieved: toMoneyNumber(relief4),
+    },
+  });
+
+  return {
+    invoiceId: Number(params.invoiceId),
+    jobId: Number(params.jobId),
+    wipRelieved: toMoneyNumber(relief4),
+    cogsJournalId,
   };
 }

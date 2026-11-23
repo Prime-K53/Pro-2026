@@ -34,6 +34,7 @@ import {
   parseDecimal4,
   toMoneyNumber,
 } from '../lib/decimal.ts';
+import { recordReferralAttribution } from './referralAttributionService.ts';
 
 // ============================================================================
 // CUSTOMERS & RESELLER PERMITS & PAYMENT TERMS
@@ -211,6 +212,7 @@ export async function createCustomer(
     exemptionCertificateNumber?: string | null;
     exemptionCertificateExpiryDate?: string | null;
     withholdingTaxClassification?: string | null;
+    referredByCustomerId?: number | null;
   }
 ) {
   const name = String(input.name || '').trim();
@@ -321,6 +323,30 @@ export async function createCustomer(
     recordId: id,
     newValues: { name, companyName, customerType, customerCode, customerStatus: 'active' },
   });
+
+  // Verbal referral captured during customer registration (§4, §7.2).
+  // Invalid referrer → hard error; no eligible campaign → continue without one.
+  if (input.referredByCustomerId != null) {
+    const referrerCustomerId = Number(input.referredByCustomerId);
+    if (referrerCustomerId === id) {
+      throw new AccountingError(400, 'A customer cannot be referred by themselves', 'REFERRAL_SELF_REFERRAL');
+    }
+    try {
+      await recordReferralAttribution(tx, companyId, actor, {
+        customerId: id,
+        referrerCustomerId,
+        method: 'verbal',
+        sourceContext: 'customer_registration',
+      });
+    } catch (err: any) {
+      const soft =
+        err?.code === 'REFERRAL_NO_CAMPAIGN' ||
+        err?.code === 'REFERRAL_CAMPAIGN_UNAVAILABLE' ||
+        err?.code === 'REFERRAL_NO_PROGRAM';
+      if (!soft) throw err;
+      // No eligible campaign/program → create the customer without an attribution.
+    }
+  }
 
   if (openingBalance4 > 0n) {
     await postCustomerOpeningBalance(tx, companyId, actor, {

@@ -45,3 +45,32 @@ export function listBackups(backupDir: string): string[] {
     .sort()
     .reverse();
 }
+
+export interface BackupStatus {
+  configured: boolean;
+  backupDir: string;
+  count: number;
+  latest: { name: string; ageHours: number } | null;
+  ok: boolean;
+}
+
+/** Verify that a recent backup exists. */
+export function getBackupStatus(backupDir: string, maxAgeHours = 24): BackupStatus {
+  if (!fs.existsSync(backupDir)) {
+    return { configured: false, backupDir, count: 0, latest: null, ok: false };
+  }
+  const files = listBackups(backupDir);
+  if (files.length === 0) {
+    return { configured: true, backupDir, count: 0, latest: null, ok: false };
+  }
+  const latestName = files[0];
+  const mtime = fs.statSync(path.join(backupDir, latestName)).mtimeMs;
+  const ageHours = (Date.now() - mtime) / 3_600_000;
+  return {
+    configured: true,
+    backupDir,
+    count: files.length,
+    latest: { name: latestName, ageHours: Math.round(ageHours * 100) / 100 },
+    ok: ageHours <= maxAgeHours,
+  };
+}

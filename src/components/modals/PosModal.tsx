@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   CreditCard,
   ExternalLink,
+  Copy,
   Gift,
   Minus,
   Plus,
@@ -21,6 +22,8 @@ import { ApiPosCatalog, smartOpsApi } from '../../services/smartOpsApi';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { InlineAlert, ModalHeader, ModalShell, SummaryRow } from '../common/ui';
+import { printingApi } from '../../services/printingApi';
+import { QuickPrintJobModal, type QuickPrintJobDraft } from './QuickPrintJobModal';
 
 interface CartLine {
   key: string;
@@ -31,6 +34,8 @@ interface CartLine {
   quantity: number;
   unitPrice: number;
   isTaxable: boolean;
+  /** A desk print job: quantity and price are fixed by its costing preview. */
+  quickPrint?: QuickPrintJobDraft;
 }
 
 type TenderMode = 'cash' | 'mobile_money' | 'card' | 'bank_transfer' | 'split' | 'on_account';
@@ -60,6 +65,9 @@ export const PosModal: React.FC = () => {
   // Catalog Browse / Orders History Tab
   const [catalogTab, setCatalogTab] = useState<'all' | 'printing_service' | 'printed_product' | 'stationery' | 'orders'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Quick Photocopy / Print job capture
+  const [showQuickPrint, setShowQuickPrint] = useState(false);
 
   // Custom Quick Item Form
   const [showCustomForm, setShowCustomForm] = useState(false);
@@ -269,6 +277,29 @@ export const PosModal: React.FC = () => {
     setShowCustomForm(false);
   };
 
+  const addQuickPrintJob = (draft: QuickPrintJobDraft) => {
+    const jobLabel =
+      draft.jobType === 'quick_photocopy'
+        ? 'Quick Photocopy'
+        : draft.jobType === 'type_and_printing'
+        ? 'Type & Print'
+        : 'General Print';
+    setCart(prev => [
+      ...prev,
+      {
+        key: `qp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        description: `${jobLabel} — ${draft.title} (${draft.pages} pp × ${draft.copies} copies, ${
+          draft.printSide
+        } · ${draft.estimate.sheetsUsed.toLocaleString()} sheets)`,
+        sku: 'PRINT-JOB',
+        quantity: 1,
+        unitPrice: draft.estimate.sellingPriceTotal,
+        isTaxable: true,
+        quickPrint: draft,
+      },
+    ]);
+  };
+
   const updateCartQty = (key: string, delta: number) => {
     setCart(prev =>
       prev
@@ -344,7 +375,35 @@ export const PosModal: React.FC = () => {
 
     setSubmitting(true);
     setError(null);
+    const postedJobs: number[] = [];
     try {
+      // Post every desk print job to production (material issue to WIP) before the
+      // sale is finalised, so the ticket sells real cost and the stock movement
+      // happens once, on the server.
+      for (const line of cart) {
+        if (!line.quickPrint) continue;
+        const draft = line.quickPrint;
+        const { job } = await printingApi.postQuickPrintJob({
+          jobType: draft.jobType,
+          customerId: customerId ? Number(customerId) : null,
+          customerName: !customerId ? walkInName.trim() || 'Walk-In Cash Customer' : undefined,
+          title: draft.title,
+          pages: draft.pages,
+          copies: draft.copies,
+          printSide: draft.printSide,
+          rawPaperItemId: Number(draft.rawPaperItemId),
+          rawTonerItemId: Number(draft.rawTonerItemId),
+          typingFeeMode: 'per_page',
+          typingFeeRate: draft.jobType === 'type_and_printing' ? draft.extraCostPerPage : 0,
+          manualSellingPricePerSheet: draft.sellingPricePerSheet,
+          jobDate: draft.date,
+          notes: draft.notes ?? null,
+          idempotencyKey: `pos-quick-${line.key}`,
+        });
+        const jobId = Number(job?.id);
+        if (Number.isInteger(jobId) && jobId > 0) postedJobs.push(jobId);
+      }
+
       const payload: Record<string, unknown> = {
         customerId: customerId ? Number(customerId) : undefined,
         walkInCustomerName: !customerId ? walkInName.trim() || 'Walk-In Cash Customer' : undefined,
@@ -380,6 +439,19 @@ export const PosModal: React.FC = () => {
       };
 
       const order = await smartOpsApi.checkoutPos(payload);
+
+      for (const jobId of postedJobs) {
+        try {
+          await printingApi.linkJobInvoice(jobId, order.invoiceId);
+        } catch (linkErr: any) {
+          setError(
+            `Sale ${order.receiptNumber} posted, but print job #${jobId} could not be linked: ${
+              linkErr?.message || 'unknown error'
+            }`
+          );
+        }
+      }
+
       setCompletedOrder(order);
       triggerShortcutNotice(
         `POS Sale ${order.receiptNumber} posted to GL (JE #${order.journalTxnId})`,
@@ -387,7 +459,10 @@ export const PosModal: React.FC = () => {
       );
       await loadCatalog();
     } catch (err: any) {
-      setError(err?.message || 'POS checkout failed');
+      const suffix = postedJobs.length
+        ? ` Print jobs #${postedJobs.join(', #')} were posted to production WIP and still need billing.`
+        : '';
+      setError((err?.message || 'POS checkout failed') + suffix);
     } finally {
       setSubmitting(false);
     }
@@ -475,6 +550,7 @@ export const PosModal: React.FC = () => {
   };
 
   return (
+    <>
     <ModalShell
       open={isPosModalOpen}
       onClose={() => setIsPosModalOpen(false)}
@@ -591,6 +667,14 @@ export const PosModal: React.FC = () => {
                     onChange={e => setSearchQuery(e.target.value)}
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickPrint(true)}
+                  className="btn btn-secondary"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Quick Copy / Print
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowCustomForm(v => !v)}
@@ -874,37 +958,52 @@ export const PosModal: React.FC = () => {
                             {line.description}
                           </div>
                           <div className="mt-1 flex items-center gap-2">
-                            <span className="text-[10px] text-slate-400">Rate:</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              className="w-20 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-[11px] dark:border-white/10 dark:bg-transparent"
-                              value={line.unitPrice}
-                              onChange={e => updateCartPrice(line.key, Number(e.target.value) || 0)}
-                            />
+                            {line.quickPrint ? (
+                              <span className="text-[10px] text-brand-600 dark:text-brand-400">
+                                Print job · {line.quickPrint.estimate.sheetsUsed.toLocaleString()} sheets · cost{' '}
+                                {formatCurrency(line.quickPrint.estimate.totalCost, currency)}
+                              </span>
+                            ) : (
+                              <>
+                                <span className="text-[10px] text-slate-400">Rate:</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className="w-20 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-[11px] dark:border-white/10 dark:bg-transparent"
+                                  value={line.unitPrice}
+                                  onChange={e => updateCartPrice(line.key, Number(e.target.value) || 0)}
+                                />
+                              </>
+                            )}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => updateCartQty(line.key, -1)}
-                            className="rounded border border-slate-200 p-1 hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
-                          >
-                            <Minus className="h-3 w-3" />
-                          </button>
-                          <span className="w-7 text-center font-mono font-bold tabular-nums">
+                        {line.quickPrint ? (
+                          <span className="w-16 text-center font-mono font-bold tabular-nums">
                             {line.quantity}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => updateCartQty(line.key, 1)}
-                            className="rounded border border-slate-200 p-1 hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
-                          >
-                            <Plus className="h-3 w-3" />
-                          </button>
-                        </div>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => updateCartQty(line.key, -1)}
+                              className="rounded border border-slate-200 p-1 hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
+                            >
+                              <Minus className="h-3 w-3" />
+                            </button>
+                            <span className="w-7 text-center font-mono font-bold tabular-nums">
+                              {line.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => updateCartQty(line.key, 1)}
+                              className="rounded border border-slate-200 p-1 hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
+                            >
+                              <Plus className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
 
                         <div className="w-20 text-right font-mono font-bold tabular-nums">
                           {formatCurrency(line.quantity * line.unitPrice, currency)}
@@ -1249,6 +1348,14 @@ export const PosModal: React.FC = () => {
           </div>
         </div>
       )}
-    </ModalShell>
+      </ModalShell>
+
+      <QuickPrintJobModal
+        open={isPosModalOpen && showQuickPrint}
+        onClose={() => setShowQuickPrint(false)}
+        onAdd={addQuickPrintJob}
+        targetLabel="this ticket"
+      />
+    </>
   );
 };

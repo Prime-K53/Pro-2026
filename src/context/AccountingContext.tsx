@@ -1540,12 +1540,21 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         : sheetsUsed > 0
         ? round4((jobData.sellingPriceTotal ?? 0) / sheetsUsed)
         : 0;
+    // The typing & printing charge is customer-facing service revenue, not a
+    // material cost. Physical finishing stays in production cost. This mirrors
+    // the server printing_jobs semantics so the desk preview equals persisted
+    // profitability.
+    const typingRevenue =
+      jobData.jobType === 'type_and_printing' ? round2(combinedExtraCost) : 0;
+    const finishingCost =
+      jobData.jobType === 'type_and_printing' ? 0 : round2(combinedExtraCost);
+    const photocopyRevenue = round2(resolvedSellingPerSheet * sheetsUsed);
     const resolvedSellingPriceTotal =
       jobData.sellingPricePerSheet !== undefined
-        ? round2(resolvedSellingPerSheet * sheetsUsed)
+        ? round2(photocopyRevenue + typingRevenue)
         : Math.max(0, round2(jobData.sellingPriceTotal ?? 0));
 
-    const totalCost = round2(paperCost + tonerCost + combinedExtraCost);
+    const totalCost = round2(paperCost + tonerCost + finishingCost);
     const profit = round2(resolvedSellingPriceTotal - totalCost);
     const materialCogs = round2(paperCost + tonerCost);
 

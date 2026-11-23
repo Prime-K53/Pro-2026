@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
-import { requestJsonRaw, SESSION_EXPIRED_EVENT } from '../services/http';
+import { requestJsonRaw, SESSION_EXPIRED_EVENT, setCsrfToken, refreshCsrfToken } from '../services/http';
 
 export type ServerCompanyRole =
   | 'Administrator'
@@ -42,10 +42,16 @@ interface AuthContextValue {
   permissions: string[];
   companies: AuthorizedCompany[];
   authError: string | null;
+  twoFactorRequired: boolean;
   clearAuthError: () => void;
   hasPermission: (perm: string) => boolean;
   refreshStatus: () => Promise<void>;
-  login: (identifier: string, password: string, companyId?: number) => Promise<boolean>;
+  login: (
+    identifier: string,
+    password: string,
+    companyId?: number,
+    twoFactorCode?: string
+  ) => Promise<boolean>;
   register: (payload: {
     username: string;
     email: string;
@@ -83,6 +89,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [permissions, setPermissions] = useState<string[]>([]);
   const [companies, setCompanies] = useState<AuthorizedCompany[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
 
   const applySessionPayload = useCallback((data: any) => {
     if (data?.authenticated) {
@@ -92,12 +99,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setPermissions(Array.isArray(data.permissions) ? data.permissions : []);
       setCompanies(Array.isArray(data.companies) ? data.companies : []);
       setAuthError(null);
+      // Capture the CSRF token minted at login; if the payload did not carry
+      // one (e.g. session restored from a cookie), fetch it now.
+      setCsrfToken(data?.csrfToken ?? null);
+      if (!data?.csrfToken) void refreshCsrfToken();
     } else {
       setAuthenticated(false);
       setUser(null);
       setActiveCompany(null);
       setPermissions([]);
       setCompanies([]);
+      setCsrfToken(null);
     }
   }, []);
 
@@ -131,14 +143,30 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
   }, [refreshStatus]);
 
-  const login = async (identifier: string, password: string, companyId?: number) => {
+  const login = async (
+    identifier: string,
+    password: string,
+    companyId?: number,
+    twoFactorCode?: string
+  ) => {
     setAuthError(null);
+    setTwoFactorRequired(false);
     const { ok, data } = await apiJson<any>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ identifier, password, ...(companyId ? { companyId } : {}) }),
+      body: JSON.stringify({
+        identifier,
+        password,
+        ...(companyId ? { companyId } : {}),
+        ...(twoFactorCode ? { twoFactorCode } : {}),
+      }),
     });
     if (!ok) {
-      setAuthError(data?.error || 'Sign-in failed');
+      if (data?.twoFactorRequired) {
+        setTwoFactorRequired(true);
+        setAuthError(data?.error || 'Two-factor authentication code required');
+      } else {
+        setAuthError(data?.error || 'Sign-in failed');
+      }
       return false;
     }
     applySessionPayload(data);
@@ -267,7 +295,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         permissions,
         companies,
         authError,
-        clearAuthError: () => setAuthError(null),
+        twoFactorRequired,
+        clearAuthError: () => {
+          setAuthError(null);
+          setTwoFactorRequired(false);
+        },
         hasPermission,
         refreshStatus,
         login,

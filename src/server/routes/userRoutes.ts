@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import {
   ALL_COMPANY_ROLES,
   CompanyRole,
@@ -33,7 +34,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // GET /api/users — Administrator only; strictly scoped to active company via RLS
   router.get(
     '/users',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('users:list'),
     async (req: Request, res: Response) => {
@@ -132,7 +133,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // POST /api/invitations — Administrator creates one-time invite token bound to active company
   router.post(
     '/invitations',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('users:invite'),
     async (req: Request, res: Response) => {
@@ -328,7 +329,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // PATCH /api/users/:userId/membership — change role, expiry, active status; protects last active Admin
   router.patch(
     '/users/:userId/membership',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('users:manage'),
     async (req: Request, res: Response) => {
@@ -438,7 +439,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // DELETE /api/users/:userId/membership — immediate revocation + session invalidation
   router.delete(
     '/users/:userId/membership',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('users:manage'),
     async (req: Request, res: Response) => {
@@ -511,7 +512,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // POST /api/users/:userId/deactivate-global — Administrator global account deactivation (revokes all sessions)
   router.post(
     '/users/:userId/deactivate',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('users:manage'),
     async (req: Request, res: Response) => {
@@ -563,7 +564,7 @@ export function createUserRouter(db: ServerDatabase): Router {
   // GET /api/audit/logs — Administrator & Accountant only, strictly RLS-isolated to active company
   router.get(
     '/audit/logs',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('audit:read'),
     async (req: Request, res: Response) => {

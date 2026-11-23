@@ -3,6 +3,7 @@ import path from 'path';
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { hasPermission } from '../permissions.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import {
@@ -52,7 +53,7 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Unified All Documents list across commercial, contracts, exams, jobs, and stored files
   router.get('/documents', requirePermission('attachments:read'), async (req: Request, res: Response) => {
@@ -101,6 +102,71 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
           })
         );
         return res.json({ preview });
+      } catch (err) {
+        return handleDocumentsError(res, err);
+      }
+    }
+  );
+
+  // Branded, print-friendly document view (HTML). Uses the same authoritative
+  // preview payload as the JSON endpoint; no separate data path.
+  router.get(
+    '/documents/:kind/:id/print',
+    requirePermission('attachments:read'),
+    async (req: Request, res: Response) => {
+      try {
+        const auth = req.auth!;
+        const kind = String(req.params.kind) as UnifiedDocumentKind;
+        const id = Number(req.params.id);
+        if (!VALID_KINDS.includes(kind)) {
+          return res.status(400).json({ error: `Unsupported document kind '${kind}'` });
+        }
+        if (!Number.isInteger(id) || id <= 0) {
+          return res.status(400).json({ error: 'Invalid document id' });
+        }
+        const preview: any = await db.withCompanyDb(auth.companyId, tx =>
+          getDocumentPreviewPayload(tx, auth.companyId, kind, id, {
+            includeCosts: hasPermission(auth.role, 'estimates:read_costs'),
+            canReadBills: hasPermission(auth.role, 'bills:read'),
+            attachmentsDir: db.config.attachmentsDir,
+          })
+        );
+        const company = preview.companyMeta || {};
+        const esc = (v: unknown) =>
+          String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+        const rows: Array<[string, unknown]> = [
+          ['Document', kind.replace(/_/g, ' ')],
+          ['Number', preview.invoiceNumber || preview.quoteNumber || preview.contractNumber || preview.jobNumber || preview.statementNumber],
+          ['Date', preview.invoiceDate || preview.quoteDate || preview.contractDate || preview.jobDate],
+          ['Status', preview.status],
+          ['Customer', preview.customerName],
+          ['Total', preview.total != null ? `${company.currency || ''}${preview.total}` : undefined],
+        ].filter(([, v]) => v !== undefined && v !== null && v !== '') as Array<[string, unknown]>;
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(company.name || 'Document')} — ${esc(kind)}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;margin:40px;color:#111;font-size:13px}
+  .brand{border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:20px}
+  .brand h1{margin:0;font-size:20px}
+  .brand .legal{color:#555;font-size:12px}
+  table{border-collapse:collapse;width:100%;margin-top:12px}
+  td{padding:7px 10px;border-bottom:1px solid #e5e5e5;vertical-align:top}
+  td:first-child{width:160px;color:#555}
+  .meta{margin-top:18px;font-size:11px;color:#777}
+  button{margin-bottom:16px;padding:8px 14px}
+  @media print{button{display:none}}
+</style></head><body>
+<button onclick="window.print()">Print</button>
+<div class="brand">
+  <h1>${esc(company.name || 'Company')}</h1>
+  <div class="legal">${esc(company.legalName || '')}${company.ein ? ` · ${esc(company.ein)}` : ''}</div>
+  <div class="legal">${esc([company.address, company.cityStateZip].filter(Boolean).join(', '))}</div>
+  <div class="legal">${esc([company.phone, company.email].filter(Boolean).join(' · '))}</div>
+</div>
+<table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+<div class="meta">Generated ${esc(new Date().toISOString())} · ${esc(company.name || '')}</div>
+</body></html>`;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(html);
       } catch (err) {
         return handleDocumentsError(res, err);
       }
@@ -161,6 +227,9 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
         return res.status(result.idempotentReplay ? 200 : 201).json({
           invoice: { ...result.invoice, invoice_number: result.invoice.invoiceNumber },
           idempotentReplay: result.idempotentReplay,
+          // Present when the invoice billed a quick-print desk job, so the caller
+          // can show the WIP->COGS relief that was posted with it.
+          quickPrintLink: result.quickPrintLink ?? null,
         });
       } catch (err) {
         return handleDocumentsError(res, err);

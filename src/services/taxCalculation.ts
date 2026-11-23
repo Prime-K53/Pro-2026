@@ -1,8 +1,50 @@
 import { Employee, PayrollItem } from '../types/accounting';
 
 /**
- * Calculates US Payroll taxes for an employee given regular & overtime hours.
+ * Preview-only Malawi statutory calculation.
+ *
+ * The server is authoritative: it recomputes every payslip from the company's
+ * effective-dated PAYE bands and statutory rates (see
+ * `src/server/services/malawiPayroll.ts`). This preview uses configurable
+ * defaults and can be refreshed with `setPayrollPreviewConfig` once the
+ * statutory configuration has been loaded.
  */
+
+export interface PayrollPreviewConfig {
+  bands: Array<{ lower: number; upper: number | null; rate: number }>;
+  pensionEmployee: number;
+  pensionEmployer: number;
+}
+
+let previewConfig: PayrollPreviewConfig = {
+  bands: [
+    { lower: 0, upper: 1170000, rate: 0 },
+    { lower: 1170000, upper: 2340000, rate: 0.15 },
+    { lower: 2340000, upper: null, rate: 0.3 },
+  ],
+  pensionEmployee: 0.05,
+  pensionEmployer: 0.1,
+};
+
+export function setPayrollPreviewConfig(config: PayrollPreviewConfig): void {
+  previewConfig = config;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function computePaye(taxable: number): number {
+  let tax = 0;
+  for (const band of [...previewConfig.bands].sort((a, b) => a.lower - b.lower)) {
+    if (taxable <= band.lower) break;
+    const upper = band.upper ?? Number.POSITIVE_INFINITY;
+    const slice = Math.min(taxable, upper) - band.lower;
+    if (slice > 0) tax += slice * band.rate;
+  }
+  return round2(tax);
+}
+
 export function calculatePayrollItem(
   employee: Employee,
   hoursWorked: number,
@@ -13,75 +55,35 @@ export function calculatePayrollItem(
   if (employee.payType === 'hourly') {
     const regularRate = employee.payRate;
     const overtimeRate = regularRate * 1.5;
-    grossPay = (hoursWorked * regularRate) + (overtimeHours * overtimeRate);
+    grossPay = hoursWorked * regularRate + overtimeHours * overtimeRate;
   } else {
-    // Salary: based on 26 biweekly pay periods in a year
     const periodsPerYear = employee.payFrequency === 'weekly' ? 52 :
                            employee.payFrequency === 'biweekly' ? 26 :
                            employee.payFrequency === 'semimonthly' ? 24 : 12;
     grossPay = employee.payRate / periodsPerYear;
   }
+  grossPay = round2(grossPay);
 
-  grossPay = Math.round(grossPay * 100) / 100;
+  const paye = computePaye(grossPay);
+  const pensionEmployee = round2(grossPay * previewConfig.pensionEmployee);
+  const pensionEmployer = round2(grossPay * previewConfig.pensionEmployer);
+  const netPay = round2(grossPay - paye - pensionEmployee);
 
-  // 1. Social Security (6.2%)
-  const socialSecurityEmployee = Math.round(grossPay * 0.062 * 100) / 100;
-  const socialSecurityEmployer = socialSecurityEmployee;
-
-  // 2. Medicare (1.45%)
-  const medicareEmployee = Math.round(grossPay * 0.0145 * 100) / 100;
-  const medicareEmployer = medicareEmployee;
-
-  // 3. Federal Income Tax Withholding (IRS percentage method estimate with allowance deductions)
-  const allowanceValue = 180.00; // standard allowance per bi-weekly period
-  const taxableGross = Math.max(0, grossPay - (employee.w4Allowances * allowanceValue));
-  
-  let fitRate = 0.10;
-  if (employee.filingStatus === 'single') {
-    if (taxableGross > 3800) fitRate = 0.24;
-    else if (taxableGross > 1800) fitRate = 0.22;
-    else if (taxableGross > 900) fitRate = 0.12;
-    else fitRate = 0.10;
-  } else if (employee.filingStatus === 'married') {
-    if (taxableGross > 5500) fitRate = 0.24;
-    else if (taxableGross > 3200) fitRate = 0.22;
-    else if (taxableGross > 1600) fitRate = 0.12;
-    else fitRate = 0.10;
-  } else {
-    // Head of household
-    if (taxableGross > 4200) fitRate = 0.24;
-    else if (taxableGross > 2200) fitRate = 0.22;
-    else if (taxableGross > 1200) fitRate = 0.12;
-    else fitRate = 0.10;
-  }
-
-  const fit = Math.round(taxableGross * fitRate * 100) / 100;
-
-  // 4. State Income Tax (Ohio state flat estimate ~4.0%)
-  const sit = Math.round(grossPay * 0.040 * 100) / 100;
-
-  // Total Employee deductions
-  const totalDeductions = socialSecurityEmployee + medicareEmployee + fit + sit;
-  const netPay = Math.round((grossPay - totalDeductions) * 100) / 100;
-
-  // 5. Employer FUTA (0.6%) & SUTA (2.7%)
-  const futaEmployer = Math.round(grossPay * 0.006 * 100) / 100;
-  const sutaEmployer = Math.round(grossPay * 0.027 * 100) / 100;
-
+  // Map onto the legacy PayrollItem shape used by the wizard table.
   return {
     employeeId: employee.id,
     hoursWorked,
     overtimeHours,
     grossPay,
-    fit,
-    socialSecurityEmployee,
-    medicareEmployee,
-    sit,
+    fit: paye,
+    socialSecurityEmployee: pensionEmployee,
+    medicareEmployee: 0,
+    sit: 0,
     netPay,
-    socialSecurityEmployer,
-    medicareEmployer,
-    futaEmployer,
-    sutaEmployer,
+    socialSecurityEmployer: pensionEmployer,
+    medicareEmployer: 0,
+    futaEmployer: 0,
+    sutaEmployer: 0,
   };
 }
 

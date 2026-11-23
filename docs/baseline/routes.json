@@ -1,0 +1,2763 @@
+{
+  "generatedAt": "2026-11-22T10:36:30.541Z",
+  "gitCommit": "6cc098a36b8f34fc20fcaa2b0d129e295ca9414c",
+  "gitBranch": "main",
+  "node": "v24.22.1",
+  "totals": {
+    "routeFiles": 27,
+    "routes": 387,
+    "migrations": 41
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/accounts",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/accounts/:id",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/rebuild-balances",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/journals",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/journals",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/journals/:id",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/journals/:id/reverse",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/opening-balances",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/opening-balances/status",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/periods",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/periods",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/periods/:id/checklist",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/periods/:id/checklist/:taskKey/complete",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/periods/:id/close",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/periods/:id/reopen",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/periods/:id/soft-close",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/periods/checklist-policy",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/balance-sheet",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/balance-sheet/csv",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/cash-flow",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/cash-flow/csv",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/general-ledger",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/profit-and-loss",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/profit-and-loss/csv",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/trial-balance",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/trial-balance/csv",
+      "file": "accountingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/health",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/integrations",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/integrations",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/metrics",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/releases",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/subscriptions",
+      "file": "adminRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/actions",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/actions",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/ai/actions/:id",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/anomalies",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/anomalies/detect",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/audit",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/chat",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/config",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/config",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/conversations",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/conversations",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/conversations/:id/messages",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/ai/models",
+      "file": "aiRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/approvals",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/approvals/:id",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/approvals/:id/approve",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/approvals/:id/cancel",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/approvals/:id/reject",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/approvals/policies",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/approvals/policies",
+      "file": "approvalRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/logout",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/password-recovery",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/password-reset",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/register",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/status",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/supabase-session",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/switch-company",
+      "file": "authRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/backup",
+      "file": "backupRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/backups",
+      "file": "backupRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/banking/accounts",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/accounts",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/checks/print",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/deposits",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/expenses",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/imports",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/banking/reconciliations",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/reconciliations/:id/reverse",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/reconciliations/complete",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/reconciliations/preview",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/banking/rules",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/rules",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/banking/rules/:id",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/banking/transactions",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/transactions/:id/categorize",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/banking/transactions/:id/cleared",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/transactions/:id/dismiss-duplicate",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/transactions/:id/void",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/banking/transfers",
+      "file": "bankingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bi/inventory-turnover",
+      "file": "biRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bi/kpi-scorecard",
+      "file": "biRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bi/pos-cashier-performance",
+      "file": "biRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bi/sales-trends",
+      "file": "biRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/communications/consents",
+      "file": "communicationsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/communications/consents",
+      "file": "communicationsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/communications/suppressions",
+      "file": "communicationsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/communications/suppressions",
+      "file": "communicationsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/communications/webhooks/twilio",
+      "file": "communicationsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "file": "companyRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "file": "companyRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/current",
+      "file": "companyRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/current",
+      "file": "companyRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/branches",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/customers/:id/branches",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/customers/:id/branches/:branchId",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/customers/:id/branches/:branchId",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/contacts",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/customers/:id/contacts",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/customers/:id/contacts/:contactId",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/customers/:id/contacts/:contactId",
+      "file": "customerRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery/drivers",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/delivery/drivers",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery/schedules",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/delivery/schedules",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery/vehicles",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/delivery/vehicles",
+      "file": "deliveryRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/:kind/:id/qr",
+      "file": "documentQrRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/:kind/:id/qr/revoke",
+      "file": "documentQrRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/qr-verify/:token",
+      "file": "documentQrRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/test",
+      "file": "documentQrRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/attachments",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/attachments/:id",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/attachments/:id/preview",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/documents",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/generate-invoice",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/preview/:kind/:id",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/render-model/contract/:id",
+      "file": "documentsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/overview",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/budgets",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/budgets",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/fx/rates",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/fx/rates",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/budget-vs-actual",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/saved-reports",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/saved-reports",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/saved-reports/:id",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/saved-reports/:id/run",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tax/mappings",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/tax/mappings",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tax/summary",
+      "file": "financialManagementRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/migrations/slowbooks/batches",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/migrations/slowbooks/batches/:batchId",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/migrations/slowbooks/batches/:batchId/exceptions",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/batches/:batchId/reconcile",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/migrations/slowbooks/batches/:batchId/report",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/batches/:batchId/rollback",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/batches/:batchId/sign-off",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/dry-run",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/exceptions/:exceptionId/resolve",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/migrations/slowbooks/execute",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/migrations/slowbooks/source-reference/:entity/:targetId",
+      "file": "migrationRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payroll/advances",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payroll/advances",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payroll/allowances",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payroll/allowances",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payroll/bank-file",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payroll/deduction-rules",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payroll/deduction-rules",
+      "file": "payrollRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/estimates/:id/create-job",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/valuation",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/contracts",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/contracts/:id",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/printing/contracts/:id",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/acceptances",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/activate",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/activation-requests",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/amendments",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/contracts/:id/amendments",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/amendments/:amendmentId/approve",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/amendments/:amendmentId/reject",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/assessment-changes",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/assessments",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/printing/contracts/:id/assessments/:assessmentNumber",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/printing/contracts/:id/assessments/:assessmentNumber",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/assessments/:assessmentNumber/complete",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/assessments/:assessmentNumber/invoice-link",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/cancel",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/deposit-invoice",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/deposits",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/fund",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/renew",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/resume",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/contracts/:id/suspend",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/contracts/:id/wallet-transactions",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/deliveries",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/exam-batches",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/exam-batches",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/exam-batches/:id/approve-spec",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/exam-papers",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/printing/exam-papers/:id",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/printing/exam-papers/:id",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/exam-papers/:id/cancel",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/exam-papers/:id/deliver",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/exam-papers/:id/events",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/exam-papers/:id/reprint",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/printing/exam-papers/:id/status",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/exam-reconciliation",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/jobs",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/jobs/:id",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/approve-budget",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/cancel",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/finishing",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/invoice",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/materials/consume",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/materials/issue",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/materials/reserve",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/materials/return",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/operations",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/jobs/:id/profitability",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/qc",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/jobs/:id/reprint",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printing/machines",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/printing/machines",
+      "file": "printingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/attachments",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/attachments/:id/download",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/employees",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/employees",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/inventory",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/inventory/:id",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/inventory/:id/adjust",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/bom",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/consumption",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/inventory/:id/damage",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/inventory/:id/deactivate",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/ledger",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/movements",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/supplier-history",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/:id/transactions",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/inventory/reorder-levels",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/inventory/transfer",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payroll/runs",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payroll/runs",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/export",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/financial",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/stock-counts",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/stock-counts/:id/post",
+      "file": "protectedRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bill-payments",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bill-payments",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bill-payments/:id/void",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bills",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills/:id/void",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/goods-receipts",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/goods-receipts",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/purchase-orders",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/purchase-orders",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/purchase-orders/:id/bill",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/purchase-orders/:id/receive",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/ap-aging",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/requisitions",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/requisitions",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/requisitions/:id/approve",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/requisitions/:id/convert-po",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/requisitions/demand",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendor-credits",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/vendor-credits",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/vendor-credits/:id/apply",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/vendors",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/vendors/:id",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors/:id/ap-profile",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/vendors/:id/opening-balance",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors/:id/statement",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/vendors/:id/statement/send",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors/:id/statements",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors/:id/statements/:statementId",
+      "file": "purchasingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/report-schedules",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/report-schedules",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/report-schedules/:id",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/report-schedules/:id",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/report-schedules/:id",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/report-schedules/:id/run",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/report-schedules/run-due",
+      "file": "reportSchedulingRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/dashboard/alerts",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/cogs-reconciliation",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/estimate-vs-actual",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/inventory-valuation",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/printing-job-profitability",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/printing-spoilage",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/wip-aging",
+      "file": "reportsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/communications",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/credit-memos",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/credit-memos",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/credit-memos/:id/apply",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/credit-memos/:id/void",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/customers",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/customers/:id",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/credit-profile",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/statement",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/customers/:id/statement/send",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/statements",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/:id/unapplied-payments",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/estimates",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/estimates",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/estimates/:id/approve",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/estimates/:id/convert",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/estimates/:id/reject",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/fx-revaluation",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/fx-revaluation/preview",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/fx-revaluation/runs",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/invoices",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/invoices",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/invoices/:id",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/invoices/:id/notes",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/invoices/:id/remind",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/invoices/:id/void",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payment-terms",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/payments",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payments",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payments/:id/allocate",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/payments/:id/void",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/recurring-invoices",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring-invoices",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring-invoices/run-due",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/ar-aging",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reseller-permits",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/reseller-permits",
+      "file": "salesRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pos/catalog",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/checkout",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/orders/:id/suspend",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/orders/:id/void",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/preview",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/scan",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pos/shifts",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/shifts",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/shifts/:id/close",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pos/shifts/:id/transactions",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pos/shifts/current",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pos/suspended",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pos/suspended/:id/resume",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/initialize-accounts",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/marketing",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/marketing/campaigns",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/marketing/messages",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/smart-ops/marketing/messages/:id",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/marketing/rules",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/smart-ops/marketing/rules/:id",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/marketing/rules/:id/run",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/marketing/templates",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/overview",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/price-cards",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/price-cards/presets",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/promotions",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/promotions",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/smart-ops/promotions/:id",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/referrals",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/referrals/attributions",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/campaigns",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/campaigns/:id/activate",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/referrals/campaigns/:id/budget",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/smart-ops/referrals/campaigns/:id/config",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/campaigns/:id/finance-approval",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/campaigns/:id/lifecycle",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/campaigns/:id/management-approval",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/smart-ops/referrals/cases",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/cases",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/cases/:id/decision",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/cases/:id/review",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/codes",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/codes/:id/click",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/events",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/events/:id/credit",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/events/:id/payout",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/events/:id/qualify",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/events/:id/reverse",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/smart-ops/referrals/programs",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/smart-ops/referrals/programs/:id",
+      "file": "smartOpsRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/2fa/backup-codes",
+      "file": "twoFactorRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/2fa/disable",
+      "file": "twoFactorRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/2fa/enroll",
+      "file": "twoFactorRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/2fa/status",
+      "file": "twoFactorRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/2fa/verify",
+      "file": "twoFactorRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/audit/logs",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/invitations",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/invitations/accept",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/permissions/matrix",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/users",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/users/:userId/deactivate",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/users/:userId/membership",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/users/:userId/membership",
+      "file": "userRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/wallets",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/wallets/:id",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/wallets/:id/allocations",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/wallets/:id/deposits",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/wallets/:id/payments",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/wallets/:id/reconciliation",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/wallets/:id/refunds",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/wallets/:id/status",
+      "file": "walletRoutes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/wallets/:id/transactions",
+      "file": "walletRoutes.ts"
+    }
+  ],
+  "fileSummaries": [
+    {
+      "file": "accountingRoutes.ts",
+      "routeCount": 27,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 27,
+      "permissions": [
+        "accounts:read",
+        "accounts:rebuild",
+        "accounts:write",
+        "journals:read",
+        "journals:write",
+        "periods:close",
+        "periods:read",
+        "periods:reopen",
+        "reports:export",
+        "reports:read"
+      ]
+    },
+    {
+      "file": "adminRoutes.ts",
+      "routeCount": 6,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "aiRoutes.ts",
+      "routeCount": 13,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "approvalRoutes.ts",
+      "routeCount": 7,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 7,
+      "permissions": [
+        "approvals:configure",
+        "approvals:decide",
+        "approvals:read"
+      ]
+    },
+    {
+      "file": "authRoutes.ts",
+      "routeCount": 8,
+      "requireAuthRefs": 4,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "backupRoutes.ts",
+      "routeCount": 2,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 2,
+      "permissions": [
+        "reports:read"
+      ]
+    },
+    {
+      "file": "bankingRoutes.ts",
+      "routeCount": 19,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 19,
+      "permissions": [
+        "banking:read",
+        "banking:reconcile",
+        "banking:write"
+      ]
+    },
+    {
+      "file": "biRoutes.ts",
+      "routeCount": 4,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "communicationsRoutes.ts",
+      "routeCount": 5,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "companyRoutes.ts",
+      "routeCount": 4,
+      "requireAuthRefs": 5,
+      "requirePermissionRefs": 2,
+      "permissions": [
+        "companies:create",
+        "companies:settings:write"
+      ]
+    },
+    {
+      "file": "customerRoutes.ts",
+      "routeCount": 8,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "deliveryRoutes.ts",
+      "routeCount": 6,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "documentQrRoutes.ts",
+      "routeCount": 4,
+      "requireAuthRefs": 3,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "documentsRoutes.ts",
+      "routeCount": 7,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 7,
+      "permissions": [
+        "attachments:read",
+        "attachments:write",
+        "invoices:write"
+      ]
+    },
+    {
+      "file": "financialManagementRoutes.ts",
+      "routeCount": 13,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 13,
+      "permissions": [
+        "accounts:read",
+        "accounts:write",
+        "budgets:read",
+        "budgets:write",
+        "reports:read",
+        "tax:read",
+        "tax:write"
+      ]
+    },
+    {
+      "file": "migrationRoutes.ts",
+      "routeCount": 11,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 11,
+      "permissions": [
+        "accounts:rebuild",
+        "audit:read",
+        "companies:settings:write"
+      ]
+    },
+    {
+      "file": "payrollRoutes.ts",
+      "routeCount": 7,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "printingRoutes.ts",
+      "routeCount": 57,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 56,
+      "permissions": [
+        "approvals:decide",
+        "exams:approve",
+        "exams:cancel",
+        "exams:create",
+        "exams:deliver",
+        "exams:edit",
+        "exams:produce",
+        "exams:view",
+        "invoices:write",
+        "printing:contracts:manage",
+        "printing:read",
+        "printing:write",
+        "reports:read"
+      ]
+    },
+    {
+      "file": "protectedRoutes.ts",
+      "routeCount": 25,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 25,
+      "permissions": [
+        "attachments:read",
+        "attachments:write",
+        "employees:read",
+        "employees:write",
+        "inventory:count",
+        "inventory:damage",
+        "inventory:deactivate",
+        "inventory:read",
+        "inventory:transfer",
+        "inventory:write",
+        "payroll:read",
+        "payroll:write",
+        "reports:export",
+        "reports:read"
+      ]
+    },
+    {
+      "file": "purchasingRoutes.ts",
+      "routeCount": 30,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 30,
+      "permissions": [
+        "bills:read",
+        "bills:write",
+        "reports:read",
+        "statements:send",
+        "vendors:read",
+        "vendors:write"
+      ]
+    },
+    {
+      "file": "reportSchedulingRoutes.ts",
+      "routeCount": 7,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 7,
+      "permissions": [
+        "reports:read",
+        "reports:schedule"
+      ]
+    },
+    {
+      "file": "reportsRoutes.ts",
+      "routeCount": 7,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 7,
+      "permissions": [
+        "reports:read"
+      ]
+    },
+    {
+      "file": "salesRoutes.ts",
+      "routeCount": 38,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 38,
+      "permissions": [
+        "customers:read",
+        "customers:write",
+        "estimates:read",
+        "estimates:write",
+        "fx:revalue",
+        "invoices:read",
+        "invoices:write",
+        "payments:allocate",
+        "reports:read",
+        "statements:send"
+      ]
+    },
+    {
+      "file": "smartOpsRoutes.ts",
+      "routeCount": 50,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 50,
+      "permissions": [
+        "pos:read",
+        "pos:write",
+        "referral:activate_campaigns",
+        "referral:approve_rewards",
+        "referral:configure_financials",
+        "referral:credit_rewards",
+        "referral:decide_fraud",
+        "referral:investigate_fraud",
+        "referral:read",
+        "referral:reverse_rewards",
+        "referral:review_disputes",
+        "smart_ops:read",
+        "smart_ops:write"
+      ]
+    },
+    {
+      "file": "twoFactorRoutes.ts",
+      "routeCount": 5,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 0,
+      "permissions": []
+    },
+    {
+      "file": "userRoutes.ts",
+      "routeCount": 8,
+      "requireAuthRefs": 8,
+      "requirePermissionRefs": 6,
+      "permissions": [
+        "audit:read",
+        "users:invite",
+        "users:list",
+        "users:manage"
+      ]
+    },
+    {
+      "file": "walletRoutes.ts",
+      "routeCount": 9,
+      "requireAuthRefs": 2,
+      "requirePermissionRefs": 9,
+      "permissions": [
+        "wallet:allocate",
+        "wallet:apply",
+        "wallet:configure",
+        "wallet:deposit",
+        "wallet:read",
+        "wallet:reconcile",
+        "wallet:refund",
+        "wallet:transactions:read"
+      ]
+    }
+  ],
+  "migrations": [
+    {
+      "version": "0001",
+      "name": "core_identity_and_companies",
+      "hasDown": true,
+      "tables": [
+        "companies",
+        "users",
+        "company_memberships",
+        "api_tokens",
+        "login_attempts",
+        "user_preferences",
+        "company_settings",
+        "request_keys",
+        "payment_terms",
+        "txn_classes",
+        "backups",
+        "accountants_copies",
+        "qbo_mappings"
+      ],
+      "enablesRls": 10
+    },
+    {
+      "version": "0002",
+      "name": "accounting_coa_and_general_ledger",
+      "hasDown": true,
+      "tables": [
+        "accounts",
+        "fiscal_periods",
+        "journal_transactions",
+        "journal_lines"
+      ],
+      "enablesRls": 4
+    },
+    {
+      "version": "0003",
+      "name": "contacts_sales_and_receivables",
+      "hasDown": true,
+      "tables": [
+        "customers",
+        "reseller_permits",
+        "invoice_messages",
+        "estimates",
+        "estimate_lines",
+        "invoices",
+        "invoice_lines",
+        "payments",
+        "payment_allocations",
+        "credit_memos",
+        "credit_memo_lines",
+        "credit_applications",
+        "invoice_reminder_rules",
+        "invoice_reminders",
+        "customer_statements",
+        "recurring_invoices",
+        "recurring_invoice_lines",
+        "memorized_transactions",
+        "memorized_transaction_lines"
+      ],
+      "enablesRls": 19
+    },
+    {
+      "version": "0004",
+      "name": "purchases_payables_and_banking",
+      "hasDown": true,
+      "tables": [
+        "vendors",
+        "purchase_orders",
+        "purchase_order_lines",
+        "bills",
+        "bill_lines",
+        "bill_payments",
+        "bill_payment_allocations",
+        "vendor_credits",
+        "vendor_credit_lines",
+        "vendor_credit_applications",
+        "bank_accounts",
+        "reconciliations",
+        "bank_transactions",
+        "bank_check_details",
+        "bank_rules",
+        "deposit_other_lines",
+        "duplicate_dismissals"
+      ],
+      "enablesRls": 17
+    },
+    {
+      "version": "0005",
+      "name": "inventory_materials_and_boms",
+      "hasDown": true,
+      "tables": [
+        "paper_specifications",
+        "inventory_items",
+        "material_specifications",
+        "item_variants",
+        "item_bom_components",
+        "inventory_adjustments",
+        "inventory_movements"
+      ],
+      "enablesRls": 7
+    },
+    {
+      "version": "0006",
+      "name": "payroll_assets_budgets_docs_audit",
+      "hasDown": true,
+      "tables": [
+        "employees",
+        "employee_bank_accounts",
+        "benefit_codes",
+        "employee_benefits",
+        "pay_runs",
+        "pay_stubs",
+        "pay_stub_benefits",
+        "pto_policies",
+        "pto_accruals",
+        "onboarding_tasks",
+        "time_entries",
+        "fixed_asset_types",
+        "fixed_assets",
+        "budgets",
+        "stored_files",
+        "attachments",
+        "ocr_templates",
+        "email_templates",
+        "email_log",
+        "audit_log",
+        "document_audits",
+        "saved_reports",
+        "tax_category_mappings"
+      ],
+      "enablesRls": 23
+    },
+    {
+      "version": "0007",
+      "name": "printing_production_exams_contracts",
+      "hasDown": true,
+      "tables": [
+        "printing_machines",
+        "printing_estimates",
+        "printing_estimate_lines",
+        "printing_contracts",
+        "contract_assessment_milestones",
+        "exam_assessment_batches",
+        "exam_papers",
+        "printing_jobs",
+        "production_operations",
+        "finishing_operations",
+        "quality_control_inspections",
+        "delivery_notes",
+        "delivery_note_lines"
+      ],
+      "enablesRls": 13
+    },
+    {
+      "version": "0008",
+      "name": "auth_sessions_invitations_and_supabase",
+      "hasDown": true,
+      "tables": [
+        "user_invitations",
+        "auth_sessions",
+        "password_recovery_tokens"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0009",
+      "name": "accounting_foundation_enhancements",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0010",
+      "name": "commercial_fx_and_banking_enhancements",
+      "hasDown": true,
+      "tables": [
+        "exchange_rates"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0011",
+      "name": "phase9_production_workflow_integration",
+      "hasDown": true,
+      "tables": [
+        "purchase_requisitions",
+        "purchase_requisition_lines",
+        "goods_receipts",
+        "goods_receipt_lines",
+        "job_material_requirements"
+      ],
+      "enablesRls": 5
+    },
+    {
+      "version": "0012",
+      "name": "slowbooks_migration_and_reconciliation",
+      "hasDown": true,
+      "tables": [
+        "migration_batches",
+        "migration_company_runs",
+        "migration_checkpoints",
+        "migration_id_map",
+        "migration_exceptions",
+        "migration_reconciliation_snapshots"
+      ],
+      "enablesRls": 5
+    },
+    {
+      "version": "0013",
+      "name": "finance_controls_and_reporting",
+      "hasDown": true,
+      "tables": [
+        "approval_policies",
+        "approval_requests",
+        "fiscal_period_close_tasks",
+        "report_schedules",
+        "report_schedule_runs"
+      ],
+      "enablesRls": 5
+    },
+    {
+      "version": "0014",
+      "name": "dedicated_approval_and_email_status",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0015",
+      "name": "tenant_scheduler_and_email_delivery",
+      "hasDown": true,
+      "tables": [
+        "scheduler_leases"
+      ],
+      "enablesRls": 0
+    },
+    {
+      "version": "0016",
+      "name": "accumulated_depreciation_contra",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0017",
+      "name": "inventory_ops_and_read_models",
+      "hasDown": true,
+      "tables": [
+        "stock_counts",
+        "stock_count_lines",
+        "stock_transfers",
+        "stock_transfer_lines",
+        "stock_damages"
+      ],
+      "enablesRls": 5
+    },
+    {
+      "version": "0018",
+      "name": "stock_balances_by_location",
+      "hasDown": true,
+      "tables": [
+        "stock_balances"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0019",
+      "name": "smart_operations_and_pos",
+      "hasDown": true,
+      "tables": [
+        "promotions",
+        "referral_programs",
+        "referral_campaigns",
+        "referral_codes",
+        "pos_orders",
+        "pos_order_tenders",
+        "promotion_redemptions",
+        "referral_events",
+        "marketing_templates",
+        "marketing_automation_rules",
+        "marketing_campaigns",
+        "marketing_messages",
+        "price_card_presets"
+      ],
+      "enablesRls": 13
+    },
+    {
+      "version": "0020",
+      "name": "customer_wallet",
+      "hasDown": true,
+      "tables": [
+        "printing_number_counters",
+        "customer_wallets",
+        "customer_wallet_allocations",
+        "customer_wallet_transactions"
+      ],
+      "enablesRls": 4
+    },
+    {
+      "version": "0021",
+      "name": "printing_contract_lifecycle",
+      "hasDown": true,
+      "tables": [
+        "contract_acceptances"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0022",
+      "name": "printing_contract_amendments",
+      "hasDown": true,
+      "tables": [
+        "contract_amendments"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0023",
+      "name": "printing_contract_gap_closure",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0024",
+      "name": "examination_production_integrity",
+      "hasDown": true,
+      "tables": [
+        "exam_paper_events",
+        "exam_paper_invoice_links"
+      ],
+      "enablesRls": 2
+    },
+    {
+      "version": "0025",
+      "name": "customer_master_governance",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0026",
+      "name": "examination_lifecycle_completion",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0027",
+      "name": "customer_center_upgrade",
+      "hasDown": true,
+      "tables": [
+        "fx_revaluation_runs",
+        "fx_revaluation_lines"
+      ],
+      "enablesRls": 2
+    },
+    {
+      "version": "0028",
+      "name": "vendor_supplier_center",
+      "hasDown": true,
+      "tables": [
+        "vendor_statements"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0029",
+      "name": "examination_d3_teacher_quantities",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0030",
+      "name": "referral_config_and_attribution",
+      "hasDown": true,
+      "tables": [
+        "referral_attributions",
+        "referral_budget_reservations",
+        "referral_cases"
+      ],
+      "enablesRls": 3
+    },
+    {
+      "version": "0031",
+      "name": "wallet_referral_credit_and_recovery",
+      "hasDown": true,
+      "tables": [],
+      "enablesRls": 0
+    },
+    {
+      "version": "0032",
+      "name": "referral_governance",
+      "hasDown": true,
+      "tables": [
+        "discount_budgets",
+        "discount_usage",
+        "referral_reward_approvals",
+        "referral_compliance_logs"
+      ],
+      "enablesRls": 4
+    },
+    {
+      "version": "0033",
+      "name": "pos_governance",
+      "hasDown": true,
+      "tables": [
+        "pos_shifts",
+        "pos_suspended_sales",
+        "pos_transactions",
+        "pos_shift_audit"
+      ],
+      "enablesRls": 4
+    },
+    {
+      "version": "0034",
+      "name": "ai_assistant",
+      "hasDown": true,
+      "tables": [
+        "ai_config",
+        "ai_conversations",
+        "ai_messages",
+        "ai_anomaly_alerts",
+        "ai_proposed_actions",
+        "ai_audit_logs"
+      ],
+      "enablesRls": 6
+    },
+    {
+      "version": "0035",
+      "name": "security_2fa",
+      "hasDown": true,
+      "tables": [
+        "user_two_factor_secrets",
+        "user_backup_codes"
+      ],
+      "enablesRls": 0
+    },
+    {
+      "version": "0036",
+      "name": "customers_contacts_branches",
+      "hasDown": true,
+      "tables": [
+        "customer_contacts",
+        "customer_branches"
+      ],
+      "enablesRls": 2
+    },
+    {
+      "version": "0037",
+      "name": "payroll_advances_deductions",
+      "hasDown": true,
+      "tables": [
+        "salary_advances",
+        "payroll_deduction_rules",
+        "employee_allowances"
+      ],
+      "enablesRls": 3
+    },
+    {
+      "version": "0038",
+      "name": "delivery_vehicles_drivers",
+      "hasDown": true,
+      "tables": [
+        "vehicles",
+        "drivers",
+        "delivery_schedules"
+      ],
+      "enablesRls": 3
+    },
+    {
+      "version": "0040",
+      "name": "documents_qr",
+      "hasDown": true,
+      "tables": [
+        "document_qr_codes"
+      ],
+      "enablesRls": 1
+    },
+    {
+      "version": "0041",
+      "name": "communications_consent",
+      "hasDown": true,
+      "tables": [
+        "communication_consents",
+        "communication_preferences",
+        "communication_suppressions"
+      ],
+      "enablesRls": 3
+    },
+    {
+      "version": "0043",
+      "name": "system_admin",
+      "hasDown": true,
+      "tables": [
+        "integrations",
+        "subscription_plans",
+        "subscriptions",
+        "release_versions"
+      ],
+      "enablesRls": 2
+    }
+  ]
+}

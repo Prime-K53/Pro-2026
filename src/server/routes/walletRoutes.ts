@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { parseDecimal4, toMoneyNumber } from '../lib/decimal.ts';
 import {
@@ -45,7 +46,7 @@ export function createWalletRouter(_db: ServerDatabase, _rateLimits?: unknown, _
   const db = _db;
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   async function assertWalletBelongsToCustomer(
     companyId: number,

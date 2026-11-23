@@ -37,6 +37,50 @@ function notifySessionExpired(): void {
   window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
 }
 
+// ─── CSRF ───────────────────────────────────────────────────────────────────
+// The server issues a per-session CSRF token on login (and via
+// /api/auth/csrf-token). Mutating requests must echo it in `X-CSRF-Token`.
+
+let csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token || null;
+}
+
+export function getCsrfToken(): string | null {
+  return csrfToken;
+}
+
+function csrfHeaderFor(method?: string): Record<string, string> {
+  const m = (method || 'GET').toUpperCase();
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return {};
+  return csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+}
+
+/** Fetch and cache a fresh CSRF token for the current session. */
+export async function refreshCsrfToken(): Promise<string | null> {
+  try {
+    const res = await fetch('/api/auth/csrf-token', { credentials: 'include' });
+    if (!res.ok) return null;
+    const data: any = await res.json().catch(() => ({}));
+    const token = data?.csrfToken ?? null;
+    if (token) csrfToken = token;
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+function buildHeaders(init: RequestInit, jsonContentType: boolean): Headers {
+  const headers = new Headers(init.headers || {});
+  if (jsonContentType && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const csrf = csrfHeaderFor(init.method);
+  if (csrf['X-CSRF-Token']) headers.set('X-CSRF-Token', csrf['X-CSRF-Token']);
+  return headers;
+}
+
 /**
  * Perform a JSON request against the API.
  *
@@ -48,11 +92,8 @@ function notifySessionExpired(): void {
 export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
     ...init,
+    headers: buildHeaders(init, true),
   });
 
   let body: any = {};
@@ -88,11 +129,8 @@ export async function requestJsonRaw<T = any>(
   try {
     res = await fetch(url, {
       credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init.headers || {}),
-      },
       ...init,
+      headers: buildHeaders(init, true),
     });
   } catch {
     return { ok: false, status: 0, data: {} as T };
@@ -113,7 +151,11 @@ export async function requestJsonRaw<T = any>(
  * Throws `ApiError` on failure so callers get the same error semantics.
  */
 export async function requestBlob(url: string, init: RequestInit = {}): Promise<Blob> {
-  const res = await fetch(url, { credentials: 'include', ...init });
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...init,
+    headers: buildHeaders(init, false),
+  });
   if (!res.ok) {
     if (res.status === 401) notifySessionExpired();
     let message = `Request failed (${res.status})`;

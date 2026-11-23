@@ -405,9 +405,21 @@ export function createAuthMiddleware(db: ServerDatabase) {
     };
   };
 
+  /**
+   * Read/write permission pair: GET/HEAD/OPTIONS require `readPerm`, mutating
+   * methods require `writePerm`. Keeps routers to a single guard line.
+   */
+  const requireReadOrWrite = (readPerm: Permission, writePerm: Permission) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+      const perm = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? readPerm : writePerm;
+      return requirePermission(perm)(req, res, next);
+    };
+  };
+
   return {
     requireAuth,
     rejectCrossCompanyParams,
     requirePermission,
+    requireReadOrWrite,
   };
 }

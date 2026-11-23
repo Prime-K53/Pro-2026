@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { parseDecimal4 } from '../lib/decimal.ts';
 import { consumeApprovalRequest, evaluateApprovalGate, sumLineAmounts4 } from '../services/approvalService.ts';
@@ -61,7 +62,7 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Vendors
   router.get('/vendors', requirePermission('vendors:read'), async (req: Request, res: Response) => {

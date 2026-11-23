@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { writeAuditLog } from '../audit.ts';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { hasPermission } from '../permissions.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { computeTax4, parseDecimal6 } from '../services/commercialHelpers.ts';
@@ -74,7 +75,7 @@ export function createSalesRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // Payment Terms
   router.get('/payment-terms', requirePermission('customers:read'), async (req: Request, res: Response) => {

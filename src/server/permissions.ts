@@ -107,7 +107,32 @@ export type Permission =
   | 'smart_ops:read'
   | 'smart_ops:write'
   | 'pos:read'
-  | 'pos:write';
+  | 'pos:write'
+  | 'pos:manage_shifts'
+  | 'referral:read'
+  | 'referral:manage_programs'
+  | 'referral:configure_financials'
+  | 'referral:capture_verbal'
+  | 'referral:change_attribution'
+  | 'referral:activate_campaigns'
+  | 'referral:approve_rewards'
+  | 'referral:credit_rewards'
+  | 'referral:reverse_rewards'
+  | 'referral:investigate_fraud'
+  | 'referral:decide_fraud'
+  | 'referral:review_disputes'
+  | 'referral:view_reports'
+  // V2 gap-closure modules
+  | 'ai:read'
+  | 'ai:write'
+  | 'delivery:read'
+  | 'delivery:write'
+  | 'bi:read'
+  | 'admin:read'
+  | 'admin:write'
+  | 'communications:read'
+  | 'communications:write'
+  | 'documents:qr:manage';
 
 export interface RoleDefinition {
   role: CompanyRole;
@@ -214,6 +239,30 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'smart_ops:write',
       'pos:read',
       'pos:write',
+      'pos:manage_shifts',
+      'referral:read',
+      'referral:manage_programs',
+      'referral:configure_financials',
+      'referral:capture_verbal',
+      'referral:change_attribution',
+      'referral:activate_campaigns',
+      'referral:approve_rewards',
+      'referral:credit_rewards',
+      'referral:reverse_rewards',
+      'referral:investigate_fraud',
+      'referral:decide_fraud',
+      'referral:review_disputes',
+      'referral:view_reports',
+      'ai:read',
+      'ai:write',
+      'delivery:read',
+      'delivery:write',
+      'bi:read',
+      'admin:read',
+      'admin:write',
+      'communications:read',
+      'communications:write',
+      'documents:qr:manage',
     ],
   },
   Bookkeeper: {
@@ -276,6 +325,12 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'smart_ops:write',
       'pos:read',
       'pos:write',
+      'referral:read',
+      'referral:capture_verbal',
+      'bi:read',
+      'communications:read',
+      'communications:write',
+      'delivery:read',
     ],
   },
   Accountant: {
@@ -338,6 +393,12 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'attachments:read',
       'smart_ops:read',
       'pos:read',
+      'referral:read',
+      'referral:configure_financials',
+      'referral:approve_rewards',
+      'referral:review_disputes',
+      'referral:view_reports',
+      'bi:read',
     ],
   },
   ProductionManager: {
@@ -381,6 +442,12 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'smart_ops:write',
       'pos:read',
       'pos:write',
+      'pos:manage_shifts',
+      'referral:read',
+      'delivery:read',
+      'delivery:write',
+      'bi:read',
+      'communications:read',
     ],
   },
   'Read-Only': {
@@ -409,6 +476,9 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'attachments:read',
       'smart_ops:read',
       'pos:read',
+      'referral:read',
+      'bi:read',
+      'delivery:read',
     ],
   },
 };

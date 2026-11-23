@@ -1361,6 +1361,153 @@ export async function refundWallet(
   return { walletTransaction: record, bankTransactionId: bankTxnId, idempotentReplay: false };
 }
 
+// ===========================================================================
+// Referral reward credit / reversal (Phase 1 — existing wallet only)
+//
+// These operations reuse the SAME append-only wallet ledger, balance
+// reconciliation trigger, and idempotency mechanism as every other wallet
+// movement. No second wallet or parallel balance is created. Referral credits
+// never involve a bank leg; the accounting counterpart is posted by the
+// referral reward service (Dr expense / Cr wallet liability).
+// ===========================================================================
+
+export async function creditWalletForReferralReward(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    customerId: number;
+    amount: string | number | bigint;
+    referenceType: string;
+    referenceId: number;
+    journalTxnId: number | null;
+    idempotencyKey: string;
+    description: string;
+    notes?: string | null;
+  }
+): Promise<{ walletTransaction: WalletTransactionRecord; walletId: number; idempotentReplay: boolean }> {
+  const amount4 = parseDecimal4(input.amount as any);
+  if (amount4 <= 0n) {
+    throw new AccountingError(400, 'Referral reward amount must be greater than zero', 'INVALID_AMOUNT');
+  }
+  const key = input.idempotencyKey.trim().slice(0, 128);
+
+  const existing = await tx.query<any>(
+    `SELECT * FROM customer_wallet_transactions WHERE company_id = $1 AND idempotency_key = $2 LIMIT 1`,
+    [companyId, key]
+  );
+  if (existing.rows.length > 0) {
+    return { walletTransaction: mapWalletTransaction(existing.rows[0]), walletId: Number(existing.rows[0].wallet_id), idempotentReplay: true };
+  }
+
+  const { walletId } = await getOrCreateWallet(tx, companyId, input.customerId, null);
+  const wallet = await lockWallet(tx, companyId, walletId);
+  if (wallet.status !== 'active') {
+    throw new AccountingError(409, 'Customer wallet is not active', 'WALLET_NOT_ACTIVE');
+  }
+
+  const walletNumber = await nextWalletNumber(tx, companyId);
+  const nextBalance = wallet.balance + amount4;
+
+  const record = await insertWalletTransaction(tx, companyId, actor, {
+    walletId,
+    customerId: input.customerId,
+    walletNumber,
+    txnType: 'referral_reward',
+    direction: 'credit',
+    amount: amount4,
+    balanceAfter: nextBalance,
+    referenceType: input.referenceType,
+    referenceId: input.referenceId,
+    journalTxnId: input.journalTxnId,
+    idempotencyKey: key,
+    description: input.description,
+    notes: input.notes ?? null,
+  });
+
+  await updateWalletBalance(tx, companyId, walletId, nextBalance);
+  return { walletTransaction: record, walletId, idempotentReplay: false };
+}
+
+export async function reverseWalletForReferralReward(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    customerId: number;
+    amount: string | number | bigint;
+    referenceType: string;
+    referenceId: number;
+    originalWalletTxnId: number | null;
+    journalTxnId: number | null;
+    idempotencyKey: string;
+    description: string;
+    notes?: string | null;
+    allowNegative: boolean;
+  }
+): Promise<{ walletTransaction: WalletTransactionRecord; walletId: number; negativeBalance4: bigint; idempotentReplay: boolean }> {
+  const amount4 = parseDecimal4(input.amount as any);
+  if (amount4 <= 0n) {
+    throw new AccountingError(400, 'Referral reversal amount must be greater than zero', 'INVALID_AMOUNT');
+  }
+  const key = input.idempotencyKey.trim().slice(0, 128);
+
+  const existing = await tx.query<any>(
+    `SELECT * FROM customer_wallet_transactions WHERE company_id = $1 AND idempotency_key = $2 LIMIT 1`,
+    [companyId, key]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    const bal = parseDecimal4(String(row.balance_after));
+    return {
+      walletTransaction: mapWalletTransaction(row),
+      walletId: Number(row.wallet_id),
+      negativeBalance4: bal < 0n ? -bal : 0n,
+      idempotentReplay: true,
+    };
+  }
+
+  const { walletId } = await getOrCreateWallet(tx, companyId, input.customerId, null);
+  const wallet = await lockWallet(tx, companyId, walletId);
+  const nextBalance = wallet.balance - amount4;
+
+  // D-03-A: negative balances are only permitted for an approved referral
+  // reversal, and only up to the exact unrecovered amount (bounded by amount4).
+  if (nextBalance < 0n && !input.allowNegative) {
+    throw new AccountingError(
+      409,
+      'Insufficient wallet balance for this operation',
+      'WALLET_INSUFFICIENT_FUNDS'
+    );
+  }
+
+  const walletNumber = await nextWalletNumber(tx, companyId);
+  const record = await insertWalletTransaction(tx, companyId, actor, {
+    walletId,
+    customerId: input.customerId,
+    walletNumber,
+    txnType: 'referral_reversal',
+    direction: 'debit',
+    amount: amount4,
+    balanceAfter: nextBalance,
+    referenceType: input.referenceType,
+    referenceId: input.referenceId,
+    reversesTxnId: input.originalWalletTxnId,
+    journalTxnId: input.journalTxnId,
+    idempotencyKey: key,
+    description: input.description,
+    notes: input.notes ?? null,
+  });
+
+  await updateWalletBalance(tx, companyId, walletId, nextBalance);
+  return {
+    walletTransaction: record,
+    walletId,
+    negativeBalance4: nextBalance < 0n ? -nextBalance : 0n,
+    idempotentReplay: false,
+  };
+}
+
 export async function getWalletStatement(
   tx: Transaction,
   companyId: number,

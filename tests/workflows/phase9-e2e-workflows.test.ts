@@ -522,7 +522,7 @@ async function main() {
 
       // Valuation report check (subledger & GL 1200 reconcile within 0.01 rounding)
       const valRes = await adminClient.request('GET', '/api/inventory/valuation');
-      assert.equal(valRes.status, 200);
+      assert.equal(valRes.status, 200, valRes.text);
       assert.ok(valRes.json.valuation.wip1250Balance > 0, 'WIP 1250 balance must reflect uninvoiced active job');
 
       // Cancel job2Res clean test artifact (budget wasn't approved, draft job)

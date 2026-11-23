@@ -414,7 +414,7 @@ async function main() {
       const ctrInv1 = await adminClient.request('POST', '/api/documents/generate-invoice', {
         body: retainerBody,
       });
-      assert.equal(ctrInv1.status, 201);
+      assert.equal(ctrInv1.status, 201, ctrInv1.text);
       assert.equal(ctrInv1.json.idempotentReplay, false);
       assert.ok(Number(ctrInv1.json.invoice.journalTxnId) > 0);
       await assertJournalBalanced(Number(ctrInv1.json.invoice.journalTxnId));
@@ -446,7 +446,7 @@ async function main() {
           lines: [{ description: 'Term 1 Mock Exams Milestone', quantity: 1, rate: 20000, unitCost: 7200 }],
         },
       });
-      assert.equal(msInv.status, 201);
+      assert.equal(msInv.status, 201, msInv.text);
       await assertJournalBalanced(Number(msInv.json.invoice.journalTxnId));
 
       const ctrPrevAfter = await adminClient.request('GET', `/api/documents/preview/contract/${contractId}`);
@@ -469,7 +469,7 @@ async function main() {
           lines: [{ description: 'Grade 12A Term 2 Finals (150 learners)', quantity: 150, rate: 25, unitCost: 7.5 }],
         },
       });
-      assert.equal(exmInv.status, 201);
+      assert.equal(exmInv.status, 201, exmInv.text);
       await assertJournalBalanced(Number(exmInv.json.invoice.journalTxnId));
 
       const exmPrevAfter = await adminClient.request('GET', `/api/documents/preview/exam_batch/${examBatchId}`);
@@ -490,7 +490,7 @@ async function main() {
           lines: [{ description: 'QP-DOC-900 Staff Handbook Photocopy', quantity: 1, rate: 650, unitCost: 165 }],
         },
       });
-      assert.equal(jobInv.status, 201);
+      assert.equal(jobInv.status, 201, jobInv.text);
       await assertJournalBalanced(Number(jobInv.json.invoice.journalTxnId));
 
       const jobPrevAfter = await adminClient.request('GET', `/api/documents/preview/printing_job/${printingJobId}`);

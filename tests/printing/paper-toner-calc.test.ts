@@ -778,7 +778,8 @@ async function main() {
     assert.equal(flatJob.paper.quantities.totalSheets, 30);
     assert.equal(flatJob.commercial.materialPaperCost, 2.7); // 30 * 0.09
     assert.equal(flatJob.commercial.materialTonerCost, 0.48); // 50 * 0.032 * (150/500) = 1.6g * 0.3 = 0.48
-    assert.equal(flatJob.commercial.totalProductionCost, 33.18); // 2.70 + 0.48 + 5 + 25
+    assert.equal(flatJob.commercial.totalProductionCost, 8.18); // 2.70 + 0.48 + 5 (typing is revenue, not cost)
+    assert.equal(flatJob.commercial.typingRevenue, 25);
 
     const perPageJob = calculateTypeAndPrintingWorkflow({
       paperStock: FIXTURE_A4_BOND,
@@ -958,7 +959,7 @@ async function main() {
 
         const rawToner = await tx.query<{ id: number }>(
           `INSERT INTO inventory_items (company_id, sku, name, item_type, unit_cost, avg_cost, sales_price, on_hand, purchase_unit, usage_unit, conversion_factor, asset_account_id, cogs_account_id, income_account_id)
-           VALUES ($1, 'RM-TONER-K', 'Black Press Toner', 'raw_material', 150.000000, 150.000000, 0.0000, 4.000000, 'Cartridge', 'Impression', 15000.000000, $2, $3, $4) RETURNING id`,
+           VALUES ($1, 'RM-TONER-K-TEST17', 'Black Press Toner', 'raw_material', 150.000000, 150.000000, 0.0000, 4.000000, 'Cartridge', 'Impression', 15000.000000, $2, $3, $4) RETURNING id`,
           [companyId, invId, cogsId, revId]
         );
         const rawTonerId = Number(rawToner.rows[0].id);

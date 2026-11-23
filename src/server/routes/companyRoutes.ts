@@ -1,8 +1,85 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase, createCompanyInTx } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { writeAuditLog } from '../audit.ts';
 import { getRolePermissions } from '../permissions.ts';
+
+/**
+ * Print-desk pricing defaults. These live in `company_settings` (company-scoped
+ * key/value) rather than as new columns because they are pricing policy, not
+ * legal-entity facts: each company can change them without a schema change, the
+ * values are validated here, and every desk form reads the same defaults instead
+ * of hard-coding a price per component.
+ */
+const PRINTING_PRICING_KEYS = {
+  extraTypingFinishingPerPage: 'printing.extra_typing_finishing_per_page',
+  manualSellingPricePerSheet: 'printing.manual_selling_price_per_sheet',
+} as const;
+
+const PRINTING_PRICING_DEFAULTS = {
+  extraTypingFinishingPerPage: 0,
+  manualSellingPricePerSheet: 0,
+};
+
+type PrintingPricingSettings = typeof PRINTING_PRICING_DEFAULTS;
+
+async function readPrintingPricingSettings(
+  tx: { query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }> },
+  companyId: number
+): Promise<PrintingPricingSettings> {
+  const r = await tx.query<{ setting_key: string; setting_value: string | null }>(
+    `SELECT setting_key, setting_value
+       FROM company_settings
+      WHERE company_id = $1 AND setting_key = ANY($2::TEXT[])`,
+    [companyId, Object.values(PRINTING_PRICING_KEYS)]
+  );
+  const byKey = new Map(r.rows.map(row => [row.setting_key, row.setting_value]));
+  const num = (key: string, fallback: number) => {
+    const raw = byKey.get(key);
+    const parsed = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  return {
+    extraTypingFinishingPerPage: num(
+      PRINTING_PRICING_KEYS.extraTypingFinishingPerPage,
+      PRINTING_PRICING_DEFAULTS.extraTypingFinishingPerPage
+    ),
+    manualSellingPricePerSheet: num(
+      PRINTING_PRICING_KEYS.manualSellingPricePerSheet,
+      PRINTING_PRICING_DEFAULTS.manualSellingPricePerSheet
+    ),
+  };
+}
+
+async function writePrintingPricingSettings(
+  tx: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  companyId: number,
+  values: Partial<PrintingPricingSettings>
+): Promise<void> {
+  const entries: Array<[string, number]> = [];
+  if (values.extraTypingFinishingPerPage !== undefined) {
+    entries.push([
+      PRINTING_PRICING_KEYS.extraTypingFinishingPerPage,
+      values.extraTypingFinishingPerPage,
+    ]);
+  }
+  if (values.manualSellingPricePerSheet !== undefined) {
+    entries.push([
+      PRINTING_PRICING_KEYS.manualSellingPricePerSheet,
+      values.manualSellingPricePerSheet,
+    ]);
+  }
+  for (const [key, amount] of entries) {
+    await tx.query(
+      `INSERT INTO company_settings (company_id, setting_key, setting_value)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (company_id, setting_key)
+       DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()`,
+      [companyId, key, String(amount)]
+    );
+  }
+}
 
 export function createCompanyRouter(db: ServerDatabase): Router {
   const router = Router();
@@ -59,7 +136,7 @@ export function createCompanyRouter(db: ServerDatabase): Router {
   // POST /api/companies — create a brand-new isolated company book (Administrator only) and optionally switch
   router.post(
     '/',
-    requireAuth,
+    requireAuth, csrfProtection,
     requirePermission('companies:create'),
     async (req: Request, res: Response) => {
       const auth = req.auth!;
@@ -143,6 +220,10 @@ export function createCompanyRouter(db: ServerDatabase): Router {
       return r.rows[0];
     });
 
+    const printingPricing = await db.withCompanyDb(auth.companyId, tx =>
+      readPrintingPricingSettings(tx, auth.companyId)
+    );
+
     return res.json({
       id: Number(company.id),
       slug: company.slug,
@@ -156,13 +237,15 @@ export function createCompanyRouter(db: ServerDatabase): Router {
       salesTaxRate: Number(company.sales_tax_rate),
       theme: company.theme,
       role: auth.role,
+      extraTypingFinishingPerPage: printingPricing.extraTypingFinishingPerPage,
+      manualSellingPricePerSheet: printingPricing.manualSellingPricePerSheet,
     });
   });
 
   // PATCH /api/companies/current — Administrator only
   router.patch(
     '/current',
-    requireAuth,
+    requireAuth, csrfProtection,
     rejectCrossCompanyParams,
     requirePermission('companies:settings:write'),
     async (req: Request, res: Response) => {
@@ -174,6 +257,20 @@ export function createCompanyRouter(db: ServerDatabase): Router {
 
       if (allowedTaxRate !== null && (!Number.isFinite(allowedTaxRate) || allowedTaxRate < 0 || allowedTaxRate > 100)) {
         return res.status(400).json({ error: 'salesTaxRate must be between 0 and 100' });
+      }
+
+      const parsePricing = (raw: unknown): number | undefined | null => {
+        if (raw === undefined) return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return null;
+        return Math.round(n * 10000) / 10000;
+      };
+      const pricingExtra = parsePricing(req.body?.extraTypingFinishingPerPage);
+      const pricingSheet = parsePricing(req.body?.manualSellingPricePerSheet);
+      if (pricingExtra === null || pricingSheet === null) {
+        return res.status(400).json({
+          error: 'Printing pricing defaults must be positive amounts',
+        });
       }
 
       const updated = await db.withSystemDb(async tx => {
@@ -206,6 +303,27 @@ export function createCompanyRouter(db: ServerDatabase): Router {
 
         return after.rows[0];
       });
+
+      if (pricingExtra !== undefined || pricingSheet !== undefined) {
+        const pricingPatch = {
+          ...(pricingExtra !== undefined ? { extraTypingFinishingPerPage: pricingExtra } : {}),
+          ...(pricingSheet !== undefined ? { manualSellingPricePerSheet: pricingSheet } : {}),
+        };
+        await db.withCompanyDb(auth.companyId, async tx => {
+          const before = await readPrintingPricingSettings(tx, auth.companyId);
+          await writePrintingPricingSettings(tx, auth.companyId, pricingPatch);
+          await writeAuditLog(tx, {
+            companyId: auth.companyId,
+            actorUserId: auth.userId,
+            actorUsername: auth.username,
+            action: 'PRINTING_PRICING_DEFAULTS_UPDATED',
+            tableName: 'company_settings',
+            recordId: auth.companyId,
+            oldValues: before,
+            newValues: { ...before, ...pricingPatch },
+          });
+        });
+      }
 
       return res.json({ company: updated });
     }

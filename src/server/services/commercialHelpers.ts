@@ -388,6 +388,26 @@ export function addDaysToIso(dateIso: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Robustly format a DATE/DATE-like value (string or JS Date) as YYYY-MM-DD. */
+export function isoDateOnly(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const s = String(value);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? s.slice(0, 10) : d.toISOString().slice(0, 10);
+}
+
+/** Robustly format a TIMESTAMPTZ/date-like value (string or JS Date) as an ISO timestamp. */
+export function toIsoTimestamp(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return value.toISOString();
+  const s = String(value);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? s : d.toISOString();
+}
+
 export function advanceRecurringDate(
   dateIso: string,
   frequency: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'annual'

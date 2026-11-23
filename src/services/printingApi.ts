@@ -39,7 +39,16 @@ export interface ApiPrintingJob {
   printSide: string;
   sheetsUsed: number;
   impressionsUsed: number;
+  paperCost: number;
+  tonerCost: number;
+  extraCost: number;
   totalCost: number;
+  manualSellingPrice: number;
+  jobDate: string;
+  invoiceId: number | null;
+  notes: string;
+  rawPaperItemId?: string;
+  rawTonerItemId?: string;
   budgetApprovedAt: string | null;
   materials: ApiPrintingJobMaterial[];
 }
@@ -60,7 +69,16 @@ export const printingApi = {
       printSide: j.printSide || j.print_side || '',
       sheetsUsed: Number(j.sheetsUsed ?? j.sheets_used ?? 0),
       impressionsUsed: Number(j.impressionsUsed ?? j.impressions_used ?? 0),
+      paperCost: Number(j.paperCost ?? j.paper_cost ?? 0),
+      tonerCost: Number(j.tonerCost ?? j.toner_cost ?? 0),
+      extraCost: Number(j.extraCost ?? j.extra_cost ?? 0),
       totalCost: Number(j.totalCost ?? j.total_cost ?? 0),
+      manualSellingPrice: Number(j.manualSellingPrice ?? j.manual_selling_price ?? 0),
+      jobDate: j.jobDate || j.job_date || '',
+      invoiceId: j.invoiceId != null ? Number(j.invoiceId) : null,
+      notes: j.notes || '',
+      rawPaperItemId: String(j.rawPaperItemId ?? j.raw_paper_item_id ?? ''),
+      rawTonerItemId: String(j.rawTonerItemId ?? j.raw_toner_item_id ?? ''),
       budgetApprovedAt: j.budgetApprovedAt || null,
       materials: Array.isArray(j.materials) ? j.materials : [],
     }));
@@ -69,6 +87,56 @@ export const printingApi = {
   async getJob(id: number): Promise<ApiPrintingJob> {
     const d = await requestJson<{ job: any }>(`/api/printing/jobs/${id}`);
     return d.job;
+  },
+
+  /**
+   * Quick-print desk posting. Creates the printing job, approves its budget and
+   * issues the planned paper/toner into WIP in one server transaction, so stock
+   * and the cost ledger stay in step with the desk. The returned job carries the
+   * authoritative sheets, impressions and costs — the browser must not
+   * recompute or re-deduct them.
+   */
+  async postQuickPrintJob(payload: {
+    jobType?: 'quick_photocopy' | 'type_and_printing' | 'general_print';
+    customerId?: number | null;
+    customerName?: string;
+    rawPaperItemId: number;
+    rawTonerItemId: number;
+    title: string;
+    pages: number;
+    copies: number;
+    printSide?: 'Single-Sided' | 'Duplex';
+    typingFeeMode?: 'flat' | 'per_page';
+    typingFeeRate?: number;
+    finishingCost?: number;
+    finishingCostPerPage?: number;
+    manualSellingPrice?: number;
+    manualSellingPricePerSheet?: number;
+    jobDate?: string;
+    notes?: string | null;
+    idempotencyKey?: string | null;
+  }): Promise<{ job: any; wipJournalTxnId: number | null }> {
+    const d = await requestJson<any>('/api/printing/quick-jobs', {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return { job: d.job, wipJournalTxnId: d.wipJournalTxnId ?? null };
+  },
+
+  /**
+   * Bills an existing quick-print job onto an invoice that was raised elsewhere
+   * (combined invoice modal or POS checkout). Relieves the job's WIP to COGS once
+   * and ties the relief to the invoice's cost so gross profit is not doubled.
+   */
+  async linkJobInvoice(jobId: number, invoiceId: number): Promise<any> {
+    const d = await requestJson<{ link: any }>(`/api/printing/jobs/${jobId}/invoice-link`, {
+      method: 'POST',
+      body: JSON.stringify({ invoiceId }),
+    });
+    emitAccountingUpdated();
+    return d.link;
   },
 
   async approveBudget(id: number): Promise<any> {

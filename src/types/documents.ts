@@ -213,6 +213,8 @@ export interface DocumentPreviewModel {
     paperCost: number;
     tonerCost: number;
     extraCost: number;
+    typingRevenue?: number;
+    photocopyRevenue?: number;
   };
   fileMeta?: {
     attachmentId: number;
@@ -705,19 +707,45 @@ export function mapQuickPrintToPreviewModel(params: {
   due.setDate(due.getDate() + 15);
 
   const round2 = (v: number) => Math.round(v * 100) / 100;
+  // sellingPriceTotal is the complete customer-facing amount (photocopying plus
+  // the typing & printing service fee). Split it so the receipt shows both
+  // components without charging either twice.
+  const typingRevenue = round2(job.typingFee || 0);
+  const photocopyRevenue = round2(job.sellingPriceTotal - typingRevenue);
+  const hasTypingLine = typingRevenue > 0 && job.pages > 0;
+
   const candidateRate =
     job.sellingPricePerSheet !== undefined
       ? round2(job.sellingPricePerSheet)
       : job.sheetsUsed > 0
-      ? round2(job.sellingPriceTotal / job.sheetsUsed)
-      : job.sellingPriceTotal;
+      ? round2(photocopyRevenue / job.sheetsUsed)
+      : photocopyRevenue;
   const usePerSheetLine =
-    job.sheetsUsed > 0 && round2(candidateRate * job.sheetsUsed) === round2(job.sellingPriceTotal);
+    job.sheetsUsed > 0 && round2(candidateRate * job.sheetsUsed) === photocopyRevenue;
   const lineQty = usePerSheetLine ? job.sheetsUsed : 1;
-  const lineRate = usePerSheetLine ? candidateRate : job.sellingPriceTotal;
+  const lineRate = usePerSheetLine ? candidateRate : photocopyRevenue;
   const lineUnitCost = usePerSheetLine
     ? Math.round((job.totalCost / job.sheetsUsed) * 10000) / 10000
     : job.totalCost;
+
+  const photocopyLine = {
+    description: hasTypingLine
+      ? `Photocopying — ${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`
+      : `${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`,
+    quantity: lineQty,
+    rate: lineRate,
+    amount: photocopyRevenue,
+    unitCost: includeCosts ? lineUnitCost : undefined,
+    taxable: false,
+  };
+  const typingLine = {
+    description: `Typing & Printing (${job.pages} pp)`,
+    quantity: job.pages,
+    rate: round2(typingRevenue / job.pages),
+    amount: typingRevenue,
+    taxable: false,
+  };
+  const receiptLines = hasTypingLine ? [typingLine, photocopyLine] : [photocopyLine];
 
   return {
     kind: 'printing_job',
@@ -746,16 +774,7 @@ export function mapQuickPrintToPreviewModel(params: {
       phone: customer?.phone,
       address: customer?.billingAddress,
     },
-    lines: [
-      {
-        description: `${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`,
-        quantity: lineQty,
-        rate: lineRate,
-        amount: job.sellingPriceTotal,
-        unitCost: includeCosts ? lineUnitCost : undefined,
-        taxable: false,
-      },
-    ],
+    lines: receiptLines,
     quickPrintMeta: {
       jobType: job.jobType,
       pages: job.pages,
@@ -766,6 +785,8 @@ export function mapQuickPrintToPreviewModel(params: {
       paperCost: job.paperCost,
       tonerCost: job.tonerCost,
       extraCost: (job.typingFee || 0) + (job.extraCost || 0),
+      typingRevenue,
+      photocopyRevenue,
     },
     totals: {
       subtotal: job.sellingPriceTotal,
@@ -800,15 +821,35 @@ export function mapQuickPrintToPreviewModel(params: {
             taxRate: 0,
             notes: job.notes || `Quick Print Job ${job.jobNumber}: ${job.title}`,
             idempotencyKey: `quick-print-${job.id}`,
-            lines: [
-              {
-                description: `${job.jobNumber}: ${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`,
-                quantity: lineQty,
-                rate: lineRate,
-                unitCost: lineUnitCost,
-                taxable: false,
-              },
-            ],
+            // Lets the server relieve this job's production WIP to COGS when the
+            // invoice is raised later from the desk or the document list.
+            postgresPrintingJobId: job.backendJobId ?? null,
+            lines: hasTypingLine
+              ? [
+                  {
+                    description: `Typing & Printing (${job.pages} pp)`,
+                    quantity: job.pages,
+                    rate: round2(typingRevenue / job.pages),
+                    unitCost: 0,
+                    taxable: false,
+                  },
+                  {
+                    description: `${job.jobNumber}: Photocopying — ${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`,
+                    quantity: lineQty,
+                    rate: lineRate,
+                    unitCost: lineUnitCost,
+                    taxable: false,
+                  },
+                ]
+              : [
+                  {
+                    description: `${job.jobNumber}: ${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${job.sheetsUsed.toLocaleString()} sheets)`,
+                    quantity: lineQty,
+                    rate: lineRate,
+                    unitCost: lineUnitCost,
+                    taxable: false,
+                  },
+                ],
           }
         : undefined,
     onInvoiceGenerated,

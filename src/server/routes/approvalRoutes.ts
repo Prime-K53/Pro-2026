@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import {
   ApprovalStatus,
@@ -36,7 +37,7 @@ const VALID_STATUSES: ApprovalStatus[] = ['pending', 'approved', 'rejected', 'ca
 export function createApprovalRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   router.get('/approvals/policies', requirePermission('approvals:read'), async (req: Request, res: Response) => {
     try {

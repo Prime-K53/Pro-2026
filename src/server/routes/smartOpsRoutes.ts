@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
+import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
+import { parseDecimal4 } from '../lib/decimal.ts';
 import {
   createAndDispatchCampaign,
   createAutomationRule,
@@ -30,9 +32,38 @@ import {
 import {
   checkoutPosOrder,
   getPosCatalogAndOrders,
+  getPosShiftTransactions,
+  getCurrentUserShift,
+  listPosShifts,
+  listSuspendedSales,
+  lookupBarcode,
+  openPosShift,
   previewPosOrder,
+  closePosShift,
+  recordPosCashMovement,
+  listPosCashMovements,
+  resumePosOrder,
+  suspendPosOrder,
   voidPosOrder,
 } from '../services/posService.ts';
+import { hasPermission } from '../permissions.ts';
+import {
+  activateCampaign,
+  configureCampaign,
+  recordFinanceApproval,
+  recordManagementApproval,
+  serializeTerms,
+  setCampaignLifecycle,
+} from '../services/referralConfigService.ts';
+import { qualifyReferralEvent } from '../services/referralQualificationService.ts';
+import { creditReferralRewardToWallet } from '../services/referralRewardService.ts';
+import { reverseReferralReward } from '../services/referralReversalService.ts';
+import {
+  flagReferralHold,
+  recordFraudDecision,
+  recordIndependentDisputeReview,
+} from '../services/referralFraudService.ts';
+import { reconcileBudget } from '../services/referralBudgetService.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -59,7 +90,7 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
-  router.use(requireAuth, rejectCrossCompanyParams);
+  router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
 
   // =========================================================================
   // SMART OPERATIONS OVERVIEW & STARTER INITIALIZATION
@@ -148,21 +179,40 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
         if (Number(existingProgs.rows[0].cnt) === 0) {
           const prog = await createReferralProgram(tx, companyId, toActor(req), {
             name: 'School & Corporate Print Partner Program',
-            description: 'Referrer earns 5% commission reward; referred customer receives 5% off first POS order.',
+            description: 'Referrer earns commission reward; referred customer receives a first-order discount.',
             referrerRewardType: 'percent_commission',
-            referrerRewardValue: 5,
+            referrerRewardValue: 3,
             refereeDiscountType: 'percent',
             refereeDiscountValue: 5,
             minQualifyingSpend: 100,
           });
-          await createReferralCampaign(tx, companyId, toActor(req), {
+          // Demo campaign with EXPLICIT campaign-level terms (D-01-B). These are
+          // illustrative demo values, not engine defaults; production campaigns
+          // must be configured and approved by Finance/Management.
+          const start = new Date().toISOString().slice(0, 10);
+          const end = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          const campaign = await createReferralCampaign(tx, companyId, toActor(req), {
             programId: prog.id,
             name: 'WhatsApp Term Partner Drive',
             channel: 'whatsapp',
             trackingCode: 'TERM26-WA',
             targetReferrals: 30,
             budgetAmount: 500,
+            referrerRewardType: 'percent_commission',
+            referrerRewardValue: 3,
+            refereeDiscountType: 'percent',
+            refereeDiscountValue: 5,
+            maxReferrerRewardPerOrder: 100,
+            maxRefereeDiscountPerOrder: 100,
+            rewardApprovalThreshold: 250,
+            attributionWindowDays: 90,
+            eligibleItemTypes: ['stationery', 'printing_service', 'printed_product'],
+            startsAt: start,
+            endsAt: end,
           });
+          await recordFinanceApproval(tx, companyId, toActor(req), campaign.id, 'Demo seed — illustrative');
+          await recordManagementApproval(tx, companyId, toActor(req), campaign.id, 'Demo seed — illustrative');
+          await activateCampaign(tx, companyId, toActor(req), campaign.id);
         }
 
         const existingPromos = await tx.query<{ cnt: string }>(
@@ -315,6 +365,239 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
         payoutReferralReward(tx, req.auth!.companyId, toActor(req), id, req.body || {})
       );
       return res.json({ event });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  // =========================================================================
+  // REFERRAL CONFIGURATION, QUALIFICATION, REWARD & GOVERNANCE
+  // =========================================================================
+
+  router.get('/smart-ops/referrals/attributions', requirePermission('referral:read'), async (req: Request, res: Response) => {
+    try {
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        tx.query(
+          `SELECT ra.*, c.company_name AS customer_name, rc.company_name AS referrer_name
+             FROM referral_attributions ra
+             LEFT JOIN customers c ON c.company_id = ra.company_id AND c.id = ra.customer_id
+             LEFT JOIN customers rc ON rc.company_id = ra.company_id AND rc.id = ra.referrer_customer_id
+            WHERE ra.company_id = $1
+            ORDER BY ra.id DESC`,
+          [req.auth!.companyId]
+        )
+      );
+      return res.json({ attributions: result.rows });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/smart-ops/referrals/cases', requirePermission('referral:read'), async (req: Request, res: Response) => {
+    try {
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        tx.query(`SELECT * FROM referral_cases WHERE company_id = $1 ORDER BY id DESC`, [req.auth!.companyId])
+      );
+      return res.json({ cases: result.rows });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.patch('/smart-ops/referrals/campaigns/:id/config', requirePermission('referral:configure_financials'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const terms = await db.withCompanyDb(req.auth!.companyId, tx =>
+        configureCampaign(tx, req.auth!.companyId, toActor(req), id, req.body || {})
+      );
+      return res.json({ terms: serializeTerms(terms) });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/campaigns/:id/finance-approval', requirePermission('referral:configure_financials'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordFinanceApproval(tx, req.auth!.companyId, toActor(req), id, req.body?.note ?? null)
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/campaigns/:id/management-approval', requirePermission('referral:activate_campaigns'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordManagementApproval(tx, req.auth!.companyId, toActor(req), id, req.body?.note ?? null)
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/campaigns/:id/activate', requirePermission('referral:activate_campaigns'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const terms = await db.withCompanyDb(req.auth!.companyId, tx =>
+        activateCampaign(tx, req.auth!.companyId, toActor(req), id)
+      );
+      return res.json({ terms: serializeTerms(terms) });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/campaigns/:id/lifecycle', requirePermission('referral:activate_campaigns'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      await db.withCompanyDb(req.auth!.companyId, tx =>
+        setCampaignLifecycle(tx, req.auth!.companyId, toActor(req), id, req.body?.lifecycleStatus, req.body?.reason ?? null)
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/smart-ops/referrals/campaigns/:id/budget', requirePermission('referral:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const reconciliation = await db.withCompanyDb(req.auth!.companyId, tx =>
+        reconcileBudget(tx, req.auth!.companyId, id)
+      );
+      return res.json(reconciliation);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/events/:id/qualify', requirePermission('referral:approve_rewards'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const result = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const qualified = await qualifyReferralEvent(tx, req.auth!.companyId, toActor(req), id, {
+          deliveryEvidence: req.body?.deliveryEvidence ?? null,
+        });
+        // A1-C: below-threshold rewards are credited automatically after qualification.
+        const evRes = await tx.query<any>(
+          `SELECT reward_amount, terms_snapshot FROM referral_events WHERE company_id = $1 AND id = $2`,
+          [req.auth!.companyId, id]
+        );
+        const ev = evRes.rows[0];
+        const reward4 = ev ? parseDecimal4(String(ev.reward_amount)) : 0n;
+        const threshold4 = ev?.terms_snapshot?.rewardApprovalThreshold4 != null
+          ? parseDecimal4(String(ev.terms_snapshot.rewardApprovalThreshold4))
+          : null;
+        let credit: any = null;
+        if (!qualified.alreadyQualified && reward4 > 0n && threshold4 != null && reward4 < threshold4) {
+          const accts = await resolveSmartOpsAccounts(tx, req.auth!.companyId, toActor(req));
+          const prog = await tx.query<{ reward_expense_account_id: number | null }>(
+            `SELECT rp.reward_expense_account_id FROM referral_events re
+               JOIN referral_programs rp ON rp.company_id = re.company_id AND rp.id = re.program_id
+              WHERE re.company_id = $1 AND re.id = $2`,
+            [req.auth!.companyId, id]
+          );
+          const expenseAccountId = prog.rows[0]?.reward_expense_account_id
+            ? Number(prog.rows[0].reward_expense_account_id)
+            : accts.marketingExpense6450;
+          credit = await creditReferralRewardToWallet(tx, req.auth!.companyId, toActor(req), { eventId: id, expenseAccountId });
+        }
+        return { qualified, credit };
+      });
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/events/:id/credit', requirePermission('referral:credit_rewards'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const result = await db.withCompanyDb(req.auth!.companyId, async tx => {
+        const accts = await resolveSmartOpsAccounts(tx, req.auth!.companyId, toActor(req));
+        const prog = await tx.query<{ reward_expense_account_id: number | null }>(
+          `SELECT rp.reward_expense_account_id FROM referral_events re
+             JOIN referral_programs rp ON rp.company_id = re.company_id AND rp.id = re.program_id
+            WHERE re.company_id = $1 AND re.id = $2`,
+          [req.auth!.companyId, id]
+        );
+        const expenseAccountId = prog.rows[0]?.reward_expense_account_id
+          ? Number(prog.rows[0].reward_expense_account_id)
+          : accts.marketingExpense6450;
+        return creditReferralRewardToWallet(tx, req.auth!.companyId, toActor(req), { eventId: id, expenseAccountId });
+      });
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/events/:id/reverse', requirePermission('referral:reverse_rewards'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        reverseReferralReward(tx, req.auth!.companyId, toActor(req), {
+          eventId: id,
+          amount: req.body?.amount ?? null,
+          reason: req.body?.reason ?? null,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/cases', requirePermission('referral:investigate_fraud'), async (req: Request, res: Response) => {
+    try {
+      const caseId = await db.withCompanyDb(req.auth!.companyId, tx =>
+        flagReferralHold(tx, req.auth!.companyId, toActor(req), {
+          attributionId: req.body?.attributionId ?? null,
+          eventId: req.body?.eventId ?? null,
+          reason: req.body?.reason ?? 'Suspicious referral',
+          evidence: req.body?.evidence ?? null,
+        })
+      );
+      return res.status(201).json({ caseId });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/cases/:id/decision', requirePermission('referral:decide_fraud'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordFraudDecision(tx, req.auth!.companyId, toActor(req), {
+          caseId: id,
+          decision: req.body?.decision,
+          reason: req.body?.reason ?? '',
+          evidence: req.body?.evidence ?? null,
+        })
+      );
+      return res.json({ ok: true });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/smart-ops/referrals/cases/:id/review', requirePermission('referral:review_disputes'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordIndependentDisputeReview(tx, req.auth!.companyId, toActor(req), {
+          caseId: id,
+          reviewerUserId: Number(req.body?.reviewerUserId),
+          outcome: req.body?.outcome,
+          reason: req.body?.reason ?? '',
+        })
+      );
+      return res.json({ ok: true });
     } catch (err) {
       return handleError(res, err);
     }
@@ -486,6 +769,163 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
         voidPosOrder(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
       );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  // =========================================================================
+  // POS SHIFTS
+  // =========================================================================
+  router.get('/pos/shifts/current', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const shift = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getCurrentUserShift(tx, req.auth!.companyId, req.auth!.userId)
+      );
+      return res.json({ shift });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/pos/shifts', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const filters: { status?: 'open' | 'closed'; cashierId?: number; limit?: number } = {};
+      if (req.query.status === 'open' || req.query.status === 'closed') filters.status = req.query.status;
+      if (req.query.cashierId) filters.cashierId = Number(req.query.cashierId);
+      if (req.query.limit) filters.limit = Number(req.query.limit);
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listPosShifts(tx, req.auth!.companyId, filters)
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/shifts', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        openPosShift(tx, req.auth!.companyId, toActor(req), req.body || {})
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/shifts/:id/close', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const shiftId = Number(req.params.id);
+      if (!Number.isInteger(shiftId) || shiftId <= 0) return res.status(400).json({ error: 'Invalid shift id' });
+      const allowOther =
+        req.body?.allowOtherCashier === true &&
+        hasPermission(req.auth!.role, 'pos:manage_shifts');
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        closePosShift(tx, req.auth!.companyId, toActor(req), shiftId, {
+          ...(req.body || {}),
+          allowOtherCashier: allowOther,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/shifts/:id/cash-movements', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const shiftId = Number(req.params.id);
+      if (!Number.isInteger(shiftId) || shiftId <= 0) return res.status(400).json({ error: 'Invalid shift id' });
+      const movement = await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordPosCashMovement(tx, req.auth!.companyId, toActor(req), shiftId, req.body || {})
+      );
+      return res.status(201).json({ movement });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/pos/shifts/:id/cash-movements', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const shiftId = Number(req.params.id);
+      if (!Number.isInteger(shiftId) || shiftId <= 0) return res.status(400).json({ error: 'Invalid shift id' });
+      const movements = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listPosCashMovements(tx, req.auth!.companyId, shiftId)
+      );
+      return res.json({ movements });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/pos/shifts/:id/transactions', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const shiftId = Number(req.params.id);
+      if (!Number.isInteger(shiftId) || shiftId <= 0) return res.status(400).json({ error: 'Invalid shift id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getPosShiftTransactions(tx, req.auth!.companyId, shiftId)
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  // =========================================================================
+  // POS SUSPENDED SALES
+  // =========================================================================
+  router.get('/pos/suspended', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const filters: { status?: 'suspended' | 'resumed'; shiftId?: number } = {};
+      if (req.query.status === 'suspended' || req.query.status === 'resumed') filters.status = req.query.status;
+      if (req.query.shiftId) filters.shiftId = Number(req.query.shiftId);
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listSuspendedSales(tx, req.auth!.companyId, filters)
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/orders/:id/suspend', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const orderId = Number(req.params.id);
+      if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ error: 'Invalid POS order id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        suspendPosOrder(tx, req.auth!.companyId, toActor(req), { posOrderId: orderId, notes: req.body?.notes })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/suspended/:id/resume', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const suspendedId = Number(req.params.id);
+      if (!Number.isInteger(suspendedId) || suspendedId <= 0) return res.status(400).json({ error: 'Invalid suspended sale id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        resumePosOrder(tx, req.auth!.companyId, toActor(req), { suspendedSaleId: suspendedId })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  // =========================================================================
+  // POS BARCODE
+  // =========================================================================
+  router.post('/pos/scan', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const barcode = String(req.body?.barcode || '').trim();
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        lookupBarcode(tx, req.auth!.companyId, barcode)
+      );
+      if (!result.found) return res.status(404).json(result);
       return res.json(result);
     } catch (err) {
       return handleError(res, err);

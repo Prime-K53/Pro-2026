@@ -16,6 +16,7 @@ import {
   requestContractActivation,
 } from './services/printingRecordsService.ts';
 import { recordWalletDeposit } from './services/customerWalletService.ts';
+import { seedDefaultMalawiConfig } from './services/malawiPayroll.ts';
 
 export interface ServerDatabase {
   pg: PGlite;
@@ -261,6 +262,10 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
       ownerUsername: 'admin',
       makeDefault: false,
     });
+
+    // Default Malawi statutory configuration (editable per effective date).
+    await seedDefaultMalawiConfig(tx, compA.companyId);
+    await seedDefaultMalawiConfig(tx, compB.companyId);
 
     // Seed isolated data in Company A
     const custA = await tx.query<{ id: number }>(

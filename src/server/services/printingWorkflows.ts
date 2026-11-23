@@ -48,6 +48,7 @@ export interface CommercialFinancialSummary {
   materialTonerCost: number | null;
   finishingCost: number;
   typingFee: number;
+  typingRevenue: number;
   extraCost: number;
   totalProductionCost: number | null;
   grossSellingPrice: number;
@@ -109,6 +110,9 @@ function computeCommercialSummary(params: {
   const typingFee = round2(params.typingFee ?? 0);
   const extraCost = round2(params.extraCost ?? 0);
   const tonerCost = params.toner.totalCost;
+  // Typing & printing is a customer-facing service revenue, never a material
+  // production cost. Physical finishing (staple/bind) and extra material charges
+  // stay in the production cost.
   const totalProductionCost =
     tonerCost !== null
       ? round2(params.paperCost + tonerCost + finishingCost + extraCost)
@@ -122,16 +126,20 @@ function computeCommercialSummary(params: {
       (params.commercialPricing?.promotionAmount ?? 0)
   );
   const netRevenue = round2(grossSellingPrice - discountAmount);
+  // Typing revenue is additive to the net selling revenue when the caller quotes
+  // photocopying only. It is tracked explicitly so profit is not understated.
+  const totalRevenue = round2(netRevenue + typingFee);
   const realProfit =
-    totalProductionCost !== null ? round2(netRevenue - totalProductionCost) : null;
+    totalProductionCost !== null ? round2(totalRevenue - totalProductionCost) : null;
   const profitMarginPct =
-    realProfit !== null && netRevenue > 0 ? round2((realProfit / netRevenue) * 100) : null;
+    realProfit !== null && totalRevenue > 0 ? round2((realProfit / totalRevenue) * 100) : null;
 
   return {
     materialPaperCost: round2(params.paperCost),
     materialTonerCost: tonerCost,
     finishingCost,
     typingFee,
+    typingRevenue: typingFee,
     extraCost,
     totalProductionCost,
     grossSellingPrice,
@@ -599,10 +607,12 @@ export function calculateTypeAndPrintingWorkflow(
   const extraFinishing = round2(input.extraFinishingCost ?? 0);
   const finishingTotal = round2(printRes.commercial.finishingCost + extraFinishing);
   const tonerCost = printRes.toner.totalCost;
-  // Printing material cost remains paper + toner + physical finishing; typing fee is configurable and tracked separately
-  const totalCostWithTypingAndExtra =
+  // Printing production cost remains paper + toner + physical finishing. The
+  // typing fee is a customer-facing service revenue, never a material cost, so it
+  // is excluded here and added to revenue below.
+  const totalProductionCost =
     tonerCost !== null
-      ? round2(printRes.paper.quantities.totalPaperCost + tonerCost + finishingTotal + typingAmount)
+      ? round2(printRes.paper.quantities.totalPaperCost + tonerCost + finishingTotal)
       : null;
 
   const grossSellingPrice = round2(
@@ -613,10 +623,11 @@ export function calculateTypeAndPrintingWorkflow(
       (input.commercialPricing?.promotionAmount ?? 0)
   );
   const netRevenue = round2(grossSellingPrice - discountAmount);
+  const totalRevenue = round2(netRevenue + typingAmount);
   const realProfit =
-    totalCostWithTypingAndExtra !== null ? round2(netRevenue - totalCostWithTypingAndExtra) : null;
+    totalProductionCost !== null ? round2(totalRevenue - totalProductionCost) : null;
   const profitMarginPct =
-    realProfit !== null && netRevenue > 0 ? round2((realProfit / netRevenue) * 100) : null;
+    realProfit !== null && totalRevenue > 0 ? round2((realProfit / totalRevenue) * 100) : null;
 
   return {
     serviceCategory: 'type_and_printing',
@@ -633,8 +644,9 @@ export function calculateTypeAndPrintingWorkflow(
       materialTonerCost: printRes.commercial.materialTonerCost,
       finishingCost: finishingTotal,
       typingFee: typingAmount,
+      typingRevenue: typingAmount,
       extraCost: extraFinishing,
-      totalProductionCost: totalCostWithTypingAndExtra,
+      totalProductionCost,
       grossSellingPrice,
       discountAmount,
       netRevenue,

@@ -17,6 +17,7 @@ export interface ServerConfig {
   idleTimeoutSeconds: number;
   cookieName: string;
   isProduction: boolean;
+  twilioAuthToken: string | null;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -56,5 +57,6 @@ export function loadServerConfig(): ServerConfig {
     idleTimeoutSeconds: parsePositiveInt(process.env.AUTH_IDLE_TIMEOUT_SECONDS, 60 * 60 * 2),
     cookieName: 'pms_session',
     isProduction,
+    twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN || '').trim() || null,
   };
 }

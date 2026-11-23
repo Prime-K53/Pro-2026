@@ -40,6 +40,14 @@ export const APPROVAL_ACTION_TYPES = [
   'vendor_payment_hold',
   'vendor_bank_change',
   'vendor_merge',
+  'referral_campaign_activation',
+  'referral_reward_approval',
+  'referral_attribution_change',
+  'referral_eligibility_exception',
+  'referral_refund_reversal',
+  'referral_fraud_decision',
+  'referral_dispute_review',
+  'referral_writeoff',
 ] as const;
 
 export type ApprovalActionType = (typeof APPROVAL_ACTION_TYPES)[number];

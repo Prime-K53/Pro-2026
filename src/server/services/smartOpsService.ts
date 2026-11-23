@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Transaction } from '@electric-sql/pglite';
 import { writeAuditLog } from '../audit.ts';
 import { formatDecimal4, parseDecimal4, toMoneyNumber } from '../lib/decimal.ts';
@@ -20,6 +21,16 @@ import {
   saveRouteIdempotency,
   todayIsoDate,
 } from './commercialHelpers.ts';
+import {
+  CampaignTerms,
+  resolveEffectiveTerms,
+  serializeTerms,
+} from './referralConfigService.ts';
+import {
+  isFirstOrderCustomer,
+  recordReferralAttribution,
+} from './referralAttributionService.ts';
+import { releaseReservation, reserveBudget } from './referralBudgetService.ts';
 
 export interface SmartOpsAccountMap {
   bank1010: number;
@@ -704,8 +715,29 @@ export async function listReferralWorkspace(tx: Transaction, companyId: number) 
     targetReferrals: Number(r.target_referrals),
     actualReferrals: Number(r.actual_referrals),
     budgetAmount: toMoneyNumber(parseDecimal4(r.budget_amount)),
+    budgetReserved: toMoneyNumber(parseDecimal4(r.budget_reserved_amount ?? 0)),
+    budgetQualified: toMoneyNumber(parseDecimal4(r.budget_qualified_amount ?? 0)),
     generatedRevenue: toMoneyNumber(parseDecimal4(r.generated_revenue)),
     status: r.status,
+    lifecycleStatus: r.lifecycle_status,
+    referrerRewardType: r.referrer_reward_type,
+    referrerRewardValue: r.referrer_reward_value != null ? toMoneyNumber(parseDecimal4(r.referrer_reward_value)) : null,
+    refereeDiscountType: r.referee_discount_type,
+    refereeDiscountValue: r.referee_discount_value != null ? toMoneyNumber(parseDecimal4(r.referee_discount_value)) : null,
+    maxReferrerRewardPerOrder:
+      r.max_referrer_reward_per_order != null ? toMoneyNumber(parseDecimal4(r.max_referrer_reward_per_order)) : null,
+    maxRefereeDiscountPerOrder:
+      r.max_referee_discount_per_order != null ? toMoneyNumber(parseDecimal4(r.max_referee_discount_per_order)) : null,
+    rewardApprovalThreshold:
+      r.reward_approval_threshold != null ? toMoneyNumber(parseDecimal4(r.reward_approval_threshold)) : null,
+    attributionWindowDays: r.attribution_window_days != null ? Number(r.attribution_window_days) : 90,
+    eligibleItemTypes: r.eligible_item_types ?? null,
+    eligibleItemIds: r.eligible_item_ids ?? null,
+    startsAt: r.starts_at ? new Date(r.starts_at).toISOString().slice(0, 10) : null,
+    endsAt: r.ends_at ? new Date(r.ends_at).toISOString().slice(0, 10) : null,
+    financeApprovedAt: r.finance_approved_at,
+    managementApprovedAt: r.management_approved_at,
+    activatedAt: r.activated_at,
   }));
 
   const codes = codesRes.rows.map(r => ({
@@ -747,9 +779,16 @@ export async function listReferralWorkspace(tx: Transaction, companyId: number) 
     creditMemoId: r.credit_memo_id ? Number(r.credit_memo_id) : null,
     accrualJournalTxnId: r.accrual_journal_txn_id ? Number(r.accrual_journal_txn_id) : null,
     payoutJournalTxnId: r.payout_journal_txn_id ? Number(r.payout_journal_txn_id) : null,
+    walletTxnId: r.wallet_txn_id ? Number(r.wallet_txn_id) : null,
+    attributionId: r.attribution_id ? Number(r.attribution_id) : null,
+    reversalOfId: r.reversal_of_id ? Number(r.reversal_of_id) : null,
+    reservationId: r.reservation_id ? Number(r.reservation_id) : null,
+    approvalRequestId: r.approval_request_id ? Number(r.approval_request_id) : null,
+    fraudHold: Boolean(r.fraud_hold),
     notes: r.notes || '',
     createdAt: r.created_at,
     paidAt: r.paid_at,
+    rewardedAt: r.rewarded_at,
   }));
 
   const totalClicks = codes.reduce((s, c) => s + c.clicksCount, 0);
@@ -887,6 +926,20 @@ export async function createReferralCampaign(
     targetReferrals?: number;
     budgetAmount?: string | number;
     status?: 'active' | 'paused' | 'completed' | 'draft';
+    // Campaign-level authoritative financial terms (D-01-B). All optional;
+    // activation is gated until mandatory values + approvals are recorded.
+    referrerRewardType?: 'fixed_credit' | 'percent_commission' | 'cash_payout';
+    referrerRewardValue?: string | number;
+    refereeDiscountType?: 'percent' | 'fixed_amount';
+    refereeDiscountValue?: string | number;
+    maxReferrerRewardPerOrder?: string | number | null;
+    maxRefereeDiscountPerOrder?: string | number | null;
+    rewardApprovalThreshold?: string | number | null;
+    attributionWindowDays?: number;
+    eligibleItemTypes?: string[] | null;
+    eligibleItemIds?: number[] | null;
+    startsAt?: string | null;
+    endsAt?: string | null;
   }
 ) {
   const name = String(input.name || '').trim();
@@ -895,8 +948,18 @@ export async function createReferralCampaign(
 
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO referral_campaigns (
-       company_id, program_id, name, channel, tracking_code, target_referrals, budget_amount, status, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7::NUMERIC(19,4), $8, $9) RETURNING id`,
+       company_id, program_id, name, channel, tracking_code, target_referrals, budget_amount, status, created_by,
+       referrer_reward_type, referrer_reward_value, referee_discount_type, referee_discount_value,
+       max_referrer_reward_per_order, max_referee_discount_per_order, reward_approval_threshold,
+       attribution_window_days, eligible_item_types, eligible_item_ids, starts_at, ends_at,
+       lifecycle_status
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7::NUMERIC(19,4), $8, $9,
+       $10, $11::NUMERIC(19,4), $12, $13::NUMERIC(19,4),
+       $14::NUMERIC(19,4), $15::NUMERIC(19,4), $16::NUMERIC(19,4),
+       $17, $18, $19, $20::DATE, $21::DATE,
+       'draft'
+     ) RETURNING id`,
     [
       companyId,
       Number(input.programId),
@@ -905,10 +968,38 @@ export async function createReferralCampaign(
       trackingCode,
       Math.max(1, Number(input.targetReferrals) || 25),
       formatDecimal4(parseDecimal4(input.budgetAmount ?? 0)),
-      input.status || 'active',
+      input.status || 'draft',
       actor.userId,
+      input.referrerRewardType ?? null,
+      input.referrerRewardValue !== undefined ? formatDecimal4(parseDecimal4(input.referrerRewardValue)) : null,
+      input.refereeDiscountType ?? null,
+      input.refereeDiscountValue !== undefined ? formatDecimal4(parseDecimal4(input.refereeDiscountValue)) : null,
+      input.maxReferrerRewardPerOrder !== undefined && input.maxReferrerRewardPerOrder !== null
+        ? formatDecimal4(parseDecimal4(input.maxReferrerRewardPerOrder))
+        : null,
+      input.maxRefereeDiscountPerOrder !== undefined && input.maxRefereeDiscountPerOrder !== null
+        ? formatDecimal4(parseDecimal4(input.maxRefereeDiscountPerOrder))
+        : null,
+      input.rewardApprovalThreshold !== undefined && input.rewardApprovalThreshold !== null
+        ? formatDecimal4(parseDecimal4(input.rewardApprovalThreshold))
+        : null,
+      input.attributionWindowDays ?? 90,
+      input.eligibleItemTypes && input.eligibleItemTypes.length > 0 ? input.eligibleItemTypes : null,
+      input.eligibleItemIds && input.eligibleItemIds.length > 0 ? input.eligibleItemIds : null,
+      input.startsAt || null,
+      input.endsAt || null,
     ]
   );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'REFERRAL_CAMPAIGN_CREATED',
+    tableName: 'referral_campaigns',
+    recordId: Number(ins.rows[0].id),
+    newValues: { name, trackingCode },
+  });
 
   const ws = await listReferralWorkspace(tx, companyId);
   return ws.campaigns.find(c => c.id === Number(ins.rows[0].id))!;
@@ -941,24 +1032,44 @@ export async function createReferralCode(
   }
   if (!referrerName) throw new AccountingError(400, 'Referrer name or customer is required');
 
-  const rawCode = input.code?.trim()
+  // Secure, company-scoped code generation with collision retry (16).
+  const customCode = input.code?.trim()
     ? input.code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '')
-    : `REF-${referrerName.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+    : null;
+  const prefix = `REF-${referrerName.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase()}`;
 
-  const ins = await tx.query<{ id: number }>(
-    `INSERT INTO referral_codes (
-       company_id, program_id, campaign_id, referrer_customer_id, referrer_name, referrer_phone, code
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [
-      companyId,
-      Number(input.programId),
-      input.campaignId ? Number(input.campaignId) : null,
-      input.referrerCustomerId ? Number(input.referrerCustomerId) : null,
-      referrerName,
-      referrerPhone,
-      rawCode,
-    ]
-  );
+  let insertedId: number | null = null;
+  let rawCode = customCode || '';
+  for (let attempt = 0; attempt < 8 && insertedId == null; attempt++) {
+    if (!customCode) {
+      // 6 URL-safe base64url chars ≈ 36 bits of entropy per attempt.
+      const suffix = crypto.randomBytes(6).toString('base64url').toUpperCase();
+      rawCode = `${prefix}-${suffix}`;
+    }
+    try {
+      const ins = await tx.query<{ id: number }>(
+        `INSERT INTO referral_codes (
+           company_id, program_id, campaign_id, referrer_customer_id, referrer_name, referrer_phone, code
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [
+          companyId,
+          Number(input.programId),
+          input.campaignId ? Number(input.campaignId) : null,
+          input.referrerCustomerId ? Number(input.referrerCustomerId) : null,
+          referrerName,
+          referrerPhone,
+          rawCode,
+        ]
+      );
+      insertedId = Number(ins.rows[0].id);
+    } catch (err: any) {
+      // 23505 = unique_violation. Retry only for generated codes.
+      if (customCode || err?.code !== '23505') throw err;
+    }
+  }
+  if (insertedId == null) {
+    throw new AccountingError(409, 'Could not allocate a unique referral code', 'REFERRAL_CODE_COLLISION');
+  }
 
   await writeAuditLog(tx, {
     companyId,
@@ -966,12 +1077,12 @@ export async function createReferralCode(
     actorUsername: actor.username,
     action: 'REFERRAL_CODE_CREATED',
     tableName: 'referral_codes',
-    recordId: Number(ins.rows[0].id),
+    recordId: insertedId,
     newValues: { code: rawCode, referrerName },
   });
 
   const ws = await listReferralWorkspace(tx, companyId);
-  return ws.codes.find(c => c.id === Number(ins.rows[0].id))!;
+  return ws.codes.find(c => c.id === Number(insertedId))!;
 }
 
 export async function recordReferralClick(tx: Transaction, companyId: number, codeId: number) {
@@ -981,28 +1092,81 @@ export async function recordReferralClick(tx: Transaction, companyId: number, co
   );
 }
 
+export interface ReferralEligibleLine {
+  itemId: number | null;
+  itemType: string | null;
+  grossAmount4: bigint;
+}
+
+/** D4-A: a line is eligible when its type or id is configured on the campaign. */
+export function isEligibleReferralLine(line: ReferralEligibleLine, terms: CampaignTerms): boolean {
+  const types = terms.eligibleItemTypes;
+  const ids = terms.eligibleItemIds;
+  if ((!types || types.length === 0) && (!ids || ids.length === 0)) return true; // no restriction configured
+  if (ids && line.itemId != null && ids.includes(line.itemId)) return true;
+  if (types && line.itemType && types.includes(line.itemType)) return true;
+  return false;
+}
+
+/** F1-A / D3-A: discount on eligible subtotal, before other discounts, capped. */
+export function computeReferralDiscount4(
+  eligibleSubtotal4: bigint,
+  type: 'percent' | 'fixed_amount',
+  value4: bigint,
+  cap4: bigint | null
+): bigint {
+  if (eligibleSubtotal4 <= 0n) return 0n;
+  let d = type === 'percent' ? divRoundBigInt(eligibleSubtotal4 * value4, 1000000n, 'HALF_EVEN') : value4;
+  if (d < 0n) d = 0n;
+  if (d > eligibleSubtotal4) d = eligibleSubtotal4;
+  if (cap4 != null && d > cap4) d = cap4;
+  return d;
+}
+
+/** F2-A / C1-B: reward on net eligible sales retained, capped. */
+export function computeReferrerReward4(
+  netEligible4: bigint,
+  type: 'fixed_credit' | 'percent_commission' | 'cash_payout',
+  value4: bigint,
+  cap4: bigint | null
+): bigint {
+  if (netEligible4 <= 0n) return 0n;
+  let r = type === 'percent_commission' ? divRoundBigInt(netEligible4 * value4, 1000000n, 'HALF_EVEN') : value4;
+  if (r < 0n) r = 0n;
+  if (cap4 != null && r > cap4) r = cap4;
+  return r;
+}
+
 export async function evaluateReferralForOrder(
   tx: Transaction,
   companyId: number,
   referralCode: string,
   orderDate: string,
-  grossSubtotal4: bigint
+  params: {
+    grossSubtotal4?: bigint;
+    eligibleLines?: ReferralEligibleLine[];
+    customerId?: number | null;
+    orderRef?: string | null;
+  } = {}
 ): Promise<{
   referralCodeId: number;
   programId: number;
   campaignId: number | null;
   code: string;
   referrerName: string;
+  referrerCustomerId: number | null;
   expenseAccountId: number | null;
   liabilityAccountId: number | null;
   refereeDiscount4: bigint;
   referrerReward4: bigint;
+  eligibleSubtotal4: bigint;
+  terms: CampaignTerms;
 }> {
   const res = await tx.query<any>(
-    `SELECT rc.*, rp.referrer_reward_type, rp.referrer_reward_value::text,
-            rp.referee_discount_type, rp.referee_discount_value::text,
-            rp.min_qualifying_spend::text, rp.is_active AS program_active,
-            rp.starts_at, rp.ends_at, rp.reward_expense_account_id, rp.reward_liability_account_id
+    `SELECT rc.*, rp.referrer_reward_type AS p_referrer_reward_type, rp.referrer_reward_value::text AS p_referrer_reward_value,
+            rp.referee_discount_type AS p_referee_discount_type, rp.referee_discount_value::text AS p_referee_discount_value,
+            rp.is_active AS program_active,
+            rp.reward_expense_account_id, rp.reward_liability_account_id
        FROM referral_codes rc
        JOIN referral_programs rp ON rp.company_id = rc.company_id AND rp.id = rc.program_id
       WHERE rc.company_id = $1 AND LOWER(rc.code) = LOWER($2)
@@ -1016,46 +1180,80 @@ export async function evaluateReferralForOrder(
   if (!r.is_active || !r.program_active) {
     throw new AccountingError(400, `Referral code "${r.code}" or its program is inactive`, 'REFERRAL_INACTIVE');
   }
-  const startsAt = r.starts_at ? String(r.starts_at).slice(0, 10) : null;
-  const endsAt = r.ends_at ? String(r.ends_at).slice(0, 10) : null;
-  if (startsAt && orderDate < startsAt) {
-    throw new AccountingError(400, `Referral program starts on ${startsAt}`);
+
+  // Campaign is authoritative (D-01-B). No fallback to program-level rates.
+  const terms = await resolveEffectiveTerms(tx, companyId, {
+    programId: Number(r.program_id),
+    campaignId: r.campaign_id ? Number(r.campaign_id) : null,
+  });
+  if (!terms) {
+    throw new AccountingError(409, 'No referral campaign is available', 'REFERRAL_NO_CAMPAIGN');
   }
-  if (endsAt && orderDate > endsAt) {
-    throw new AccountingError(400, `Referral program expired on ${endsAt}`);
+  if (terms.lifecycleStatus !== 'active') {
+    throw new AccountingError(400, `Referral campaign "${terms.name}" is not active`, 'REFERRAL_INACTIVE');
   }
-  const minSpend4 = parseDecimal4(r.min_qualifying_spend);
-  if (grossSubtotal4 < minSpend4) {
-    throw new AccountingError(
-      400,
-      `Referral code "${r.code}" requires minimum order ${formatDecimal4(minSpend4)}`
+  if (terms.startsAt && orderDate < terms.startsAt) {
+    throw new AccountingError(400, `Referral campaign starts on ${terms.startsAt}`, 'REFERRAL_NOT_STARTED');
+  }
+  if (terms.endsAt && orderDate > terms.endsAt) {
+    throw new AccountingError(400, `Referral campaign expired on ${terms.endsAt}`, 'REFERRAL_EXPIRED');
+  }
+
+  // Eligible lines only (D4-A). Fall back to gross subtotal when no lines given.
+  let eligibleSubtotal4: bigint;
+  if (params.eligibleLines) {
+    eligibleSubtotal4 = params.eligibleLines.reduce(
+      (sum, line) => (isEligibleReferralLine(line, terms) ? sum + line.grossAmount4 : sum),
+      0n
     );
+  } else {
+    eligibleSubtotal4 = params.grossSubtotal4 ?? 0n;
   }
 
-  const refDiscVal4 = parseDecimal4(r.referee_discount_value);
-  let refereeDiscount4 =
-    r.referee_discount_type === 'percent'
-      ? divRoundBigInt(grossSubtotal4 * refDiscVal4, 1000000n, 'HALF_EVEN')
-      : refDiscVal4;
-  if (refereeDiscount4 > grossSubtotal4) refereeDiscount4 = grossSubtotal4;
+  // C3-C: self-referral prevention.
+  if (params.customerId != null && r.referrer_customer_id != null && Number(r.referrer_customer_id) === Number(params.customerId)) {
+    throw new AccountingError(400, 'A customer cannot use their own referral code', 'REFERRAL_SELF_REFERRAL');
+  }
 
-  const netQualifying4 = grossSubtotal4 - refereeDiscount4;
-  const rewVal4 = parseDecimal4(r.referrer_reward_value);
-  const referrerReward4 =
-    r.referrer_reward_type === 'percent_commission'
-      ? divRoundBigInt(netQualifying4 * rewVal4, 1000000n, 'HALF_EVEN')
-      : rewVal4;
+  // First-order eligibility.
+  if (params.customerId != null) {
+    const firstOrder = await isFirstOrderCustomer(tx, companyId, Number(params.customerId), params.orderRef ?? null);
+    if (!firstOrder) {
+      throw new AccountingError(
+        409,
+        'Referred customer does not meet first-order eligibility',
+        'REFERRAL_FIRST_ORDER_NOT_MET'
+      );
+    }
+  }
+
+  const refereeDiscount4 = computeReferralDiscount4(
+    eligibleSubtotal4,
+    terms.refereeDiscountType,
+    terms.refereeDiscountValue4,
+    terms.maxRefereeDiscountPerOrder4
+  );
+  const netEligible4 = eligibleSubtotal4 - refereeDiscount4;
+  const referrerReward4 = computeReferrerReward4(
+    netEligible4,
+    terms.referrerRewardType,
+    terms.referrerRewardValue4,
+    terms.maxReferrerRewardPerOrder4
+  );
 
   return {
     referralCodeId: Number(r.id),
     programId: Number(r.program_id),
-    campaignId: r.campaign_id ? Number(r.campaign_id) : null,
+    campaignId: terms.campaignId,
     code: r.code,
     referrerName: r.referrer_name,
+    referrerCustomerId: r.referrer_customer_id != null ? Number(r.referrer_customer_id) : null,
     expenseAccountId: r.reward_expense_account_id ? Number(r.reward_expense_account_id) : null,
     liabilityAccountId: r.reward_liability_account_id ? Number(r.reward_liability_account_id) : null,
     refereeDiscount4,
     referrerReward4,
+    eligibleSubtotal4,
+    terms,
   };
 }
 
@@ -1079,84 +1277,120 @@ export async function accrueReferralEventAndJournal(
     reference: string;
     notes?: string | null;
     status?: 'pending' | 'approved';
+    method?: 'link' | 'code' | 'verbal';
+    termsSnapshot?: unknown;
+    referrerCustomerId?: number | null;
   }
 ) {
-  const smartAccts = await resolveSmartOpsAccounts(tx, companyId, actor);
-  const expAcctId = params.expenseAccountId || smartAccts.marketingExpense6450;
-  const liabAcctId = params.liabilityAccountId || smartAccts.referralPayable2150;
-
-  let accrualJournalId: number | null = null;
-  if (params.rewardAmount4 > 0n) {
-    const je = await postJournalEntry(tx, companyId, actor, {
-      txnDate: params.txnDate,
-      description: `Referral Reward Accrual — ${params.reference}`,
-      reference: params.reference,
-      sourceType: 'referral_reward',
-      sourceId: params.posOrderId ?? params.referralCodeId,      idempotencyKey: params.posOrderId != null
-      ? `ref-accrual-${companyId}-${params.posOrderId}`
-      : `ref-accrual-manual-${companyId}-${params.referralCodeId ?? 'unknown'}`,
-      lines: [
-        {
-          accountId: expAcctId,
-          debit: formatDecimal4(params.rewardAmount4),
-          credit: '0.0000',
-          description: `Referral expense accrued (${params.reference})`,
-        },
-        {
-          accountId: liabAcctId,
-          debit: '0.0000',
-          credit: formatDecimal4(params.rewardAmount4),
-          description: `Referral rewards payable (${params.reference})`,
-        },
-      ],
-    });
-    accrualJournalId = je.transaction.id;
+  // Idempotency: never create a second event for the same POS order.
+  if (params.posOrderId != null) {
+    const dup = await tx.query<{ id: number }>(
+      `SELECT id FROM referral_events WHERE company_id = $1 AND pos_order_id = $2 LIMIT 1`,
+      [companyId, params.posOrderId]
+    );
+    if (dup.rows.length > 0) return Number(dup.rows[0].id);
   }
 
+  // Resolve the referrer customer (code owner) for attribution.
+  let referrerCustomerId = params.referrerCustomerId ?? null;
+  if (referrerCustomerId == null && params.referralCodeId != null) {
+    const rc = await tx.query<{ referrer_customer_id: number | null }>(
+      `SELECT referrer_customer_id FROM referral_codes WHERE company_id = $1 AND id = $2 LIMIT 1`,
+      [companyId, params.referralCodeId]
+    );
+    referrerCustomerId = rc.rows[0]?.referrer_customer_id != null ? Number(rc.rows[0].referrer_customer_id) : null;
+  }
+
+  // First-valid attribution (link/code/verbal) — one shared code path.
+  let attributionId: number | null = null;
+  if (params.refereeCustomerId != null && referrerCustomerId != null) {
+    try {
+      const attr = await recordReferralAttribution(tx, companyId, actor, {
+        customerId: params.refereeCustomerId,
+        referrerCustomerId,
+        method: params.method ?? 'code',
+        referralCodeId: params.referralCodeId,
+        programId: params.programId,
+        campaignId: params.campaignId,
+        sourceContext: params.posOrderId != null ? 'pos_checkout' : 'manual',
+      });
+      attributionId = attr.id;
+    } catch (err: any) {
+      // First-valid already recorded → reuse the existing active attribution.
+      const existing = await tx.query<{ id: number }>(
+        `SELECT id FROM referral_attributions WHERE company_id = $1 AND customer_id = $2 AND status = 'active' LIMIT 1`,
+        [companyId, params.refereeCustomerId]
+      );
+      if (existing.rows.length === 0 || err?.code !== 'REFERRAL_ALREADY_ATTRIBUTED') throw err;
+      attributionId = Number(existing.rows[0].id);
+    }
+  }
+
+  // Reward is recognised only at qualification (F4-A): create a pending event
+  // with the applicable terms snapshot. No accrual journal is posted here.
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO referral_events (
-       company_id, referral_code_id, program_id, campaign_id, referee_customer_id,
+       company_id, referral_code_id, program_id, campaign_id, attribution_id, referee_customer_id,
        pos_order_id, invoice_id, qualifying_amount, referee_discount, reward_amount,
-       status, accrual_journal_txn_id, notes
+       status, notes, terms_snapshot
      ) VALUES (
-       $1, $2, $3, $4, $5,
-       $6, $7, $8::NUMERIC(19,4), $9::NUMERIC(19,4), $10::NUMERIC(19,4),
-       $11, $12, $13
+       $1, $2, $3, $4, $5, $6,
+       $7, $8, $9::NUMERIC(19,4), $10::NUMERIC(19,4), $11::NUMERIC(19,4),
+       $12, $13, $14::JSONB
      ) RETURNING id`,
     [
       companyId,
       params.referralCodeId,
       params.programId,
       params.campaignId,
+      attributionId,
       params.refereeCustomerId,
       params.posOrderId,
       params.invoiceId,
       formatDecimal4(params.qualifyingAmount4),
       formatDecimal4(params.refereeDiscount4),
       formatDecimal4(params.rewardAmount4),
-      params.status || 'approved',
-      accrualJournalId,
+      params.status || 'pending',
       params.notes || null,
+      params.termsSnapshot ? JSON.stringify(params.termsSnapshot) : null,
     ]
   );
+  const eventId = Number(ins.rows[0].id);
+
+  // Reserve estimated reward exposure against the campaign budget (U3-B).
+  let reservationId: number | null = null;
+  if (params.campaignId != null && params.rewardAmount4 > 0n) {
+    const orderRef =
+      params.posOrderId != null
+        ? `pos-${params.posOrderId}`
+        : params.invoiceId != null
+          ? `inv-${params.invoiceId}`
+          : `evt-${eventId}`;
+    const reservation = await reserveBudget(tx, companyId, {
+      campaignId: params.campaignId,
+      attributionId,
+      orderRef,
+      amount: formatDecimal4(params.rewardAmount4),
+    });
+    reservationId = reservation.id;
+    await tx.query(`UPDATE referral_events SET reservation_id = $3 WHERE company_id = $1 AND id = $2`, [
+      companyId,
+      eventId,
+      reservationId,
+    ]);
+  }
 
   await tx.query(
     `UPDATE referral_codes
         SET conversions_count = conversions_count + 1,
-            clicks_count = GREATEST(clicks_count, conversions_count + 1),
             total_referred_revenue = total_referred_revenue + $3::NUMERIC(19,4),
             total_rewards_earned = total_rewards_earned + $4::NUMERIC(19,4),
             reward_balance = reward_balance + $4::NUMERIC(19,4)
       WHERE company_id = $1 AND id = $2`,
-    [
-      companyId,
-      params.referralCodeId,
-      formatDecimal4(params.qualifyingAmount4),
-      formatDecimal4(params.rewardAmount4),
-    ]
+    [companyId, params.referralCodeId, formatDecimal4(params.qualifyingAmount4), formatDecimal4(params.rewardAmount4)]
   );
 
-  return Number(ins.rows[0].id);
+  return eventId;
 }
 
 export async function recordManualReferralConversion(
@@ -1188,20 +1422,24 @@ export async function recordManualReferralConversion(
   const qual4 = parseDecimal4(input.qualifyingAmount);
   if (qual4 <= 0n) throw new AccountingError(400, 'Qualifying amount must be greater than zero');
 
+  // Campaign is authoritative (D-01-B): resolve effective terms for the reward.
+  const terms = await resolveEffectiveTerms(tx, companyId, {
+    programId: Number(rc.program_id),
+    campaignId: rc.campaign_id ? Number(rc.campaign_id) : null,
+  });
+  if (!terms) throw new AccountingError(409, 'No referral campaign is available', 'REFERRAL_NO_CAMPAIGN');
+
   let reward4: bigint;
   if (input.rewardAmount !== undefined && input.rewardAmount !== null && input.rewardAmount !== '') {
     reward4 = parseDecimal4(input.rewardAmount);
   } else {
-    const val4 = parseDecimal4(rc.referrer_reward_value);
-    reward4 = rc.referrer_reward_type === 'percent_commission'
-      ? divRoundBigInt(qual4 * val4, 1000000n, 'HALF_EVEN')
-      : val4;
+    reward4 = computeReferrerReward4(qual4, terms.referrerRewardType, terms.referrerRewardValue4, terms.maxReferrerRewardPerOrder4);
   }
 
   const eventId = await accrueReferralEventAndJournal(tx, companyId, actor, {
     referralCodeId: Number(rc.id),
     programId: Number(rc.program_id),
-    campaignId: rc.campaign_id ? Number(rc.campaign_id) : null,
+    campaignId: terms.campaignId,
     refereeCustomerId: input.refereeCustomerId ? Number(input.refereeCustomerId) : null,
     posOrderId: null,
     invoiceId: null,
@@ -1213,7 +1451,9 @@ export async function recordManualReferralConversion(
     txnDate,
     reference: rc.code,
     notes: input.notes?.trim() || 'Manual referral attribution',
-    status: 'approved',
+    status: 'pending',
+    method: 'code',
+    termsSnapshot: serializeTerms(terms),
   });
 
   const ws = await listReferralWorkspace(tx, companyId);
@@ -1251,6 +1491,14 @@ export async function payoutReferralReward(
   }
   if (ev.status === 'voided') {
     throw new AccountingError(409, 'Voided referral reward cannot be paid out');
+  }
+  // Attributed (link/code/verbal) rewards use the wallet qualification flow.
+  if (ev.attribution_id != null) {
+    throw new AccountingError(
+      409,
+      'Attributed referral rewards must be qualified and credited through the customer wallet flow',
+      'REFERRAL_USE_WALLET_FLOW'
+    );
   }
 
   const reward4 = parseDecimal4(ev.reward_amount);

@@ -36,6 +36,12 @@ export const NewCustomerModal: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Verbal referral capture (optional).
+  const [referredByCustomerId, setReferredByCustomerId] = useState<number | null>(null);
+  const [referrerSearch, setReferrerSearch] = useState('');
+  const [customerOptions, setCustomerOptions] = useState<any[]>([]);
+  const [showReferrer, setShowReferrer] = useState(false);
+
   const reset = () => {
     setCompanyName('');
     setName('');
@@ -51,13 +57,30 @@ export const NewCustomerModal: React.FC = () => {
     setOpeningBalanceDate(today());
     setCurrency(companyCurrency);
     setErrorMsg(null);
+    setReferredByCustomerId(null);
+    setReferrerSearch('');
+    setShowReferrer(false);
   };
 
   useEffect(() => {
-    if (isNewCustomerOpen) reset();
+    if (isNewCustomerOpen) {
+      reset();
+      commercialApi
+        .listCustomers()
+        .then(list => setCustomerOptions(list))
+        .catch(() => setCustomerOptions([]));
+    }
     // Reset only when the modal transitions open; values are intentionally cleared.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNewCustomerOpen]);
+
+  const referrerMatches = customerOptions
+    .filter(c => {
+      if (!referrerSearch.trim()) return true;
+      const hay = `${c.companyName || ''} ${c.name || ''} ${(c as any).customerCode || ''}`.toLowerCase();
+      return hay.includes(referrerSearch.trim().toLowerCase());
+    })
+    .slice(0, 8);
 
   if (!isNewCustomerOpen) return null;
 
@@ -90,6 +113,7 @@ export const NewCustomerModal: React.FC = () => {
         openingBalance,
         openingBalanceDate,
         currencyCode: currency,
+        referredByCustomerId,
       } as any);
 
       triggerShortcutNotice(`Customer ${created.companyName} saved to PostgreSQL`);
@@ -346,6 +370,73 @@ export const NewCustomerModal: React.FC = () => {
               placeholder="Customer specifics, tax exemption certificate info, delivery instructions…"
               className="app-input resize-none"
             />
+          </div>
+
+          <div className="mt-3.5">
+            <label className="mb-1 block text-[12px] text-slate-500 dark:text-slate-400">
+              Referred By <span className="text-slate-400">(Existing Customer)</span>
+            </label>
+            <div className="relative">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={referrerSearch}
+                  onChange={e => {
+                    setReferrerSearch(e.target.value);
+                    setShowReferrer(true);
+                    if (referredByCustomerId != null) setReferredByCustomerId(null);
+                  }}
+                  onFocus={() => setShowReferrer(true)}
+                  placeholder="Search by name or customer code (optional)"
+                  className="app-input"
+                />
+                {referredByCustomerId != null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReferredByCustomerId(null);
+                      setReferrerSearch('');
+                      setShowReferrer(false);
+                    }}
+                    className="btn btn-secondary !px-2 !py-2"
+                    aria-label="Clear referrer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              {showReferrer && (
+                <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-slate-800">
+                  {referrerMatches.length === 0 ? (
+                    <div className="px-2 py-2 text-[12px] text-slate-400">No customers found</div>
+                  ) : (
+                    referrerMatches.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setReferredByCustomerId(c.id);
+                          setReferrerSearch(c.companyName || c.name);
+                          setShowReferrer(false);
+                        }}
+                        className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-slate-100 dark:hover:bg-white/5 ${
+                          referredByCustomerId === c.id ? 'bg-brand-50 dark:bg-brand-500/10' : ''
+                        }`}
+                      >
+                        <span className="truncate text-slate-700 dark:text-slate-200">{c.companyName || c.name}</span>
+                        <span className="ml-2 shrink-0 font-mono text-[10px] text-slate-400">
+                          {(c as any).customerCode || `#${c.id}`}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              Optional verbal referral. Recorded as acquisition method <span className="font-semibold">verbal</span> and
+              attributed to the selected existing customer.
+            </p>
           </div>
 
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-white/[0.03]">
