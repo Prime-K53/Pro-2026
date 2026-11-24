@@ -35,6 +35,9 @@ import { FinanceControlsView } from './components/views/FinanceControlsView';
 import { AiAgentView } from './components/views/AiAgentView';
 import { SettingsView } from './components/views/SettingsView';
 import { AccessControlView } from './components/views/AccessControlView';
+import { FixedAssetsView } from './components/views/FixedAssetsView';
+import { InventoryOperationsView } from './components/views/InventoryOperationsView';
+import { ProductionScheduleView } from './components/views/ProductionScheduleView';
 import { canAccessView, VIEW_REQUIRED_PERMISSION } from './config/viewPermissions';
 
 // Route-level code splitting for the heaviest views. These are only needed when
@@ -229,14 +232,20 @@ const AppContent: React.FC = () => {
         return <VendorsView />;
       case 'banking':
         return <BankingRegisterView />;
+      case 'fixed-assets':
+        return <FixedAssetsView />;
       case 'reconciliation':
         return <BankReconciliationView />;
       case 'inventory':
         return <InventoryView />;
+      case 'inventory-operations':
+        return <InventoryOperationsView />;
       case 'quick-print':
         return <QuickPrintView />;
       case 'examinations':
         return <ExaminationView />;
+      case 'production-schedule':
+        return <ProductionScheduleView />;
       case 'contracts':
         return <PrintingContractsView />;
       case 'payroll':

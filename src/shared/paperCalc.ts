@@ -1252,6 +1252,8 @@ export async function lookupPaperStockFromDb(
     gsm: number | null;
     grain_direction: 'long' | 'short' | null;
     sheets_per_ream: number | null;
+    measured_caliper_mm: string | null;
+    sheets_per_pack: string | null;
   }>(
     `SELECT ii.id AS item_id,
             ii.sku,
@@ -1268,7 +1270,9 @@ export async function lookupPaperStockFromDb(
             ps.height_mm::text,
             ps.gsm,
             ps.grain_direction,
-            ps.sheets_per_ream
+            ps.sheets_per_ream,
+            ps.measured_caliper_mm::text,
+            ps.sheets_per_pack::text
        FROM inventory_items ii
        LEFT JOIN paper_specifications ps
          ON ps.company_id = ii.company_id AND ps.id = ii.paper_spec_id AND ps.is_active = TRUE
@@ -1295,13 +1299,13 @@ export async function lookupPaperStockFromDb(
     widthMm: row.width_mm !== null ? Number(row.width_mm) : null,
     heightMm: row.height_mm !== null ? Number(row.height_mm) : null,
     gsm: row.gsm !== null ? Number(row.gsm) : null,
-    measuredCaliperMm: null, // Not stored in paper_specifications SQL schema; must be supplied if spine calculation is run
+    measuredCaliperMm: row.measured_caliper_mm !== null ? Number(row.measured_caliper_mm) : null,
     grainDirection: row.grain_direction,
     purchaseUnit: row.purchase_unit,
     usageUnit: row.usage_unit,
     conversionFactor: Number(row.conversion_factor),
     sheetsPerReam: row.sheets_per_ream !== null ? Number(row.sheets_per_ream) : null,
-    sheetsPerPack: null, // Not stored separately in paper_specifications SQL schema
+    sheetsPerPack: row.sheets_per_pack !== null ? Number(row.sheets_per_pack) : null,
     kgPerSheet: null,
     purchaseUnitCost: row.unit_cost,
     onHandPurchaseUnits: row.on_hand,

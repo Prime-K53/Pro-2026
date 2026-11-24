@@ -1,6 +1,6 @@
 # Phase 9 — End-to-End Business Workflow Dependency Map & Test Report
 
-- **Executed At:** 2026-11-24T04:04:06.823Z
+- **Executed At:** 2026-11-24T04:30:19.109Z
 - **Summary:** **7/7 PASSED**, 0 FAILED
 
 ## 1. Module & GL Account Dependency Map
@@ -38,13 +38,13 @@ Cash, Banking & Statements (/api/payments, /api/banking/deposits, /reconciliatio
 
 | Status | Workflow | Scenario | Duration | Details |
 | :--- | :--- | :--- | ---: | :--- |
-| PASS | Workflow 2: Procurement -> Inventory | Demand Requisition -> Approve -> PO -> Goods Receipt -> Supplier Bill -> Payment -> GL | 860ms | Demand Req -> Approve -> PO -> Goods Receipt (1200/2055) -> Supplier Bill (clears 2055) -> Bill Payment verified |
-| PASS | Workflow 2B: Pre-Billed PO Flow | PO -> Bill (1210 In Transit) -> Partial GRs -> Over-Receipt Block (409) -> Avg Cost Update | 455ms | Pre-billed PO -> 1210 Purchases In Transit -> Partial GRs -> Over-Receipt 409 rollback -> Exact Weighted Avg Cost (153.75/Ream) verified |
-| PASS | Workflow 3: Material Consumption & Valuation | Reserve -> Oversell Block -> Issue to WIP (Idempotent) -> Consumption/Waste -> Return Unused -> Valuation Reconciliation | 1144ms | Material reservation, unreserved stock lock (409), stationery oversell block, idempotent issue, waste tracking, unused return to 1200, and valuation check verified |
-| PASS | Workflows 1 & 4: Sales -> Production -> Profitability | Quotation -> Approve -> Job -> Budget -> Partial Ops/Finishing/QC/Delivery -> Duplicate-Safe Invoices -> Real Profit | 1317ms | Quotation gate, Job costing, Partial Press/Finishing/QC/Delivery, Duplicate Invoice 409 guard, 100% WIP COGS relief, and Profit=3076.25 verified |
-| PASS | Exceptions: Controlled Reprint & Cancellation | Controlled Reprint Erodes Order Profit; Cancelled Job Returns Unused Material & Writes Off Sunk WIP to 5100 | 734ms | Controlled reprint margin erosion & job cancellation (material return + 80 sunk WIP -> 5100 write-off) verified |
-| PASS | Workflow 5: Financial Reconciliation | AR Payments -> 1050 Undeposited Funds -> Single Batch Deposit -> Double-Deposit Block (409) -> Bank Reconciliation Zero-Diff -> FS | 544ms | Undeposited Funds (1050) -> Batch Deposit (3500) -> Double-Deposit 409 lock -> Bank Recon Completed -> Balanced TB/BS/P&L verified |
-| PASS | Cross-Cutting: Audit & Multi-Company Isolation | Verify Audit Trail Attribution & Complete Tenant Isolation on Company B Switch | 159ms | All 10+ workflow audit log actions verified + Company B cross-tenant isolation confirmed |
+| PASS | Workflow 2: Procurement -> Inventory | Demand Requisition -> Approve -> PO -> Goods Receipt -> Supplier Bill -> Payment -> GL | 852ms | Demand Req -> Approve -> PO -> Goods Receipt (1200/2055) -> Supplier Bill (clears 2055) -> Bill Payment verified |
+| PASS | Workflow 2B: Pre-Billed PO Flow | PO -> Bill (1210 In Transit) -> Partial GRs -> Over-Receipt Block (409) -> Avg Cost Update | 480ms | Pre-billed PO -> 1210 Purchases In Transit -> Partial GRs -> Over-Receipt 409 rollback -> Exact Weighted Avg Cost (153.75/Ream) verified |
+| PASS | Workflow 3: Material Consumption & Valuation | Reserve -> Oversell Block -> Issue to WIP (Idempotent) -> Consumption/Waste -> Return Unused -> Valuation Reconciliation | 1176ms | Material reservation, unreserved stock lock (409), stationery oversell block, idempotent issue, waste tracking, unused return to 1200, and valuation check verified |
+| PASS | Workflows 1 & 4: Sales -> Production -> Profitability | Quotation -> Approve -> Job -> Budget -> Partial Ops/Finishing/QC/Delivery -> Duplicate-Safe Invoices -> Real Profit | 1362ms | Quotation gate, Job costing, Partial Press/Finishing/QC/Delivery, Duplicate Invoice 409 guard, 100% WIP COGS relief, and Profit=3076.25 verified |
+| PASS | Exceptions: Controlled Reprint & Cancellation | Controlled Reprint Erodes Order Profit; Cancelled Job Returns Unused Material & Writes Off Sunk WIP to 5100 | 736ms | Controlled reprint margin erosion & job cancellation (material return + 80 sunk WIP -> 5100 write-off) verified |
+| PASS | Workflow 5: Financial Reconciliation | AR Payments -> 1050 Undeposited Funds -> Single Batch Deposit -> Double-Deposit Block (409) -> Bank Reconciliation Zero-Diff -> FS | 558ms | Undeposited Funds (1050) -> Batch Deposit (3500) -> Double-Deposit 409 lock -> Bank Recon Completed -> Balanced TB/BS/P&L verified |
+| PASS | Cross-Cutting: Audit & Multi-Company Isolation | Verify Audit Trail Attribution & Complete Tenant Isolation on Company B Switch | 161ms | All 10+ workflow audit log actions verified + Company B cross-tenant isolation confirmed |
 
 ## 3. Verified Integrity Controls
 

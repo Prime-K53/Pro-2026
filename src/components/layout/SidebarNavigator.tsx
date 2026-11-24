@@ -6,11 +6,13 @@ import { canAccessView } from '../../config/viewPermissions';
 import {
   GitMerge,
   LayoutDashboard,
+  LayoutGrid,
   FileText,
   Users,
   Building2,
   Receipt,
   Landmark,
+  Archive,
   Scale,
   Package,
   BadgeDollarSign,
@@ -171,6 +173,7 @@ export const SidebarNavigator: React.FC = () => {
       items: [
         { id: 'banking', label: 'Check Register', icon: Landmark },
         { id: 'reconciliation', label: 'Bank Reconciliation', icon: Scale },
+        { id: 'fixed-assets', label: 'Fixed Assets', icon: Archive },
         { id: 'accounts', label: 'Chart of Accounts', icon: BookOpen },
       ],
     },
@@ -183,6 +186,11 @@ export const SidebarNavigator: React.FC = () => {
           icon: Calculator,
           count: quickPrintJobs.length > 0 ? quickPrintJobs.length : undefined,
           countTone: 'text-blue-600 dark:text-blue-400',
+        },
+        {
+          id: 'production-schedule',
+          label: 'Production Schedule',
+          icon: LayoutGrid,
         },
         {
           id: 'examinations',
@@ -204,6 +212,11 @@ export const SidebarNavigator: React.FC = () => {
           icon: Package,
           count: lowStockCount > 0 ? `${lowStockCount} low` : undefined,
           countTone: 'text-rose-600 dark:text-rose-400',
+        },
+        {
+          id: 'inventory-operations',
+          label: 'Inventory Operations',
+          icon: Package,
         },
       ],
     },

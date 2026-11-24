@@ -101,8 +101,9 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           const ps = b.paperSpec;
           const psIns = await tx.query<{ id: number }>(
             `INSERT INTO paper_specifications (
-               company_id, spec_code, name, size_code, width_mm, height_mm, gsm, finish, grain_direction, sheets_per_ream
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+               company_id, spec_code, name, size_code, width_mm, height_mm, gsm, finish, grain_direction,
+               sheets_per_ream, measured_caliper_mm, sheets_per_pack
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
             [
               auth.companyId,
               String(ps.specCode || `${sku}-SPEC`),
@@ -114,6 +115,8 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
               ps.finish || 'uncoated',
               ps.grainDirection || 'long',
               Number(ps.sheetsPerReam || b.conversionFactor || 500),
+              ps.measuredCaliperMm != null ? Number(ps.measuredCaliperMm) : null,
+              ps.sheetsPerPack != null ? Number(ps.sheetsPerPack) : null,
             ]
           );
           paperSpecId = Number(psIns.rows[0].id);
@@ -154,8 +157,9 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           const ms = b.materialSpec;
           await tx.query(
             `INSERT INTO material_specifications (
-               company_id, inventory_item_id, material_category, yield_per_purchase_unit, coverage_basis_pct, color_channel
-             ) VALUES ($1, $2, $3, $4, $5, $6)`,
+               company_id, inventory_item_id, material_category, yield_per_purchase_unit, coverage_basis_pct,
+               color_channel, cartridge_toner_mass_grams
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
             [
               auth.companyId,
               Number(created.id),
@@ -163,6 +167,7 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
               ms.yieldPerPurchaseUnit ?? null,
               ms.coverageBasisPct ?? 5,
               ms.colorChannel || 'K',
+              ms.cartridgeTonerMassGrams != null ? Number(ms.cartridgeTonerMassGrams) : null,
             ]
           );
         }

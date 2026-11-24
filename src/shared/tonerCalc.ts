@@ -889,6 +889,7 @@ export async function lookupTonerAndMachineFromDb(
       yield_per_purchase_unit: string | null;
       coverage_basis_pct: string | null;
       color_channel: string | null;
+      cartridge_toner_mass_grams: string | null;
     }>(
       `SELECT ii.id,
               ii.sku,
@@ -898,7 +899,8 @@ export async function lookupTonerAndMachineFromDb(
               ii.conversion_factor::text,
               ms.yield_per_purchase_unit::text,
               ms.coverage_basis_pct::text,
-              ms.color_channel
+              ms.color_channel,
+              ms.cartridge_toner_mass_grams::text
          FROM inventory_items ii
          LEFT JOIN material_specifications ms
            ON ms.company_id = ii.company_id AND ms.inventory_item_id = ii.id
@@ -928,7 +930,8 @@ export async function lookupTonerAndMachineFromDb(
       channel: ch,
       isActive: tRow.is_active,
       cartridgeCost: Number(tRow.unit_cost),
-      cartridgeTonerMassGrams: null, // Not stored in material_specifications SQL schema
+      cartridgeTonerMassGrams:
+        tRow.cartridge_toner_mass_grams !== null ? Number(tRow.cartridge_toner_mass_grams) : null,
       ratedYieldImpressions: ratedYield,
       ratedCoveragePct: tRow.coverage_basis_pct !== null ? Number(tRow.coverage_basis_pct) : null,
       calibration: null, // No machine/toner calibration log table in SQL schema

@@ -1,21 +1,21 @@
 # Phase 5 — Commercial & Financial Modules Automated Test Execution Report
 
-- **Execution Timestamp (UTC):** 2026-11-24T03:52:54.216Z
+- **Execution Timestamp (UTC):** 2026-11-24T04:24:02.276Z
 - **Runtime Stack:** Express API + PostgreSQL (PGlite WASM) RLS + Atomic Phase 4 `accountingEngine.ts` + Exact `BigInt` / `NUMERIC(19,4)` Ledger
-- **Result Summary:** **8 / 8 tests passed** (9393 ms total)
+- **Result Summary:** **8 / 8 tests passed** (4498 ms total)
 
 ## Test Matrix Results
 
 | # | Suite | Test Case | Status | Duration | Verification Notes |
 |---|---|---|---|---|---|
-| 1 | Suite 1: Sales & AR | Customer + Reseller Permit, Raw Material invoice block, Estimate #824 redaction, Convert to Invoice + Perpetual Stock & Void | PASS | 1354 ms | Estimate #824 redaction, Convert->Invoice perpetual stock deduction (5 boxes), and Void stock/GL restoration verified |
-| 2 | Suite 1: Sales & AR | Invoices, Sales Receipt (bank deposit), Credit Limit guard, Multi-Invoice Payment + Overpayment & Credit Memo | PASS | 1416 ms | Multi-invoice payment + overpayment (1500), credit memo apply (116), reseller 0% VAT sales receipt, and credit limit guard (409) verified |
-| 3 | Suite 1: Sales & AR | Customer Statement, AR Aging, Recurring Invoices (idempotent run-due), Reminders & Email Log | PASS | 816 ms | Statements, AR Aging, Recurring Invoices (run-due idempotency), Reminders/Email Log, and Payment Void verified |
-| 4 | Suite 2: Purchasing & AP | Vendor, PO Partial & Complete Receive -> Bill, Conversion Factor (Ream -> 500 Sheets) + Use Tax, Duplicate Bill (409), Void Bill | PASS | 1159 ms | PO partial/complete receive, 1:500 unit conversion, use tax accrual, duplicate bill 409 guard, and void bill stock reversal verified |
-| 5 | Suite 2: Purchasing & AP | Bill Payment w/ Auto Check #, Vendor Credit Apply, Supplier Statement, AP Aging & Void Bill Payment | PASS | 862 ms | Bill Payment check#, Vendor Credit apply, Supplier Statement, AP Aging & Bill Payment void verified |
-| 6 | Suite 3: Banking & Recon | Checks & Print Queue, Split Deposit, Inter-Account Transfer, CSV/OFX Import Dedup & Rules, Recon Zero-Diff Lock & Reversal | PASS | 1892 ms | Checks, Split Deposits, Transfers, Rule-matched CSV/OFX FITID deduplication, Zero-Diff Reconciliation Lock (409) & Audited Reversal verified |
-| 7 | Suite 4: FX, Budgets, Tax & Reports | USD Invoice & Payment Realized FX Gain (4900), USD Bill & Payment FX Loss (6900), Budgets vs Actual, Tax Summary, Saved Reports & Analytics | PASS | 1486 ms | USD FX Gain (150 -> 4900) & FX Loss (150 -> 6900), Budgets vs Actual, Tax Summary/Mappings, Saved Reports & Analytics verified |
-| 8 | Suite 4: RBAC & Isolation | ProductionManager blocked from financial mutations (403); Company B commercial data 100% isolated from Company A | PASS | 408 ms | RBAC 403 guards and Company B multi-tenant commercial isolation verified |
+| 1 | Suite 1: Sales & AR | Customer + Reseller Permit, Raw Material invoice block, Estimate #824 redaction, Convert to Invoice + Perpetual Stock & Void | PASS | 586 ms | Estimate #824 redaction, Convert->Invoice perpetual stock deduction (5 boxes), and Void stock/GL restoration verified |
+| 2 | Suite 1: Sales & AR | Invoices, Sales Receipt (bank deposit), Credit Limit guard, Multi-Invoice Payment + Overpayment & Credit Memo | PASS | 642 ms | Multi-invoice payment + overpayment (1500), credit memo apply (116), reseller 0% VAT sales receipt, and credit limit guard (409) verified |
+| 3 | Suite 1: Sales & AR | Customer Statement, AR Aging, Recurring Invoices (idempotent run-due), Reminders & Email Log | PASS | 385 ms | Statements, AR Aging, Recurring Invoices (run-due idempotency), Reminders/Email Log, and Payment Void verified |
+| 4 | Suite 2: Purchasing & AP | Vendor, PO Partial & Complete Receive -> Bill, Conversion Factor (Ream -> 500 Sheets) + Use Tax, Duplicate Bill (409), Void Bill | PASS | 576 ms | PO partial/complete receive, 1:500 unit conversion, use tax accrual, duplicate bill 409 guard, and void bill stock reversal verified |
+| 5 | Suite 2: Purchasing & AP | Bill Payment w/ Auto Check #, Vendor Credit Apply, Supplier Statement, AP Aging & Void Bill Payment | PASS | 439 ms | Bill Payment check#, Vendor Credit apply, Supplier Statement, AP Aging & Bill Payment void verified |
+| 6 | Suite 3: Banking & Recon | Checks & Print Queue, Split Deposit, Inter-Account Transfer, CSV/OFX Import Dedup & Rules, Recon Zero-Diff Lock & Reversal | PASS | 815 ms | Checks, Split Deposits, Transfers, Rule-matched CSV/OFX FITID deduplication, Zero-Diff Reconciliation Lock (409) & Audited Reversal verified |
+| 7 | Suite 4: FX, Budgets, Tax & Reports | USD Invoice & Payment Realized FX Gain (4900), USD Bill & Payment FX Loss (6900), Budgets vs Actual, Tax Summary, Saved Reports & Analytics | PASS | 829 ms | USD FX Gain (150 -> 4900) & FX Loss (150 -> 6900), Budgets vs Actual, Tax Summary/Mappings, Saved Reports & Analytics verified |
+| 8 | Suite 4: RBAC & Isolation | ProductionManager blocked from financial mutations (403); Company B commercial data 100% isolated from Company A | PASS | 226 ms | RBAC 403 guards and Company B multi-tenant commercial isolation verified |
 
 ## Verified Phase 5 Acceptance Criteria
 
