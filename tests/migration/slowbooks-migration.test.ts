@@ -32,6 +32,10 @@ function makeConfig(tmpDir: string): ServerConfig {
     cookieName: 'pms_session',
     isProduction: false,
     twilioAuthToken: null,
+    twilioAccountSid: null,
+    twilioFromNumber: null,
+    twilioMessagingServiceSid: null,
+    twilioWhatsAppFrom: null,
   };
 }
 

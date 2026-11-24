@@ -24,7 +24,7 @@ import type {
   ContractAssessmentMilestone,
   PrintingContract,
 } from './accounting.ts';
-import { formatDecimal4, parseDecimal4 } from '../server/lib/decimal.ts';
+import { formatDecimal4, parseDecimal4 } from '../shared/decimal.ts';
 import type { Money } from './money.ts';
 import { moneyFromString } from './money.ts';
 

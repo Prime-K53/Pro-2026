@@ -1638,6 +1638,7 @@ export async function voidInvoice(
   if (inv.journal_txn_id) {
     const rev = await reverseJournalEntry(tx, companyId, actor, Number(inv.journal_txn_id), {
       reason: reason || `Void ${inv.is_sales_receipt ? 'Sales Receipt' : 'Invoice'} ${inv.invoice_number}`,
+      idempotencyKey: `void-invoice-${inv.journal_txn_id}`,
     });
     reversalJournalId = rev.reversal.id;
   }
@@ -2282,6 +2283,18 @@ export async function applyUnappliedPaymentToInvoice(
       ? requested4
       : divRoundBigInt(requested4 * 1000000n, invRate6 > 0n ? invRate6 : 1000000n);
 
+  // Route-level idempotency: a retried allocation of the same payment to the same
+  // invoice for the same amount must not be applied twice.
+  const idemKey = `apply-pmt-${paymentId}-inv-${invoiceId}-amt-${formatDecimal4(requested4)}`;
+  const idem = await checkRouteIdempotency<any>(tx, companyId, 'payment_apply', idemKey, {
+    paymentId,
+    invoiceId,
+    amount: formatDecimal4(requested4),
+  });
+  if (idem.hit) {
+    return idem.response;
+  }
+
   await tx.query(
     `INSERT INTO payment_allocations (company_id, payment_id, invoice_id, amount, from_remainder)
      VALUES ($1, $2, $3, $4::NUMERIC(19,4), TRUE)`,
@@ -2329,7 +2342,7 @@ export async function applyUnappliedPaymentToInvoice(
     },
   });
 
-  return {
+  const result = {
     paymentId,
     paymentNumber: payment.payment_number,
     invoiceId,
@@ -2339,6 +2352,10 @@ export async function applyUnappliedPaymentToInvoice(
     remainingUnapplied: toMoneyNumber(unapplied4 - requested4),
     invoiceStatus: nextBalance4 === 0n ? 'paid' : 'partial',
   };
+  await saveRouteIdempotency(
+    tx, companyId, 'payment_apply', idemKey, idem.payloadHash, 200, result, actor.userId
+  );
+  return result;
 }
 
 export async function voidCustomerPayment(
@@ -2367,6 +2384,7 @@ export async function voidCustomerPayment(
   if (p.journal_txn_id) {
     const rev = await reverseJournalEntry(tx, companyId, actor, Number(p.journal_txn_id), {
       reason: reason || `Void customer payment ${p.payment_number}`,
+      idempotencyKey: `void-pmt-${p.journal_txn_id}`,
     });
     reversalJournalId = rev.reversal.id;
     await tx.query(
@@ -2678,6 +2696,20 @@ export async function applyCreditMemoToInvoice(
   }
 
   const appliedDate = input.appliedDate ? assertIsoDate(input.appliedDate, 'appliedDate') : todayIsoDate();
+
+  // Route-level idempotency: a retried submission (double-click / network replay)
+  // with the same credit memo, invoice and amount must not apply the credit twice.
+  const idemKey = `apply-cm-${creditMemoId}-inv-${inv.id}-amt-${formatDecimal4(apply4)}`;
+  const idem = await checkRouteIdempotency<any>(tx, companyId, 'credit_memo_apply', idemKey, {
+    creditMemoId,
+    invoiceId: inv.id,
+    amount: formatDecimal4(apply4),
+    appliedDate,
+  });
+  if (idem.hit) {
+    return idem.response;
+  }
+
   await tx.query(
     `INSERT INTO credit_applications (company_id, credit_memo_id, invoice_id, amount, applied_date)
      VALUES ($1, $2, $3, $4::NUMERIC(19,4), $5::DATE)`,
@@ -2723,7 +2755,11 @@ export async function applyCreditMemoToInvoice(
   });
 
   const list = await listCreditMemos(tx, companyId, Number(cm.customer_id));
-  return list.find(c => c.id === creditMemoId)!;
+  const result = list.find(c => c.id === creditMemoId)!;
+  await saveRouteIdempotency(
+    tx, companyId, 'credit_memo_apply', idemKey, idem.payloadHash, 200, result, actor.userId
+  );
+  return result;
 }
 
 export async function voidCreditMemo(
@@ -2757,6 +2793,7 @@ export async function voidCreditMemo(
   if (cm.journal_txn_id) {
     const rev = await reverseJournalEntry(tx, companyId, actor, Number(cm.journal_txn_id), {
       reason: reason || `Void credit memo ${cm.credit_number}`,
+      idempotencyKey: `void-cm-${cm.journal_txn_id}`,
     });
     reversalJournalId = rev.reversal.id;
   }

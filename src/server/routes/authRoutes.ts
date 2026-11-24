@@ -472,6 +472,11 @@ export function createAuthRouter(db: ServerDatabase): Router {
       await tx.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [u.id]);
       await recordLoginAttempt(tx, { username: u.username, ipAddress: ip, userAgent: ua, success: true });
 
+      // A new session row is issued per login (session ID rotation). The
+      // session_version is only bumped on security events (password change,
+      // account deactivation) to invalidate all sessions at once — not on
+      // routine login, so multiple concurrent client sessions for the same
+      // user remain valid until an explicit security change occurs.
       const sessionId = await issueServerSession(tx, db, req, res, {
         userId: Number(u.id),
         companyId: Number(m.company_id),
@@ -488,7 +493,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
         action: 'LOGIN_SUCCESS',
         tableName: 'auth_sessions',
         recordId: sessionId,
-        newValues: { role: m.role, ipAddress: ip },
+        newValues: { role: m.role, ipAddress: ip, sessionVersion: Number(u.session_version) },
       });
 
       const companies = await listUserAuthorizedCompanies(tx, Number(u.id));

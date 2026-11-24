@@ -326,3 +326,203 @@ export async function getSalesSplit(tx: Transaction, companyId: number): Promise
   const r = res.rows[0];
   return { settled: r.settled, outstanding: r.outstanding, total: r.total };
 }
+
+// ─── Grouped sales trends (by product / category / customer) ──────────────
+
+export interface GroupedSalesTrend {
+  groupKey: string;
+  groupLabel: string;
+  invoiceCount: number;
+  revenue: string;
+  cost: string;
+  margin: string;
+}
+
+export async function getSalesTrendsGrouped(
+  tx: Transaction,
+  companyId: number,
+  groupBy: 'product' | 'category' | 'customer',
+  period = 'monthly'
+): Promise<GroupedSalesTrend[]> {
+  const truncMap: Record<string, string> = {
+    daily: 'day', weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly: 'year',
+  };
+  const trunc = truncMap[period] || 'month';
+
+  let sql: string;
+  let params: any[];
+  if (groupBy === 'product') {
+    sql = `SELECT
+             ii.id AS group_key,
+             COALESCE(ii.name, ii.sku, 'Unknown') AS group_label,
+             COUNT(DISTINCT i.id)::text AS invoice_count,
+             COALESCE(SUM(il.quantity * il.unit_price), 0)::text AS revenue,
+             COALESCE(SUM(il.quantity * COALESCE(ii.unit_cost, 0)), 0)::text AS cost,
+             COALESCE(SUM(il.quantity * (il.unit_price - COALESCE(ii.unit_cost, 0))), 0)::text AS margin
+           FROM invoice_lines il
+           JOIN invoices i ON i.company_id = il.company_id AND i.id = il.invoice_id
+           JOIN inventory_items ii ON ii.company_id = il.company_id AND ii.id = il.item_id
+           WHERE il.company_id = $1 AND i.status NOT IN ('voided','draft')
+             AND i.invoice_date >= DATE_TRUNC($3, CURRENT_DATE - INTERVAL '12 months')
+           GROUP BY ii.id, ii.name, ii.sku
+           ORDER BY revenue DESC`;
+    params = [companyId, trunc];
+  } else if (groupBy === 'category') {
+    sql = `SELECT
+             COALESCE(c.id::text, 'uncategorised') AS group_key,
+             COALESCE(c.name, 'Uncategorised') AS group_label,
+             COUNT(DISTINCT i.id)::text AS invoice_count,
+             COALESCE(SUM(il.quantity * il.unit_price), 0)::text AS revenue,
+             COALESCE(SUM(il.quantity * COALESCE(ii.unit_cost, 0)), 0)::text AS cost,
+             COALESCE(SUM(il.quantity * (il.unit_price - COALESCE(ii.unit_cost, 0))), 0)::text AS margin
+           FROM invoice_lines il
+           JOIN invoices i ON i.company_id = il.company_id AND i.id = il.invoice_id
+           JOIN inventory_items ii ON ii.company_id = il.company_id AND ii.id = il.item_id
+           LEFT JOIN categories c ON c.company_id = ii.company_id AND c.id = ii.category_id
+           WHERE il.company_id = $1 AND i.status NOT IN ('voided','draft')
+             AND i.invoice_date >= DATE_TRUNC($3, CURRENT_DATE - INTERVAL '12 months')
+           GROUP BY c.id, c.name
+           ORDER BY revenue DESC`;
+    params = [companyId, trunc];
+  } else {
+    sql = `SELECT
+             c.id::text AS group_key,
+             c.company_name AS group_label,
+             COUNT(DISTINCT i.id)::text AS invoice_count,
+             COALESCE(SUM(i.total), 0)::text AS revenue,
+             COALESCE(SUM(i.total_cost), 0)::text AS cost,
+             COALESCE(SUM(i.total - i.total_cost), 0)::text AS margin
+           FROM invoices i
+           JOIN customers c ON c.company_id = i.company_id AND c.id = i.customer_id
+           WHERE i.company_id = $1 AND i.status NOT IN ('voided','draft')
+             AND i.invoice_date >= DATE_TRUNC($3, CURRENT_DATE - INTERVAL '12 months')
+           GROUP BY c.id, c.company_name
+           ORDER BY revenue DESC`;
+    params = [companyId, trunc];
+  }
+
+  const res = await tx.query<any>(sql, params);
+  return res.rows.map((r: any) => ({
+    groupKey: String(r.group_key),
+    groupLabel: String(r.group_label),
+    invoiceCount: Number(r.invoice_count),
+    revenue: r.revenue,
+    cost: r.cost,
+    margin: r.margin,
+  }));
+}
+
+// ─── Stock valuation ──────────────────────────────────────────────────────
+
+export interface StockValuationItem {
+  itemId: number;
+  sku: string;
+  name: string;
+  itemType: string;
+  onHand: string;
+  unitCost: string;
+  totalValue: string;
+}
+
+export async function getStockValuation(tx: Transaction, companyId: number): Promise<StockValuationItem[]> {
+  const res = await tx.query<any>(
+    `SELECT ii.id, ii.sku, ii.name, ii.item_type,
+            ii.on_hand::text AS on_hand,
+            COALESCE(ii.unit_cost, 0)::text AS unit_cost,
+            (ii.on_hand * COALESCE(ii.unit_cost, 0))::text AS total_value
+       FROM inventory_items ii
+      WHERE ii.company_id = $1 AND ii.is_active = TRUE
+      ORDER BY ii.name`,
+    [companyId]
+  );
+  return res.rows.map((r: any) => ({
+    itemId: Number(r.id),
+    sku: r.sku,
+    name: r.name,
+    itemType: r.item_type,
+    onHand: r.on_hand,
+    unitCost: r.unit_cost,
+    totalValue: r.total_value,
+  }));
+}
+
+// ─── Printing job efficiency ──────────────────────────────────────────────
+
+export interface PrintingJobEfficiency {
+  jobId: number;
+  jobNumber: string;
+  status: string;
+  totalCost: string;
+  totalRevenue: string;
+  margin: string;
+  marginPct: string;
+}
+
+export async function getPrintingJobEfficiency(
+  tx: Transaction,
+  companyId: number
+): Promise<PrintingJobEfficiency[]> {
+  const res = await tx.query<any>(
+    `SELECT pj.id, pj.job_number, pj.status,
+            COALESCE(pj.total_cost, 0)::text AS total_cost,
+            COALESCE(pj.total_revenue, 0)::text AS total_revenue,
+            (COALESCE(pj.total_revenue, 0) - COALESCE(pj.total_cost, 0))::text AS margin,
+            CASE WHEN COALESCE(pj.total_revenue, 0) > 0
+                 THEN ((pj.total_revenue - pj.total_cost) / pj.total_revenue * 100)::text
+                 ELSE '0' END AS margin_pct
+       FROM printing_jobs pj
+      WHERE pj.company_id = $1
+      ORDER BY pj.created_at DESC
+      LIMIT 200`,
+    [companyId]
+  );
+  return res.rows.map((r: any) => ({
+    jobId: Number(r.id),
+    jobNumber: r.job_number,
+    status: r.status,
+    totalCost: r.total_cost,
+    totalRevenue: r.total_revenue,
+    margin: r.margin,
+    marginPct: r.margin_pct,
+  }));
+}
+
+// ─── Payroll cost analysis ────────────────────────────────────────────────
+
+export interface PayrollCostSummary {
+  totalGross: string;
+  totalPAYE: string;
+  totalPensionEmployee: string;
+  totalPensionEmployer: string;
+  totalOtherDeductions: string;
+  totalNet: string;
+  headcount: number;
+}
+
+export async function getPayrollCostAnalysis(
+  tx: Transaction,
+  companyId: number
+): Promise<PayrollCostSummary> {
+  const res = await tx.query<any>(
+    `SELECT
+       COALESCE(SUM(gross_pay), 0)::text AS total_gross,
+       COALESCE(SUM(paye), 0)::text AS total_paye,
+       COALESCE(SUM(pension_employee), 0)::text AS total_pension_emp,
+       COALESCE(SUM(pension_employer), 0)::text AS total_pension_er,
+       COALESCE(SUM(other_deductions), 0)::text AS total_other_ded,
+       COALESCE(SUM(net_pay), 0)::text AS total_net,
+       COUNT(DISTINCT employee_id)::int AS headcount
+     FROM pay_stubs WHERE company_id = $1`,
+    [companyId]
+  );
+  const r = res.rows[0];
+  return {
+    totalGross: r.total_gross,
+    totalPAYE: r.total_paye,
+    totalPensionEmployee: r.total_pension_emp,
+    totalPensionEmployer: r.total_pension_er,
+    totalOtherDeductions: r.total_other_ded,
+    totalNet: r.total_net,
+    headcount: Number(r.headcount),
+  };
+}

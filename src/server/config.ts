@@ -18,6 +18,10 @@ export interface ServerConfig {
   cookieName: string;
   isProduction: boolean;
   twilioAuthToken: string | null;
+  twilioAccountSid: string | null;
+  twilioFromNumber: string | null;
+  twilioMessagingServiceSid: string | null;
+  twilioWhatsAppFrom: string | null;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -58,5 +62,9 @@ export function loadServerConfig(): ServerConfig {
     cookieName: 'pms_session',
     isProduction,
     twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN || '').trim() || null,
+    twilioAccountSid: (process.env.TWILIO_ACCOUNT_SID || '').trim() || null,
+    twilioFromNumber: (process.env.TWILIO_FROM_NUMBER || '').trim() || null,
+    twilioMessagingServiceSid: (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim() || null,
+    twilioWhatsAppFrom: (process.env.TWILIO_WHATSAPP_FROM || '').trim() || null,
   };
 }

@@ -25,10 +25,12 @@ export function createDocumentQrRoutes(db: ServerDatabase): Router {
       const auth = req.auth!;
       const documentKind = req.params.kind;
       const documentId = Number(req.params.id);
+      const baseUrl = String(req.body?.baseUrl || `${req.protocol}://${req.get('host') || ''}` || '').replace(/\/+$/, '');
       const result = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
         documentQrService.generateQrToken(tx, auth.companyId, documentKind, documentId, {
           version: req.body?.version,
           contentHash: req.body?.contentHash,
+          baseUrl,
         })
       );
       return res.status(201).json(result);

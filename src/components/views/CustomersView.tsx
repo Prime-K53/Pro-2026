@@ -9,6 +9,8 @@ import { formatCurrency } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions, isActionExecutable } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import { CustomerContactsTab } from '../customers/CustomerContactsTab';
+import { CustomerBranchesTab } from '../customers/CustomerBranchesTab';
 
 import {
   Plus,
@@ -709,6 +711,16 @@ export const CustomersView: React.FC = () => {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Contacts */}
+              <div className="p-6 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <CustomerContactsTab customerId={selectedCustomer.id} />
+              </div>
+
+              {/* Branches & addresses */}
+              <div className="p-6 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <CustomerBranchesTab customerId={selectedCustomer.id} />
               </div>
 
               {/* Invoices Ledger */}

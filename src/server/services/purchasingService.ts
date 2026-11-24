@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Transaction } from '@electric-sql/pglite';
 import {
   AccountingError,
@@ -1426,6 +1427,7 @@ export async function voidBill(
   if (bill.journal_txn_id) {
     const rev = await reverseJournalEntry(tx, companyId, actor, Number(bill.journal_txn_id), {
       reason: reason || `Void bill ${bill.bill_number}`,
+      idempotencyKey: `void-bill-${bill.journal_txn_id}`,
     });
     reversalJournalId = rev.reversal.id;
   }
@@ -1905,6 +1907,7 @@ export async function voidBillPayment(
   if (bp.journal_txn_id) {
     const rev = await reverseJournalEntry(tx, companyId, actor, Number(bp.journal_txn_id), {
       reason: reason || `Void bill payment ${bp.payment_number}`,
+      idempotencyKey: `void-bp-${bp.journal_txn_id}`,
     });
     reversalJournalId = rev.reversal.id;
     await tx.query(
@@ -2034,6 +2037,31 @@ export async function createVendorCredit(
   }
 
   const creditNumber = await generateNextDocNumber(tx, companyId, 'vendor_credits', 'credit_number', 'VC');
+
+  // Route-level idempotency: a retried submission (double-click / network replay)
+  // with an identical vendor, date, memo and lines must not create a duplicate credit.
+  const idemPayload = {
+    vendorId,
+    creditDate,
+    memo: input.memo?.trim() || null,
+    lines: lineRows.map(l => ({
+      accountId: l.accountId,
+      description: l.description,
+      qty6: formatDecimal6(l.qty6),
+      rate4: formatDecimal4(l.rate4),
+      amt4: formatDecimal4(l.amt4),
+    })),
+  };
+  const idemKey = `vc-${crypto
+    .createHash('sha256')
+    .update(JSON.stringify(idemPayload))
+    .digest('hex')
+    .slice(0, 24)}`;
+  const idem = await checkRouteIdempotency<any>(tx, companyId, 'vendor_credit_create', idemKey, idemPayload);
+  if (idem.hit) {
+    return idem.response;
+  }
+
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO vendor_credits (
        company_id, credit_number, vendor_id, credit_date, status, total, remaining_credit, memo
@@ -2100,7 +2128,11 @@ export async function createVendorCredit(
   });
 
   const all = await listVendorCredits(tx, companyId, vendorId);
-  return all.find(v => v.id === vcId)!;
+  const result = all.find(v => v.id === vcId)!;
+  await saveRouteIdempotency(
+    tx, companyId, 'vendor_credit_create', idemKey, idem.payloadHash, 201, result, actor.userId
+  );
+  return result;
 }
 
 export async function applyVendorCreditToBill(

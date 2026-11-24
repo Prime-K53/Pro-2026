@@ -8,6 +8,11 @@ import { formatCurrency } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import { DeductionRulesView } from '../payroll/DeductionRulesView';
+import { SalaryAdvanceModal } from '../payroll/SalaryAdvanceModal';
+import { StatutoryConfigView } from '../payroll/StatutoryConfigView';
+import { PayrollControlsView } from '../payroll/PayrollControlsView';
+import { BankFileExport } from '../payroll/BankFileExport';
 import {
   Users,
   Plus,
@@ -37,7 +42,9 @@ export const PayrollView: React.FC = () => {
   const currency = companyProfile.currency || 'K';
   const { authenticated, permissions, activeCompany } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'runs' | 'wizard' | 'employees'>('runs');
+  const [activeTab, setActiveTab] = useState<
+    'runs' | 'wizard' | 'employees' | 'advances' | 'deductions' | 'statutory' | 'controls' | 'bank'
+  >('runs');
   const [selectedStubRun, setSelectedStubRun] = useState<{ run: PayrollRun; item: PayrollItem } | null>(null);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -217,10 +224,10 @@ export const PayrollView: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-            US Payroll Center & Pay Stubs
+            Payroll Center &amp; Pay Slips
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Bi-weekly payroll execution, automated Federal/State income tax withholding, FICA employer match, and pay stubs.
+            Bi-weekly payroll execution, Malawi PAYE &amp; statutory deductions (pension), pension employer match, and pay slips.
           </p>
         </div>
 
@@ -274,6 +281,56 @@ export const PayrollView: React.FC = () => {
         >
           Employee Directory ({employees.length})
         </button>
+        <button
+          onClick={() => setActiveTab('advances')}
+          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
+            activeTab === 'advances'
+              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          Salary Advances
+        </button>
+        <button
+          onClick={() => setActiveTab('deductions')}
+          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
+            activeTab === 'deductions'
+              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          Deduction Rules
+        </button>
+        <button
+          onClick={() => setActiveTab('statutory')}
+          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
+            activeTab === 'statutory'
+              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          Statutory Config
+        </button>
+        <button
+          onClick={() => setActiveTab('controls')}
+          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
+            activeTab === 'controls'
+              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          Structures &amp; Loans
+        </button>
+        <button
+          onClick={() => setActiveTab('bank')}
+          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
+            activeTab === 'bank'
+              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          Payslips &amp; Bank File
+        </button>
       </div>
 
       {/* 1. RUN PAYROLL WIZARD */}
@@ -297,7 +354,7 @@ export const PayrollView: React.FC = () => {
           </div>
 
           {/* Period dates row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
             <div>
               <label className="font-semibold text-slate-700 dark:text-slate-300">Period Start Date</label>
               <input
@@ -325,6 +382,23 @@ export const PayrollView: React.FC = () => {
                 className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
               />
             </div>
+            <div>
+              <label className="font-semibold text-slate-700 dark:text-slate-300">Disbursement Bank Account</label>
+              <select
+                value={bankAccountId ?? ''}
+                onChange={e => setBankAccountId(e.target.value)}
+                className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
+              >
+                <option value="">Select bank account…</option>
+                {accounts
+                  .filter(a => a.type === 'Bank')
+                  .map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.code} · {a.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
           </div>
 
           {/* Employee Hours Entry Table */}
@@ -337,9 +411,9 @@ export const PayrollView: React.FC = () => {
                   <th className="px-4 py-3 w-28 text-center">REG HOURS</th>
                   <th className="px-4 py-3 w-28 text-center">OT HOURS</th>
                   <th className="px-4 py-3 text-right">GROSS PAY</th>
-                  <th className="px-4 py-3 text-right">FIT TAX</th>
-                  <th className="px-4 py-3 text-right">FICA (6.2+1.45%)</th>
-                  <th className="px-4 py-3 text-right">STATE TAX</th>
+                  <th className="px-4 py-3 text-right">PAYE</th>
+                  <th className="px-4 py-3 text-right">PENSION (5%)</th>
+                  <th className="px-4 py-3 text-right">OTHER</th>
                   <th className="px-4 py-3 text-right">NET PAY</th>
                   <th className="px-4 py-3 text-right">ACTIONS</th>
                 </tr>
@@ -428,14 +502,14 @@ export const PayrollView: React.FC = () => {
             </div>
 
             <div>
-              <span className="text-slate-500">Employee Withholdings (Cr. Liab):</span>
+              <span className="text-slate-500">Employee Deductions (Cr. Liab):</span>
               <div className="text-base font-bold text-amber-600 dark:text-amber-400 tabular-nums">
                 {formatCurrency(totalEmployeeTaxes, currency)}
               </div>
             </div>
 
             <div>
-              <span className="text-slate-500">Employer Tax Match (FICA/FUTA):</span>
+              <span className="text-slate-500">Employer Pension (10%):</span>
               <div className="text-base font-bold text-indigo-600 dark:text-indigo-400 tabular-nums">
                 {formatCurrency(totalEmployerTaxes, currency)}
               </div>
@@ -582,6 +656,25 @@ export const PayrollView: React.FC = () => {
         </div>
       )}
 
+      {/* 4. SALARY ADVANCES */}
+      {activeTab === 'advances' && (
+        <SalaryAdvanceModal onClose={() => setActiveTab('runs')} />
+      )}
+
+      {/* 5. DEDUCTION RULES */}
+      {activeTab === 'deductions' && (
+        <DeductionRulesView />
+      )}
+
+      {/* 6. STATUTORY CONFIG */}
+      {activeTab === 'statutory' && <StatutoryConfigView />}
+
+      {/* 7. STRUCTURES & LOANS */}
+      {activeTab === 'controls' && <PayrollControlsView />}
+
+      {/* 8. PAYSLIPS & BANK FILE */}
+      {activeTab === 'bank' && <BankFileExport />}
+
       {/* Pay Stub Modal Dialog */}
       {selectedStubRun && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -708,25 +801,21 @@ export const PayrollView: React.FC = () => {
                       <table className="w-full text-left border border-slate-200 font-mono text-xs">
                         <thead className="bg-slate-100 font-bold text-[10px] font-sans uppercase">
                           <tr>
-                            <th className="p-2 border-r">EMPLOYEE TAXES</th>
+                            <th className="p-2 border-r">STATUTORY DEDUCTIONS</th>
                             <th className="p-2 text-right">AMOUNT</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y">
                           <tr>
-                            <td className="p-2 font-sans border-r">Federal Income Tax (FIT)</td>
+                            <td className="p-2 font-sans border-r">PAYE (Pay As You Earn)</td>
                             <td className="p-2 text-right font-bold">{formatCurrency(item.fit, currency)}</td>
                           </tr>
                           <tr>
-                            <td className="p-2 font-sans border-r">Social Security (OASDI 6.2%)</td>
+                            <td className="p-2 font-sans border-r">Pension (Employee 5%)</td>
                             <td className="p-2 text-right font-bold">{formatCurrency(item.socialSecurityEmployee, currency)}</td>
                           </tr>
                           <tr>
-                            <td className="p-2 font-sans border-r">Medicare (1.45%)</td>
-                            <td className="p-2 text-right font-bold">{formatCurrency(item.medicareEmployee, currency)}</td>
-                          </tr>
-                          <tr>
-                            <td className="p-2 font-sans border-r">State Withholding (Ohio SIT)</td>
+                            <td className="p-2 font-sans border-r">Other Deductions</td>
                             <td className="p-2 text-right font-bold">{formatCurrency(item.sit, currency)}</td>
                           </tr>
                         </tbody>
@@ -736,26 +825,18 @@ export const PayrollView: React.FC = () => {
                       <table className="w-full text-left border border-slate-200 font-mono text-xs">
                         <thead className="bg-slate-100 font-bold text-[10px] font-sans uppercase">
                           <tr>
-                            <th className="p-2 border-r">EMPLOYER MATCH (INFORMATIONAL)</th>
+                            <th className="p-2 border-r">EMPLOYER CONTRIBUTIONS (INFORMATIONAL)</th>
                             <th className="p-2 text-right">AMOUNT</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y">
                           <tr>
-                            <td className="p-2 font-sans border-r">Employer FICA Social Security</td>
+                            <td className="p-2 font-sans border-r">Pension (Employer 10%)</td>
                             <td className="p-2 text-right">{formatCurrency(item.socialSecurityEmployer, currency)}</td>
                           </tr>
                           <tr>
-                            <td className="p-2 font-sans border-r">Employer FICA Medicare</td>
-                            <td className="p-2 text-right">{formatCurrency(item.medicareEmployer, currency)}</td>
-                          </tr>
-                          <tr>
-                            <td className="p-2 font-sans border-r">Federal Unemployment (FUTA 0.6%)</td>
-                            <td className="p-2 text-right">{formatCurrency(item.futaEmployer, currency)}</td>
-                          </tr>
-                          <tr>
-                            <td className="p-2 font-sans border-r">State Unemployment (SUTA 2.7%)</td>
-                            <td className="p-2 text-right">{formatCurrency(item.sutaEmployer, currency)}</td>
+                            <td className="p-2 font-sans border-r">Other Employer Costs</td>
+                            <td className="p-2 text-right">{formatCurrency(item.medicareEmployer + item.futaEmployer + item.sutaEmployer, currency)}</td>
                           </tr>
                         </tbody>
                       </table>

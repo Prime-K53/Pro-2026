@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ServerCompanyRole, useAuth } from '../../context/AuthContext';
+import { TwoFactorSetup } from '../auth/TwoFactorSetup';
 import {
   Building2,
   CheckCircle2,
@@ -55,7 +56,7 @@ interface AuditLogEntry {
   sha256Hash: string;
 }
 
-type SectionTab = 'members' | 'companies' | 'matrix' | 'audit';
+type SectionTab = 'members' | 'companies' | 'matrix' | 'audit' | 'security';
 
 const ROLE_OPTIONS: ServerCompanyRole[] = [
   'Administrator',
@@ -275,6 +276,7 @@ export const AccessControlView: React.FC = () => {
             { id: 'companies', label: 'Companies' },
             { id: 'matrix', label: 'Permission Matrix' },
             { id: 'audit', label: 'Security Audit Log' },
+            { id: 'security', label: 'My 2FA' },
           ].map(item => (
             <button
               key={item.id}
@@ -764,6 +766,13 @@ export const AccessControlView: React.FC = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* TAB 5: MY 2FA */}
+      {tab === 'security' && (
+        <div className="space-y-6">
+          <TwoFactorSetup />
         </div>
       )}
     </div>

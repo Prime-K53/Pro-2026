@@ -38,8 +38,8 @@ import {
   buildPaperStockFromInventoryItem,
   buildTonerSpecFromInventoryItem,
   calculateExaminationProductionWorkflow,
-} from '../../server/services/printingWorkflows';
-import type { TonerMachineSpec } from '../../server/services/tonerCalc';
+} from '../../shared/printingWorkflows';
+import type { TonerMachineSpec } from '../../shared/tonerCalc';
 
 const EXAM_PRESS_CAPABILITY: TonerMachineSpec = {
   machineId: 'exam-digital-press',

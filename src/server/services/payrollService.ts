@@ -2,6 +2,7 @@ import type { Transaction } from '@electric-sql/pglite';
 import { AccountingError, postJournalEntry, type ActorContext } from './accountingEngine.ts';
 import { formatDecimal4, parseDecimal4 } from '../lib/decimal.ts';
 import { writeAuditLog } from '../audit.ts';
+import { checkRouteIdempotency, saveRouteIdempotency } from './commercialHelpers.ts';
 import {
   computeMalawiItem,
   loadMalawiConfig,
@@ -29,6 +30,7 @@ export interface RunPayrollInput {
   payDate: string;
   bankAccountId: number;
   items: PayrollHoursInput[];
+  idempotencyKey?: string | null;
 }
 
 export interface PayrollComputation {
@@ -151,6 +153,24 @@ export async function runPayroll(
     throw new AccountingError(400, 'payPeriodEnd cannot be earlier than payPeriodStart', 'INVALID_PERIOD');
   }
 
+  // Route-level idempotency is keyed on a CLIENT-SUPPLIED idempotency key only.
+  // A genuine network retry reuses the same key and returns the original run;
+  // a distinct duplicate submission (no key) still falls through to the
+  // per-period lock below and is rejected with PAYROLL_PERIOD_ALREADY_RUN.
+  const idemKey = input.idempotencyKey?.trim() || null;
+  const idem = idemKey
+    ? await checkRouteIdempotency<any>(tx, companyId, 'payroll_run', idemKey, {
+        payPeriodStart,
+        payPeriodEnd,
+        payDate,
+        bankAccountId: Number(input.bankAccountId),
+        items: input.items || [],
+      })
+    : null;
+  if (idem?.hit) {
+    return idem.response;
+  }
+
   const bankAccountId = Number(input.bankAccountId);
   if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
     throw new AccountingError(400, 'A valid bank account is required to disburse payroll', 'INVALID_BANK_ACCOUNT');
@@ -247,6 +267,7 @@ export async function runPayroll(
   }
 
   const computations: PayrollComputation[] = [];
+  const loansToRepay: Array<{ id: number; installment: number }> = [];
   for (const emp of empRes.rows) {
     if (!emp.is_active) continue;
     const hours = hoursByEmployee.get(Number(emp.id))!;
@@ -255,18 +276,20 @@ export async function runPayroll(
       0
     );
     const structure = await getEffectiveSalaryStructure(tx, companyId, Number(emp.id), payDate);
+    const payType = structure?.payType ?? emp.pay_type;
+    const payRate = structure?.payRate ?? Number(emp.pay_rate);
+    const payFrequency = structure?.payFrequency ?? emp.pay_frequency;
+    const grossPay = computeGrossPay({ payType, payRate, payFrequency }, hours.regular, hours.overtime);
+    const approved = await computeApprovedDeductions(tx, companyId, Number(emp.id), grossPay, payDate);
+    for (const loan of approved.loans) loansToRepay.push(loan);
+    const totalDeductions = advanceDeduction + approved.total;
     computations.push(
       computePayrollItem(
-        {
-          id: Number(emp.id),
-          payType: structure?.payType ?? emp.pay_type,
-          payRate: structure?.payRate ?? Number(emp.pay_rate),
-          payFrequency: structure?.payFrequency ?? emp.pay_frequency,
-        },
+        { id: Number(emp.id), payType, payRate, payFrequency },
         hours.regular,
         hours.overtime,
         config,
-        advanceDeduction
+        totalDeductions
       )
     );
   }
@@ -384,6 +407,7 @@ export async function runPayroll(
     reference: runNumber,
     sourceType: 'payroll',
     sourceId: null,
+    idempotencyKey: idemKey,
     lines: journalLines.map(l => ({
       accountId: l.accountId,
       debit: l.debit,
@@ -433,15 +457,19 @@ export async function runPayroll(
         formatDecimal4(parseDecimal4(c.hoursRegular)),
         formatDecimal4(parseDecimal4(c.hoursOvertime)),
         formatDecimal4(parseDecimal4(c.grossPay)),
-        '0', // federal_tax (legacy)
-        '0', // state_tax (legacy)
-        '0', // ss_employee (legacy)
-        '0', // medicare_employee (legacy)
+        // Malawi statutory values mapped onto the legacy US-named columns so
+        // older readers (and the legacy pay stub HTML) keep working without a
+        // destructive schema change. `paye`, `pension_employee`, and
+        // `pension_employer` are the authoritative Malawi columns.
+        formatDecimal4(parseDecimal4(c.paye)),            // federal_tax -> PAYE
+        '0',                                              // state_tax (no Malawi state tax)
+        formatDecimal4(parseDecimal4(c.pensionEmployee)), // ss_employee -> employee pension
+        '0',                                              // medicare_employee (not applicable)
         formatDecimal4(parseDecimal4(c.netPay)),
-        '0', // ss_employer (legacy)
-        '0', // medicare_employer (legacy)
-        '0', // futa_employer (legacy)
-        '0', // suta_employer (legacy)
+        formatDecimal4(parseDecimal4(c.pensionEmployer)), // ss_employer -> employer pension
+        '0',                                              // medicare_employer
+        '0',                                              // futa_employer
+        '0',                                              // suta_employer
         formatDecimal4(parseDecimal4(c.paye)),
         formatDecimal4(parseDecimal4(c.pensionEmployee)),
         formatDecimal4(parseDecimal4(c.pensionEmployer)),
@@ -465,6 +493,18 @@ export async function runPayroll(
     }
   }
 
+  // Persist approved loan repayments for this run.
+  for (const loan of loansToRepay) {
+    await tx.query(
+      `UPDATE employee_loans
+          SET balance = balance - $2::NUMERIC(12,2),
+              status = CASE WHEN balance - $2::NUMERIC(12,2) <= 0 THEN 'settled' ELSE status END,
+              updated_at = NOW()
+        WHERE company_id = $1 AND id = $3 AND status = 'active'`,
+      [companyId, formatDecimal4(parseDecimal4(loan.installment)), loan.id]
+    );
+  }
+
   await writeAuditLog(tx, {
     companyId,
     actorUserId: actor.userId,
@@ -486,7 +526,7 @@ export async function runPayroll(
     },
   });
 
-  return {
+  const result = {
     runId,
     runNumber,
     payPeriodStart,
@@ -500,6 +540,12 @@ export async function runPayroll(
     entryNumber: posted.transaction.entryNumber,
     items: computations,
   };
+  if (idem && idemKey) {
+    await saveRouteIdempotency(
+      tx, companyId, 'payroll_run', idemKey, idem.payloadHash, 201, result, actor.userId
+    );
+  }
+  return result;
 }
 
 
@@ -988,5 +1034,197 @@ export async function getEffectiveSalaryStructure(
     payType: r.pay_type,
     payRate: Number(r.pay_rate),
     payFrequency: r.pay_frequency,
+  };
+}
+
+// ─── Approved loans & other deductions (WS-4 R3) ───────────────────────
+
+export interface EmployeeLoan {
+  id: number;
+  companyId: number;
+  employeeId: number;
+  principal: string;
+  balance: string;
+  installment: string;
+  status: string;
+}
+
+export interface EmployeeDeduction {
+  id: number;
+  companyId: number;
+  employeeId: number;
+  deductionType: string;
+  amount: string;
+  calculationMethod: string;
+  status: string;
+}
+
+export async function listEmployeeLoans(
+  tx: Transaction,
+  companyId: number,
+  employeeId?: number
+): Promise<EmployeeLoan[]> {
+  const res = await tx.query<any>(
+    `SELECT id, company_id, employee_id, principal::text, balance::text, installment::text, status
+       FROM employee_loans
+      WHERE company_id = $1 AND ($2::BIGINT IS NULL OR employee_id = $2)
+      ORDER BY employee_id, id`,
+    [companyId, employeeId ?? null]
+  );
+  return res.rows.map((r: any) => ({
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    employeeId: Number(r.employee_id),
+    principal: r.principal,
+    balance: r.balance,
+    installment: r.installment,
+    status: r.status,
+  }));
+}
+
+export async function createEmployeeLoan(
+  tx: Transaction,
+  companyId: number,
+  input: { employeeId: number; principal: number; installment: number }
+): Promise<EmployeeLoan> {
+  if (!(Number(input.principal) > 0) || !(Number(input.installment) > 0)) {
+    throw new AccountingError(400, 'principal and installment must be greater than zero', 'INVALID_LOAN');
+  }
+  const res = await tx.query<any>(
+    `INSERT INTO employee_loans (company_id, employee_id, principal, balance, installment, status)
+     VALUES ($1, $2, $3, $3, $4, 'active') RETURNING *`,
+    [companyId, input.employeeId, input.principal, input.installment]
+  );
+  const r = res.rows[0];
+  return {
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    employeeId: Number(r.employee_id),
+    principal: r.principal,
+    balance: r.balance,
+    installment: r.installment,
+    status: r.status,
+  };
+}
+
+export async function listEmployeeDeductions(
+  tx: Transaction,
+  companyId: number,
+  employeeId?: number
+): Promise<EmployeeDeduction[]> {
+  const res = await tx.query<any>(
+    `SELECT id, company_id, employee_id, deduction_type, amount::text, calculation_method, status
+       FROM employee_deductions
+      WHERE company_id = $1 AND ($2::BIGINT IS NULL OR employee_id = $2)
+      ORDER BY employee_id, id`,
+    [companyId, employeeId ?? null]
+  );
+  return res.rows.map((r: any) => ({
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    employeeId: Number(r.employee_id),
+    deductionType: r.deduction_type,
+    amount: r.amount,
+    calculationMethod: r.calculation_method,
+    status: r.status,
+  }));
+}
+
+export async function createEmployeeDeduction(
+  tx: Transaction,
+  companyId: number,
+  input: {
+    employeeId: number;
+    deductionType: string;
+    amount: number;
+    calculationMethod?: 'fixed' | 'percentage';
+  }
+): Promise<EmployeeDeduction> {
+  if (!(Number(input.amount) > 0)) {
+    throw new AccountingError(400, 'amount must be greater than zero', 'INVALID_DEDUCTION');
+  }
+  const method = input.calculationMethod === 'percentage' ? 'percentage' : 'fixed';
+  const res = await tx.query<any>(
+    `INSERT INTO employee_deductions (company_id, employee_id, deduction_type, amount, calculation_method, status)
+     VALUES ($1, $2, $3, $4, $5, 'active') RETURNING *`,
+    [companyId, input.employeeId, input.deductionType, input.amount, method]
+  );
+  const r = res.rows[0];
+  return {
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    employeeId: Number(r.employee_id),
+    deductionType: r.deduction_type,
+    amount: r.amount,
+    calculationMethod: r.calculation_method,
+    status: r.status,
+  };
+}
+
+export function computeGrossPay(
+  employee: { payType: string; payRate: number; payFrequency: string },
+  hoursWorked: number,
+  overtimeHours: number
+): number {
+  let gross: number;
+  if (employee.payType === 'hourly') {
+    const rate = employee.payRate;
+    gross = hoursWorked * rate + overtimeHours * rate * 1.5;
+  } else {
+    const periods =
+      employee.payFrequency === 'weekly'
+        ? 52
+        : employee.payFrequency === 'biweekly'
+        ? 26
+        : employee.payFrequency === 'semimonthly'
+        ? 24
+        : 12;
+    gross = employee.payRate / periods;
+  }
+  return round2(gross);
+}
+
+export async function computeApprovedDeductions(
+  tx: Transaction,
+  companyId: number,
+  employeeId: number,
+  grossPay: number,
+  payDate: string
+): Promise<{ total: number; loans: Array<{ id: number; installment: number }>; deductions: number }> {
+  const loanRes = await tx.query<{ id: number; balance: string; installment: string }>(
+    `SELECT id, balance::text, installment::text
+       FROM employee_loans
+      WHERE company_id = $1 AND employee_id = $2 AND status = 'active'
+      ORDER BY id`,
+    [companyId, employeeId]
+  );
+  const loans: Array<{ id: number; installment: number }> = [];
+  let loanTotal = 0;
+  for (const l of loanRes.rows) {
+    const installment = round2(Math.min(Number(l.balance), Number(l.installment)));
+    if (installment > 0) {
+      loans.push({ id: Number(l.id), installment });
+      loanTotal += installment;
+    }
+  }
+
+  const dedRes = await tx.query<{ amount: string; calculation_method: string }>(
+    `SELECT amount::text, calculation_method
+       FROM employee_deductions
+      WHERE company_id = $1 AND employee_id = $2 AND status = 'active'
+        AND effective_from <= $3::date
+        AND (effective_to IS NULL OR effective_to >= $3::date)`,
+    [companyId, employeeId, payDate]
+  );
+  let deductions = 0;
+  for (const d of dedRes.rows) {
+    const amount = Number(d.amount);
+    deductions += d.calculation_method === 'percentage' ? (grossPay * amount) : amount;
+  }
+
+  return {
+    total: round2(loanTotal + deductions),
+    loans,
+    deductions: round2(deductions),
   };
 }

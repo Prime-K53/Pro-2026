@@ -2,6 +2,11 @@ import type { Transaction } from '@electric-sql/pglite';
 import { AccountingError, postJournalEntry, type ActorContext } from './accountingEngine.ts';
 import { formatDecimal4, parseDecimal4 } from '../lib/decimal.ts';
 import { writeAuditLog } from '../audit.ts';
+import {
+  consumeApprovalRequest,
+  evaluateApprovalGate,
+  type ApprovalRequestRow,
+} from './approvalService.ts';
 
 /**
  * Server-side inventory master data and perpetual-inventory adjustments.
@@ -19,7 +24,46 @@ export interface AdjustInventoryInput {
   counterAccountId?: number | null;
   unitCost?: string | number | null;
   idempotencyKey?: string | null;
+  /**
+   * For shrinkage write-offs: an approved maker-checker request that authorises
+   * this write-off. Required when the company's `inventory_writeoff` approval
+   * policy is enabled and the write-off value meets its threshold.
+   */
+  approvalRequestId?: number | null;
 }
+
+/**
+ * Result of an inventory adjustment.
+ *
+ * A shrinkage write-off that requires maker-checker approval returns
+ * `approvalRequired: true` WITHOUT posting the journal or changing stock; the
+ * pending approval request is committed and the caller answers 202. Once the
+ * request is approved, the caller re-submits with `approvalRequestId` and the
+ * adjustment completes normally.
+ */
+export type AdjustInventoryResult =
+  | {
+      approvalRequired: true;
+      approvalRequest: ApprovalRequestRow | null;
+      itemId: number;
+      sku: string;
+    }
+  | {
+      approvalRequired?: false;
+      adjustmentId: number;
+      itemId: number;
+      sku: string;
+      name: string;
+      quantityDelta: string;
+      onHandBefore: string;
+      onHandAfter: string;
+      unitCost: string;
+      value: string;
+      counterAccountId: number;
+      journalTransactionId: number;
+      entryNumber: string;
+      idempotentReplay: boolean;
+    };
 
 function parseQuantity(value: string | number): bigint {
   const scaled = parseDecimal4(value);
@@ -102,7 +146,7 @@ export async function adjustInventoryStock(
   actor: ActorContext,
   itemId: number,
   input: AdjustInventoryInput
-) {
+): Promise<AdjustInventoryResult> {
   const id = Number(itemId);
   if (!Number.isInteger(id) || id <= 0) {
     throw new AccountingError(400, 'Invalid inventory item id', 'INVALID_ITEM_ID');
@@ -164,6 +208,9 @@ export async function adjustInventoryStock(
   if (value4 === 0n) {
     throw new AccountingError(400, 'Adjustment has no monetary value', 'ZERO_VALUE_ADJUSTMENT');
   }
+  // Journal lines must carry positive debit/credit magnitudes regardless of the
+  // adjustment direction; `value4` itself is signed (negative for a write-off).
+  const absValue4 = value4 < 0n ? -value4 : value4;
 
   const direction: 1 | -1 = delta4 > 0n ? 1 : -1;
   const counterAccountId = await resolveCounterAccountId(
@@ -176,6 +223,39 @@ export async function adjustInventoryStock(
   const reason = String(input.reason || '').trim() || 'Manual stock adjustment';
   const description = `Inventory adjustment — ${item.sku} ${item.name} (${delta4 > 0n ? '+' : ''}${formatDecimal4(delta4)})`;
 
+  // Maker-checker gate for shrinkage write-offs (D-2). A write-off (negative
+  // delta) that meets the company's `inventory_writeoff` approval threshold must
+  // be authorised by a second approver before it can hit the ledger. When a
+  // pending request is created we return without posting; the caller answers 202.
+  let approvalRequestId: number | null = input.approvalRequestId ?? null;
+  if (direction === -1) {
+    const gate = await evaluateApprovalGate(tx, companyId, actor, {
+      actionType: 'inventory_writeoff',
+      entityType: 'inventory_item',
+      amount: value4 < 0n ? -value4 : value4,
+      businessDate: adjDate,
+      payload: {
+        itemId: id,
+        sku: item.sku,
+        quantityDelta: formatDecimal4(delta4),
+        unitCost: formatDecimal4(unitCost4),
+        reason,
+      },
+      approvalRequestId: input.approvalRequestId ?? null,
+      idempotencyKey: input.idempotencyKey || null,
+    });
+    if (gate.requiresApproval) {
+      // Pending approval committed; do NOT change stock or post the journal.
+      return {
+        approvalRequired: true,
+        approvalRequest: gate.request,
+        itemId: id,
+        sku: item.sku,
+      };
+    }
+    approvalRequestId = gate.request?.id ?? approvalRequestId;
+  }
+
   const posted = await postJournalEntry(tx, companyId, actor, {
     txnDate: adjDate,
     description,
@@ -187,12 +267,12 @@ export async function adjustInventoryStock(
     lines:
       direction === 1
         ? [
-            { accountId: Number(item.asset_account_id), debit: formatDecimal4(value4), description },
-            { accountId: counterAccountId, credit: formatDecimal4(value4), description: 'Inventory gain (found stock)' },
+            { accountId: Number(item.asset_account_id), debit: formatDecimal4(absValue4), description },
+            { accountId: counterAccountId, credit: formatDecimal4(absValue4), description: 'Inventory gain (found stock)' },
           ]
         : [
-            { accountId: Number(item.asset_account_id), credit: formatDecimal4(value4), description },
-            { accountId: counterAccountId, debit: formatDecimal4(value4), description: 'Inventory shrinkage / write-off' },
+            { accountId: Number(item.asset_account_id), credit: formatDecimal4(absValue4), description },
+            { accountId: counterAccountId, debit: formatDecimal4(absValue4), description: 'Inventory shrinkage / write-off' },
           ],
   });
 
@@ -226,6 +306,19 @@ export async function adjustInventoryStock(
      RETURNING id`,
     [companyId, adjDate, reason, posted.transaction.id, actor.userId]
   );
+
+  // Consume the maker-checker approval that authorised this write-off (no-op for
+  // increases or when no approval was required).
+  if (approvalRequestId) {
+    await consumeApprovalRequest(
+      tx,
+      companyId,
+      actor,
+      approvalRequestId,
+      'inventory_adjustment',
+      Number(adjIns.rows[0].id)
+    );
+  }
 
   await writeAuditLog(tx, {
     companyId,

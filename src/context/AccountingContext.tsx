@@ -16,9 +16,11 @@ import {
   Estimate,
   PaymentReceived,
   Bill,
+  BillLine,
   BillPayment,
   Employee,
   PayrollRun,
+  PayrollItem,
   JournalEntry,
   BankTransaction,
   BankReconciliation,
@@ -43,7 +45,7 @@ import {
   INITIAL_AUDIT_LOGS,
 } from '../data/initialDemoData';
 import { generateTamperEvidentHash } from '../services/taxCalculation';
-import { accountingApi, ACCOUNTING_UPDATED_EVENT, ApiAccount } from '../services/accountingApi';
+import { accountingApi, ACCOUNTING_UPDATED_EVENT, ApiAccount, ApiJournalEntry } from '../services/accountingApi';
 import { getCurrencySymbol } from '../utils/currency';
 import {
   buildPaperStockFromInventoryItem,
@@ -53,13 +55,273 @@ import {
   calculatePhotocopyWorkflow,
   calculatePrintingServiceWorkflow,
   calculateTypeAndPrintingWorkflow,
-} from '../server/services/printingWorkflows';
-import type { TonerMachineSpec } from '../server/services/tonerCalc';
+} from '../shared/printingWorkflows';
+import type { TonerMachineSpec } from '../shared/tonerCalc';
 import type { DocumentPreviewModel, GenerateWorkflowInvoicePayload } from '../types/documents';
 import type { ToastNotice, ToastTone } from '../types/toast';
 import { documentsApi } from '../services/documentsApi';
-import { commercialApi, type ApiInvoice } from '../services/commercialApi';
+import { commercialApi, type ApiInvoice, type ApiVendor, type ApiBill, type ApiBankTransaction } from '../services/commercialApi';
 import { printingApi } from '../services/printingApi';
+import { payrollApi, type ApiEmployee } from '../services/payrollApi';
+
+/** Payslip row nested inside a `GET /api/payroll/runs` entry. */
+interface ApiPayslip {
+  employeeId: number;
+  hoursRegular: number;
+  hoursOvertime: number;
+  grossPay: number;
+  paye: number;
+  pensionEmployee: number;
+  pensionEmployer: number;
+  otherDeductions: number;
+  employerOther: number;
+  netPay: number;
+}
+
+function mapPayslipToPayrollItem(p: ApiPayslip): PayrollItem {
+  return {
+    employeeId: String(p.employeeId),
+    hoursWorked: Number(p.hoursRegular ?? 0),
+    overtimeHours: Number(p.hoursOvertime ?? 0),
+    grossPay: Number(p.grossPay ?? 0),
+    fit: Number(p.paye ?? 0),
+    socialSecurityEmployee: Number(p.pensionEmployee ?? 0),
+    medicareEmployee: 0,
+    sit: Number(p.otherDeductions ?? 0),
+    netPay: Number(p.netPay ?? 0),
+    socialSecurityEmployer: Number(p.pensionEmployer ?? 0),
+    medicareEmployer: Number(p.employerOther ?? 0),
+    futaEmployer: 0,
+    sutaEmployer: 0,
+  };
+}
+
+function mapApiEmployeeToEmployee(e: ApiEmployee): Employee {
+  const payFrequency = (['weekly', 'biweekly', 'semimonthly', 'monthly'].includes(e.payFrequency || '')
+    ? e.payFrequency
+    : 'monthly') as Employee['payFrequency'];
+  return {
+    id: String(e.id),
+    firstName: e.firstName,
+    lastName: e.lastName,
+    title: e.jobTitle || '',
+    email: e.email || '',
+    phone: '',
+    ssnMasked: e.ssnMasked || '',
+    hireDate: e.hireDate || '',
+    payType: e.payType === 'salary' ? 'salary' : 'hourly',
+    payRate: Number(e.payRate ?? 0),
+    payFrequency,
+    filingStatus: 'single',
+    w4Allowances: 0,
+    directDepositRouting: '',
+    directDepositAccountMasked: '',
+    department: e.department || '',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Server → context mappers for the financial entities.
+//
+// The server is the source of truth for every financial record; these mappers
+// normalise the API row shapes (snake/camel aliases, string ids, broader enums)
+// into the context types so the browser working copy mirrors the ledger instead
+// of a demo seed. Fields the list endpoints do not return fall back to safe
+// defaults (empty string / zero / empty array).
+// ---------------------------------------------------------------------------
+
+function normalizeVendorTerms(raw: unknown): Vendor['terms'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s.includes('receipt')) return 'Due on Receipt';
+  if (s.includes('15')) return 'Net 15';
+  if (s.includes('60')) return 'Net 60';
+  return 'Net 30';
+}
+
+function mapApiVendorToVendor(v: ApiVendor & Record<string, any>): Vendor {
+  return {
+    id: String(v.id),
+    name: v.name || '',
+    companyName: v.companyName || '',
+    email: v.email || '',
+    phone: v.phone || '',
+    address: v.address || '',
+    einOrSsn: v.taxId || v.einOrSsn || '',
+    defaultExpenseAccountId:
+      v.defaultExpenseAccountId != null ? String(v.defaultExpenseAccountId) : undefined,
+    terms: normalizeVendorTerms(v.terms),
+    balance: Number(v.balance ?? 0),
+  };
+}
+
+function normalizeInvoiceStatus(raw: unknown): Invoice['status'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s === 'paid' || s === 'partial' || s === 'overdue' || s === 'draft' || s === 'sent') {
+    return s;
+  }
+  if (s === 'open') return 'sent';
+  return 'draft';
+}
+
+function mapApiInvoiceToInvoice(inv: ApiInvoice & Record<string, any>): Invoice {
+  const lines: InvoiceLine[] = Array.isArray(inv.lines)
+    ? inv.lines.map((l: any, idx: number) => ({
+        id: String(l.id ?? `line-${idx}`),
+        itemId: l.itemId != null ? String(l.itemId) : undefined,
+        variantId: l.variantId != null ? String(l.variantId) : undefined,
+        variantName: l.variantName,
+        description: l.description || '',
+        quantity: Number(l.quantity ?? 0),
+        rate: Number(l.rate ?? 0),
+        amount: Number(l.amount ?? 0),
+        unitCost: l.unitCost != null ? Number(l.unitCost) : undefined,
+        totalCost: l.totalCost != null ? Number(l.totalCost) : undefined,
+        taxable: Boolean(l.taxable),
+      }))
+    : [];
+  return {
+    id: String(inv.id),
+    invoiceNumber: inv.invoiceNumber || inv.invoice_number || '',
+    customerId: String(inv.customerId ?? inv.customer_id ?? ''),
+    date: inv.date || inv.invoiceDate || inv.invoice_date || '',
+    dueDate: inv.dueDate || inv.due_date || '',
+    terms: inv.terms || '',
+    status: normalizeInvoiceStatus(inv.status),
+    lines,
+    subtotal: Number(inv.subtotalNum ?? inv.subtotal ?? 0),
+    taxRate: Number(inv.taxRate ?? 0),
+    taxAmount: Number(inv.taxAmountNum ?? inv.taxAmount ?? 0),
+    total: Number(inv.totalNum ?? inv.total ?? 0),
+    totalCost: inv.totalCostNum != null ? Number(inv.totalCostNum) : undefined,
+    grossProfit: inv.grossProfitNum != null ? Number(inv.grossProfitNum) : undefined,
+    amountPaid: Number(inv.amountPaidNum ?? inv.amountPaid ?? 0),
+    balanceDue: Number(inv.balanceDueNum ?? inv.balanceDue ?? 0),
+    backendInvoiceId: inv.id != null ? Number(inv.id) : undefined,
+    notes: inv.notes,
+  };
+}
+
+function normalizeBillStatus(raw: unknown): Bill['status'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s === 'open' || s === 'partial' || s === 'paid' || s === 'overdue') return s;
+  if (s === 'posted' || s === 'approved') return 'open';
+  return 'open';
+}
+
+function mapApiBillToBill(b: ApiBill & Record<string, any>): Bill {
+  const lines: BillLine[] = Array.isArray(b.lines)
+    ? b.lines.map((l: any, idx: number) => ({
+        id: String(l.id ?? `bill-${b.id}-line-${l.lineOrder ?? idx}`),
+        accountId: String(l.accountId ?? l.account_id ?? ''),
+        description: l.description || '',
+        amount: Number(l.amount ?? 0),
+      }))
+    : [];
+  return {
+    id: String(b.id),
+    billNumber: b.billNumber || '',
+    vendorId: String(b.vendorId ?? b.vendor_id ?? ''),
+    date: b.billDate || b.date || '',
+    dueDate: b.dueDate || '',
+    terms: b.terms || '',
+    status: normalizeBillStatus(b.status),
+    lines,
+    total: Number(b.total ?? 0),
+    amountPaid: Number(b.amountPaid ?? 0),
+    balanceDue: Number(b.balanceDue ?? 0),
+    memo: b.memo,
+  };
+}
+
+function normalizeJournalSource(raw: unknown): JournalEntry['source'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s.includes('invoice')) return 'invoice';
+  if (s.includes('bill')) return 'bill';
+  if (s.includes('payroll')) return 'payroll';
+  if (s.includes('payment') || s.includes('receipt')) return 'payment';
+  if (s.includes('reconcil')) return 'reconciliation';
+  if (s.includes('contract')) return 'contract';
+  if (s.includes('quick')) return 'quick_print';
+  return 'manual';
+}
+
+function mapApiJournalEntry(e: ApiJournalEntry & Record<string, any>): JournalEntry {
+  return {
+    id: String(e.id),
+    entryNumber: e.entryNumber || '',
+    date: e.txnDate || e.date || '',
+    memo: e.memo ?? '',
+    lines: Array.isArray(e.lines)
+      ? e.lines.map((l: any) => ({
+          id: String(l.id ?? ''),
+          accountId: String(l.accountId ?? ''),
+          description: l.description ?? '',
+          debit: Number(l.debitNum ?? l.debit ?? 0),
+          credit: Number(l.creditNum ?? l.credit ?? 0),
+        }))
+      : [],
+    source: normalizeJournalSource(e.sourceType),
+    sourceRefId: e.sourceId != null ? String(e.sourceId) : undefined,
+  };
+}
+
+function normalizeBankTxnType(raw: unknown): BankTransaction['type'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s.includes('check')) return 'Check';
+  if (s.includes('deposit')) return 'Deposit';
+  if (s.includes('transfer')) return 'Transfer';
+  if (s.includes('bill')) return 'Bill Payment';
+  if (s.includes('fee')) return 'Fee';
+  return 'Debit';
+}
+
+function mapApiBankTransaction(t: ApiBankTransaction & Record<string, any>): BankTransaction {
+  return {
+    id: String(t.id),
+    accountId: String(t.accountId ?? ''),
+    date: t.date || '',
+    payee: t.payee || '',
+    type: normalizeBankTxnType(t.type),
+    refNumber: t.refNumber,
+    memo: t.memo || '',
+    amount: Number(t.amount ?? 0),
+    balance: Number(t.runningBalance ?? t.balance ?? 0),
+    isCleared: Boolean(t.cleared),
+    category: t.category,
+  };
+}
+
+function mapApiQuickPrintJob(r: any): QuickPrintJob {
+  const paperCost = Number(r.paper_cost ?? 0);
+  const tonerCost = Number(r.toner_cost ?? 0);
+  const extraCost = Number(r.extra_cost ?? 0);
+  const sellingPriceTotal = Number(r.manual_selling_price ?? 0);
+  const totalCost = paperCost + tonerCost + extraCost;
+  return {
+    id: String(r.id),
+    backendJobId: r.id != null ? Number(r.id) : undefined,
+    jobNumber: r.job_number || '',
+    customerId: r.customer_id != null ? String(r.customer_id) : undefined,
+    customerName: r.customer_name || '',
+    jobType: (r.job_type || 'quick_photocopy') as QuickPrintJob['jobType'],
+    title: r.title || '',
+    pages: Number(r.pages ?? 0),
+    copies: Number(r.copies ?? 0),
+    printSide: r.print_side === 'Duplex' ? 'Duplex' : 'Single-Sided',
+    rawPaperItemId: r.raw_paper_item_id != null ? String(r.raw_paper_item_id) : '',
+    rawTonerItemId: r.raw_toner_item_id != null ? String(r.raw_toner_item_id) : '',
+    sheetsUsed: Number(r.sheets_used ?? 0),
+    impressionsUsed: Number(r.impressions_used ?? 0),
+    paperCost,
+    tonerCost,
+    extraCost,
+    totalCost,
+    sellingPriceTotal,
+    profit: sellingPriceTotal - totalCost,
+    date: String(r.job_date ?? '').slice(0, 10),
+    backendInvoiceId: r.invoice_id != null ? Number(r.invoice_id) : undefined,
+  };
+}
 
 const WORKSPACE_PRESS_CAPABILITY: TonerMachineSpec = {
   machineId: 'workspace-digital-press',
@@ -844,14 +1106,179 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   const [billPayments, setBillPayments] = useState<BillPayment[]>([]);
   const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
   const [payrollRuns, setPayrollRuns] = useState<PayrollRun[]>(INITIAL_PAYROLL_RUNS);
+
+  /**
+   * The employee directory and payroll history are server-owned. The demo seeds
+   * are only a pre-auth fallback; once a session exists these hydrate from
+   * `/api/employees` and `/api/payroll/runs` so the payroll centre never runs
+   * against a fictional roster.
+   */
+  const refreshEmployeesFromBackend = async () => {
+    try {
+      const list = await payrollApi.listEmployees();
+      if (list.length > 0) setEmployees(list.map(mapApiEmployeeToEmployee));
+    } catch {
+      // Keep the fallback directory when the backend is unreachable.
+    }
+  };
+
+  const refreshPayrollRunsFromBackend = async () => {
+    try {
+      const runs = await payrollApi.listRuns();
+      const mapped: PayrollRun[] = (runs as any[]).map((r) => ({
+        id: String(r.id),
+        runNumber: r.run_number,
+        payPeriodStart: String(r.pay_period_start ?? '').slice(0, 10),
+        payPeriodEnd: String(r.pay_period_end ?? '').slice(0, 10),
+        payDate: String(r.pay_date ?? '').slice(0, 10),
+        totalGross: Number(r.total_gross ?? 0),
+        totalNet: Number(r.total_net ?? 0),
+        totalEmployeeTaxes: Number(r.total_employee_taxes ?? 0),
+        totalEmployerTaxes: Number(r.total_employer_taxes ?? 0),
+        items: Array.isArray(r.items) ? r.items.map(mapPayslipToPayrollItem) : [],
+        bankAccountId: '',
+        status: 'processed' as const,
+      }));
+      setPayrollRuns(mapped);
+    } catch {
+      // Keep the fallback runs when the backend is unreachable.
+    }
+  };
+
+  useEffect(() => {
+    refreshEmployeesFromBackend();
+    refreshPayrollRunsFromBackend();
+    const handler = () => {
+      refreshEmployeesFromBackend();
+      refreshPayrollRunsFromBackend();
+    };
+    window.addEventListener(ACCOUNTING_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, handler);
+  }, []);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(INITIAL_BANK_TRANSACTIONS);
   const [reconciliations, setReconciliations] = useState<BankReconciliation[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_AUDIT_LOGS
   );
 
+  /**
+   * Financial entities are server-owned. The demo seeds below are a pre-auth
+   * fallback only; once a session exists these hydrate from the API so the
+   * browser working copy mirrors the ledger (and the sidebar badges read real
+   * counts). Every mutation path emits ACCOUNTING_UPDATED_EVENT, so the lists
+   * refresh after a write rather than drifting from the server.
+   */
+  const refreshVendorsFromBackend = async () => {
+    try {
+      const list = await commercialApi.listVendors();
+      if (list.length > 0) setVendors(list.map(mapApiVendorToVendor));
+    } catch {
+      // Keep the fallback vendors when the backend is unreachable.
+    }
+  };
+  const refreshInvoicesFromBackend = async () => {
+    try {
+      const list = await commercialApi.listInvoices();
+      setInvoices(list.map(mapApiInvoiceToInvoice));
+    } catch {
+      // Keep the fallback invoices when the backend is unreachable.
+    }
+  };
+  const refreshBillsFromBackend = async () => {
+    try {
+      const list = await commercialApi.listBills();
+      setBills(list.map(mapApiBillToBill));
+    } catch {
+      // Keep the fallback bills when the backend is unreachable.
+    }
+  };
+  const refreshJournalEntriesFromBackend = async () => {
+    try {
+      const list = await accountingApi.listJournals();
+      setJournalEntries(list.map(mapApiJournalEntry));
+    } catch {
+      // Keep the current journal entries when the backend is unreachable.
+    }
+  };
+  const refreshBankTransactionsFromBackend = async () => {
+    try {
+      const list = await commercialApi.listBankTransactions();
+      setBankTransactions(list.map(mapApiBankTransaction));
+    } catch {
+      // Keep the current bank transactions when the backend is unreachable.
+    }
+  };
+  const refreshReconciliationsFromBackend = async () => {
+    try {
+      const list = await commercialApi.listReconciliations();
+      setReconciliations(
+        (list as any[]).map((r) => ({
+          id: String(r.id),
+          accountId: String(r.accountId ?? ''),
+          statementDate: String(r.statementDate ?? '').slice(0, 10),
+          statementEndingBalance: Number(r.statementEndingBalance ?? 0),
+          clearedBalance: Number(r.clearedTotal ?? r.clearedBalance ?? 0),
+          difference: Number(r.difference ?? 0),
+          clearedTxIds: Array.isArray(r.clearedTxIds) ? r.clearedTxIds.map(String) : [],
+          reconciledAt: r.completedAt ? String(r.completedAt) : '',
+        }))
+      );
+    } catch {
+      // Keep the current reconciliations when the backend is unreachable.
+    }
+  };
+  const refreshQuickPrintJobsFromBackend = async () => {
+    try {
+      const rows = await printingApi.listQuickPrintJobs();
+      setQuickPrintJobs(rows.map(mapApiQuickPrintJob));
+    } catch {
+      // Keep the current quick-print jobs when the backend is unreachable.
+    }
+  };
+
+  useEffect(() => {
+    const refreshAll = () => {
+      refreshVendorsFromBackend();
+      refreshInvoicesFromBackend();
+      refreshBillsFromBackend();
+      refreshJournalEntriesFromBackend();
+      refreshBankTransactionsFromBackend();
+      refreshReconciliationsFromBackend();
+      refreshQuickPrintJobsFromBackend();
+    };
+    refreshAll();
+    window.addEventListener(ACCOUNTING_UPDATED_EVENT, refreshAll);
+    return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, refreshAll);
+  }, []);
+
   // View state & modals
-  const [currentView, setCurrentView] = useState<string>('workflow');
+  // The active view is mirrored in the URL hash (#/<view>) so every screen has a
+  // deep link and the browser Back/Forward buttons work. `setCurrentView` keeps
+  // the historical (view: string) signature used across the app while driving the
+  // hash; a `hashchange` listener keeps state in sync when the user navigates via
+  // history or a pasted link.
+  const readViewFromHash = (): string => {
+    const raw = window.location.hash.replace(/^#\/?/, '').trim();
+    return raw || 'workflow';
+  };
+  const [currentView, setCurrentViewState] = useState<string>(readViewFromHash);
+  const setCurrentView = React.useCallback((view: string) => {
+    setCurrentViewState(view);
+    const target = `#/${view}`;
+    if (window.location.hash !== target) {
+      window.location.hash = target;
+    }
+  }, []);
+  useEffect(() => {
+    const onHashChange = () => setCurrentViewState(readViewFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    // Normalise a bare URL to the default workflow view so the address bar is
+    // always shareable/deep-linkable.
+    if (!window.location.hash) {
+      window.history.replaceState(null, '', '#/workflow');
+    }
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const [isNewInvoiceOpen, setIsNewInvoiceOpen] = useState(false);
   const [isReceivePaymentOpen, setIsReceivePaymentOpen] = useState(false);
   const [isEnterBillOpen, setIsEnterBillOpen] = useState(false);

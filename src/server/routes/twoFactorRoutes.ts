@@ -31,7 +31,7 @@ export function createTwoFactorRoutes(db: ServerDatabase): Router {
     try {
       const auth = req.auth!;
       const status = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
-        twoFactorService.getTwoFactorStatus(tx, auth.userId)
+        twoFactorService.getTwoFactorStatus(tx, auth.userId), auth.userId
       );
       return res.json(status);
     } catch (err) {
@@ -55,7 +55,7 @@ export function createTwoFactorRoutes(db: ServerDatabase): Router {
           newValues: { step: 'enrolled' },
         });
         return r;
-      });
+      }, auth.userId);
       return res.json(result);
     } catch (err) {
       return handleError(res, err);
@@ -84,7 +84,7 @@ export function createTwoFactorRoutes(db: ServerDatabase): Router {
           });
         }
         return ok;
-      });
+      }, auth.userId);
       if (!enabled) {
         return res.status(400).json({ error: 'Invalid TOTP code' });
       }
@@ -110,7 +110,7 @@ export function createTwoFactorRoutes(db: ServerDatabase): Router {
           newValues: { count: c.length },
         });
         return c;
-      });
+      }, auth.userId);
       return res.json({ codes });
     } catch (err) {
       return handleError(res, err);
@@ -136,7 +136,7 @@ export function createTwoFactorRoutes(db: ServerDatabase): Router {
           recordId: auth.userId,
           newValues: { enabled: false },
         });
-      });
+      }, auth.userId);
       return res.json({ disabled: true });
     } catch (err) {
       return handleError(res, err);

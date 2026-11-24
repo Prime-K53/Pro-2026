@@ -22,6 +22,11 @@ import {
 } from './productionService.ts';
 import { divRoundBigInt, resolveWorkflowAccounts } from './commercialHelpers.ts';
 import { hasPermission } from '../permissions.ts';
+import {
+  assertTransition,
+  isImmutable,
+  type PrintingContractStatus,
+} from './contractLifecycle.ts';
 
 /**
  * Server-owned printing production records: prepaid school retainers and
@@ -779,6 +784,10 @@ export async function activatePrintingContract(
   if (row.status !== 'draft') {
     throw new AccountingError(409, 'Only draft contracts can be activated', 'CONTRACT_NOT_DRAFT');
   }
+  // The lifecycle matrix (contractLifecycle.ts) is the single authority on which
+  // roles may perform a transition; the status guard above preserves the precise
+  // CONTRACT_NOT_DRAFT error for callers.
+  assertTransition(row.status as PrintingContractStatus, 'ACTIVATE', 'active', actor.role);
 
   // Exact-sum invariant, enforced through the shared helper (G-08).
   await assertAssessmentAllocation(tx, companyId, contractId, row.total_prepaid_amount, {
@@ -900,6 +909,7 @@ export async function suspendContract(
   if (row.status !== 'active') {
     throw new AccountingError(409, 'Only active contracts can be suspended', 'CONTRACT_NOT_ACTIVE');
   }
+  assertTransition(row.status as PrintingContractStatus, 'SUSPEND', 'suspended', actor.role);
   const trimmed = String(reason || '').trim();
   if (!trimmed) {
     throw new AccountingError(400, 'A suspension reason is required', 'SUSPENSION_REASON_REQUIRED');
@@ -939,6 +949,7 @@ export async function resumeContract(
   if (row.status !== 'suspended') {
     throw new AccountingError(409, 'Only suspended contracts can be resumed', 'CONTRACT_NOT_SUSPENDED');
   }
+  assertTransition(row.status as PrintingContractStatus, 'RESUME', 'active', actor.role);
 
   await tx.query(
     `UPDATE printing_contracts
@@ -981,6 +992,7 @@ export async function cancelPrintingContract(
   if (!['active', 'suspended', 'completed'].includes(row.status)) {
     throw new AccountingError(409, 'Contract cannot be cancelled in its current status', 'INVALID_CONTRACT_STATUS');
   }
+  assertTransition(row.status as PrintingContractStatus, 'VOID', 'cancelled', actor.role);
   const reason = String(input.reason || '').trim();
   if (!reason) {
     throw new AccountingError(400, 'A cancellation reason is required', 'CANCELLATION_REASON_REQUIRED');
@@ -2037,7 +2049,8 @@ export async function requestContractAmendment(
   if (row.status === 'draft') {
     throw new AccountingError(409, 'Draft contracts can be amended directly', 'DRAFT_AMENDMENT_DIRECT');
   }
-  if (['cancelled', 'completed', 'exhausted'].includes(row.status)) {
+  // Immutability is defined centrally in contractLifecycle.ts.
+  if (isImmutable(row.status as PrintingContractStatus)) {
     throw new AccountingError(409, 'Contract cannot be amended in its current status', 'INVALID_CONTRACT_STATUS');
   }
 
@@ -2979,6 +2992,18 @@ export async function completeContractAssessment(
   // explicit credit-balance state and the operator must refund or renew (D-2).
   const creditBalance = allDone && nextRemaining > 0n;
   const nextStatus = allDone ? (creditBalance ? 'active' : 'completed') : 'active';
+
+  // Completion (active → completed) is a lifecycle transition; the matrix is the
+  // authority on who may perform it. A credit-balance hold stays `active` and is
+  // not a transition.
+  if (nextStatus !== row.status) {
+    assertTransition(
+      row.status as PrintingContractStatus,
+      'COMPLETE',
+      nextStatus as PrintingContractStatus,
+      actor.role
+    );
+  }
 
   await tx.query(
     `UPDATE contract_assessment_milestones

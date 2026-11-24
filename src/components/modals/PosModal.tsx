@@ -22,6 +22,7 @@ import { ApiPosCatalog, smartOpsApi } from '../../services/smartOpsApi';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { InlineAlert, ModalHeader, ModalShell, SummaryRow } from '../common/ui';
+import { OnlineStatusBanner } from '../pos/OnlineStatusBanner';
 import { printingApi } from '../../services/printingApi';
 import { QuickPrintJobModal, type QuickPrintJobDraft } from './QuickPrintJobModal';
 
@@ -572,6 +573,10 @@ export const PosModal: React.FC = () => {
           </InlineAlert>
         </div>
       )}
+
+      <div className="px-5 pt-3">
+        <OnlineStatusBanner />
+      </div>
 
       {completedOrder ? (
         <div className="flex-1 overflow-y-auto p-6">

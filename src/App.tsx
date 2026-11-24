@@ -20,10 +20,22 @@ import { InventoryView } from './components/views/InventoryView';
 import { QuickPrintView } from './components/views/QuickPrintView';
 import { PayrollView } from './components/views/PayrollView';
 import { TaxFormsView } from './components/views/TaxFormsView';
+import { SalesTrendsView, KpiScorecardView } from './components/bi/SalesTrendsView';
+import { BiDashboard } from './components/bi/BiDashboard';
+import { HealthDashboard } from './components/admin/HealthDashboard';
+import { SubscriptionManager } from './components/admin/SubscriptionManager';
+import { VehicleManagement, DriverManagement } from './components/delivery/VehicleManagement';
+import { DeliveryScheduling } from './components/delivery/DeliveryScheduling';
+import { ConsentManagement } from './components/communications/ConsentManagement';
+import { InboxView } from './components/communications/InboxView';
+import { CustomerContactsTab } from './components/customers/CustomerContactsTab';
+import { DeductionRulesView } from './components/payroll/DeductionRulesView';
+import { SalaryAdvanceModal } from './components/payroll/SalaryAdvanceModal';
 import { FinanceControlsView } from './components/views/FinanceControlsView';
 import { AiAgentView } from './components/views/AiAgentView';
 import { SettingsView } from './components/views/SettingsView';
 import { AccessControlView } from './components/views/AccessControlView';
+import { canAccessView, VIEW_REQUIRED_PERMISSION } from './config/viewPermissions';
 
 // Route-level code splitting for the heaviest views. These are only needed when
 // the operator actually opens them, so keeping them out of the first-load
@@ -135,10 +147,50 @@ const ViewLoadingFallback: React.FC = () => (
   </div>
 );
 
+const AccessDeniedView: React.FC<{ viewId: string; onHome: () => void }> = ({ viewId, onHome }) => {
+  const required = VIEW_REQUIRED_PERMISSION[viewId];
+  const label = viewId.replace(/-/g, ' ');
+  return (
+    <div className="p-6 sm:p-8">
+      <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-pop dark:border-white/10 dark:bg-slate-900">
+        <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-amber-300 to-slate-300" />
+        <div className="space-y-4 p-7">
+          <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
+          <div className="space-y-1.5">
+            <h1 className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">
+              You do not have access to this module
+            </h1>
+            <p className="text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
+              The <strong className="text-slate-700 dark:text-slate-300">{label}</strong> module
+              {required ? (
+                <>
+                  {' '}requires the{' '}
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                    {required}
+                  </span>{' '}
+                  permission
+                </>
+              ) : null}
+              , which your role does not hold. Ask an administrator to grant it, or return to the
+              workflow overview.
+            </p>
+          </div>
+          <button type="button" onClick={onHome} className="btn btn-primary w-full">
+            Back to Flow Navigator
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AppContent: React.FC = () => {
-  const { activeCompany } = useAuth();
+  const { activeCompany, permissions } = useAuth();
   const {
     currentView,
+    setCurrentView,
     companyProfile,
     updateCompanyProfile,
     activeShortcutNotice,
@@ -207,6 +259,32 @@ const AppContent: React.FC = () => {
         return <AllDocumentsView />;
       case 'smart-operations':
         return <SmartOperationsView />;
+      case 'sales-trends':
+        return <SalesTrendsView />;
+      case 'kpi-scorecard':
+        return <KpiScorecardView />;
+      case 'bi-dashboard':
+        return <BiDashboard />;
+      case 'health':
+        return <HealthDashboard />;
+      case 'system-admin':
+        return <SubscriptionManager />;
+      case 'delivery-fleet':
+        return (
+          <div className="space-y-6 p-6">
+            <DeliveryScheduling />
+            <VehicleManagement />
+            <DriverManagement />
+          </div>
+        );
+      case 'consent-management':
+        return <ConsentManagement />;
+      case 'communications-inbox':
+        return <InboxView />;
+      case 'deduction-rules':
+        return <DeductionRulesView />;
+      case 'salary-advances':
+        return <SalaryAdvanceModal onClose={() => setCurrentView('payroll')} />;
       default:
         return <HomeWorkflowView />;
     }
@@ -233,7 +311,11 @@ const AppContent: React.FC = () => {
         {/* Primary Viewport */}
         <main className="flex-1 overflow-y-auto print:overflow-visible">
           <Suspense fallback={<ViewLoadingFallback />}>
-            {renderActiveView()}
+            {canAccessView(currentView, permissions) ? (
+              renderActiveView()
+            ) : (
+              <AccessDeniedView viewId={currentView} onHome={() => setCurrentView('workflow')} />
+            )}
           </Suspense>
         </main>
       </div>

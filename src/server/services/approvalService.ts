@@ -48,6 +48,7 @@ export const APPROVAL_ACTION_TYPES = [
   'referral_fraud_decision',
   'referral_dispute_review',
   'referral_writeoff',
+  'inventory_writeoff',
 ] as const;
 
 export type ApprovalActionType = (typeof APPROVAL_ACTION_TYPES)[number];

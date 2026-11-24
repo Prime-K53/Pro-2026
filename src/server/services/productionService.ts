@@ -2564,6 +2564,7 @@ export async function cancelPrintingJob(
       reference: job.job_number,
       sourceType: 'production_variance',
       sourceId: jobId,
+      idempotencyKey: `job-cancel-wip-${jobId}`,
       lines: [
         {
           accountId: ctx.spoilageVariance5100,
@@ -2841,6 +2842,34 @@ export async function getInventoryValuationReport(tx: Transaction, companyId: nu
  * issue the planned paper/toner into WIP in one transaction. Stock and the cost
  * ledger stay in step with the desk.
  */
+/**
+ * Recent quick-print desk jobs (photocopy / type-and-print / general print),
+ * newest first. Quick-print work is stored in `printing_jobs` alongside other
+ * production jobs; the desk history is simply those rows projected into the
+ * shape the Quick Print view renders.
+ */
+export async function listQuickPrintJobs(tx: Transaction, companyId: number, limit = 50) {
+  const res = await tx.query(
+    `SELECT id, job_number, job_type, customer_id, customer_name, title,
+            pages, copies, print_side,
+            raw_paper_item_id, raw_toner_item_id,
+            sheets_used::text  AS sheets_used,
+            impressions_used::text AS impressions_used,
+            paper_cost::text   AS paper_cost,
+            toner_cost::text   AS toner_cost,
+            extra_cost::text   AS extra_cost,
+            manual_selling_price::text AS manual_selling_price,
+            job_date::text AS job_date, status, invoice_id
+       FROM printing_jobs
+      WHERE company_id = $1
+        AND job_type IN ('quick_photocopy', 'type_and_printing', 'general_print')
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [companyId, Math.max(1, Math.min(Number(limit) || 50, 500))]
+  );
+  return res.rows;
+}
+
 export async function postQuickPrintJob(
   tx: Transaction,
   companyId: number,

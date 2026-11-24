@@ -12,6 +12,10 @@ import {
   listSalaryStructures,
   createSalaryStructure,
   deleteSalaryStructure,
+  listEmployeeLoans,
+  createEmployeeLoan,
+  listEmployeeDeductions,
+  createEmployeeDeduction,
 } from '../services/payrollService.ts';
 import { Transaction } from '@electric-sql/pglite';
 
@@ -468,6 +472,56 @@ export function createPayrollRoutes(db: ServerDatabase): Router {
         deleteSalaryStructure(tx, auth.companyId, Number(req.params.id))
       );
       return res.json({ deleted });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/payroll/loans', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const employeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
+      const loans = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        listEmployeeLoans(tx, auth.companyId, employeeId)
+      );
+      return res.json({ loans });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/payroll/loans', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const loan = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        createEmployeeLoan(tx, auth.companyId, req.body || {})
+      );
+      return res.status(201).json({ loan });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.get('/payroll/deductions', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const employeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
+      const deductions = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        listEmployeeDeductions(tx, auth.companyId, employeeId)
+      );
+      return res.json({ deductions });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/payroll/deductions', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const deduction = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        createEmployeeDeduction(tx, auth.companyId, req.body || {})
+      );
+      return res.status(201).json({ deduction });
     } catch (err) {
       return handleError(res, err);
     }

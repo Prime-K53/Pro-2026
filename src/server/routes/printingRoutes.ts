@@ -15,6 +15,7 @@ import {
   createPrintingJobFromEstimate,
   linkQuickPrintJobToInvoice,
   postQuickPrintJob,
+  listQuickPrintJobs,
   getInventoryValuationReport,
   getJobProfitabilityReport,
   getPrintingJobById,
@@ -163,6 +164,21 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         })
       );
       return res.status(result.idempotentReplay ? 200 : 201).json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  /**
+   * Recent quick-print desk jobs (newest first) for the desk history panel.
+   */
+  router.get('/printing/quick-jobs', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const limit = Number(req.query.limit) || 50;
+      const jobs = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listQuickPrintJobs(tx, req.auth!.companyId, limit)
+      );
+      return res.json({ companyId: req.auth!.companyId, jobs });
     } catch (err) {
       return handlePrintingError(res, err);
     }

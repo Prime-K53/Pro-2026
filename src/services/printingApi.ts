@@ -126,6 +126,14 @@ export const printingApi = {
   },
 
   /**
+   * Recent quick-print desk jobs (newest first) for the desk history panel.
+   */
+  async listQuickPrintJobs(limit = 50): Promise<any[]> {
+    const d = await requestJson<{ jobs: any[] }>(`/api/printing/quick-jobs?limit=${limit}`);
+    return d.jobs || [];
+  },
+
+  /**
    * Bills an existing quick-print job onto an invoice that was raised elsewhere
    * (combined invoice modal or POS checkout). Relieves the job's WIP to COGS once
    * and ties the relief to the invoice's cost so gross profit is not doubled.

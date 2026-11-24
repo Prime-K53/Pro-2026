@@ -3,6 +3,7 @@ import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { commercialApi } from '../../services/commercialApi';
 import { documentsApi } from '../../services/documentsApi';
+import { documentQrApi } from '../../services/v2Api';
 import {
   mapApiPreviewToModel,
   mapLocalInvoiceToPreviewModel,
@@ -21,6 +22,7 @@ import {
   Clock,
   FileSpreadsheet,
   AlertTriangle,
+  ShieldCheck,
 } from 'lucide-react';
 
 function buildPrintableHtmlDocument(doc: NonNullable<ReturnType<typeof useAccounting>['previewDocument']>): string {
@@ -139,15 +141,22 @@ export const DocumentPreviewModal: React.FC = () => {
   } = useAccounting();
   const { activeCompany, hasPermission } = useAuth();
 
-  const [busyAction, setBusyAction] = useState<'invoice' | 'archive' | 'linked' | null>(null);
+  const [busyAction, setBusyAction] = useState<'invoice' | 'archive' | 'linked' | 'qr' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [fileObjectUrl, setFileObjectUrl] = useState<string | null>(null);
   const [fileContentType, setFileContentType] = useState<string>('');
   const [loadingFile, setLoadingFile] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrToken, setQrToken] = useState<string | null>(null);
 
   const canWriteInvoice = hasPermission('invoices:write');
   const canWriteAttachment = hasPermission('attachments:write');
   const canReadCosts = hasPermission('estimates:read_costs');
+
+  useEffect(() => {
+    setQrDataUrl(null);
+    setQrToken(null);
+  }, [previewDocument?.id, previewDocument?.kind]);
 
   useEffect(() => {
     setActionError(null);
@@ -200,6 +209,34 @@ export const DocumentPreviewModal: React.FC = () => {
   const currency = previewDocument.company.currency || companyProfile.currency || 'K';
   const companyDisplayName =
     activeCompany?.name || previewDocument.company.name || companyProfile.name;
+
+  // WS-6 Q1/Q5 — generate a verification QR for this document. The QR resolves
+  // to a public page that exposes only kind/id/status/version/hash.
+  const handleGenerateQr = async () => {
+    if (previewDocument.kind === 'attachment') return;
+    const backendId =
+      typeof previewDocument.backendId === 'number' && previewDocument.backendId > 0
+        ? previewDocument.backendId
+        : typeof previewDocument.id === 'number'
+        ? previewDocument.id
+        : null;
+    if (!backendId) {
+      setActionError('This document has no persisted record to attach a QR code to yet.');
+      return;
+    }
+    setBusyAction('qr');
+    setActionError(null);
+    try {
+      const res = await documentQrApi.generate(previewDocument.kind, backendId);
+      setQrDataUrl(res.qrDataUrl);
+      setQrToken(res.token);
+      triggerShortcutNotice(`Verification QR generated for ${previewDocument.documentNumber}`);
+    } catch (err: any) {
+      setActionError(err?.message || 'QR generation failed');
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   const handleDownload = async () => {
     setActionError(null);
@@ -463,6 +500,21 @@ export const DocumentPreviewModal: React.FC = () => {
 
             <button
               type="button"
+              onClick={handleGenerateQr}
+              disabled={busyAction !== null || previewDocument.kind === 'attachment'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition-colors disabled:opacity-50"
+              title="Generate a public verification QR code for this document"
+            >
+              {busyAction === 'qr' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              )}
+              <span>QR</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => window.print()}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors"
             >
@@ -491,6 +543,52 @@ export const DocumentPreviewModal: React.FC = () => {
             <button onClick={() => setActionError(null)} className="underline font-semibold">
               Dismiss
             </button>
+          </div>
+        )}
+
+        {/* QR verification panel */}
+        {qrDataUrl && (
+          <div className="px-5 py-3 bg-slate-50 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex items-center gap-4 no-print">
+            <img src={qrDataUrl} alt="Document verification QR code" className="h-24 w-24 rounded border border-slate-200 dark:border-slate-700" />
+            <div className="text-xs">
+              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                Verification QR generated
+              </div>
+              <p className="mt-1 max-w-md text-slate-500 dark:text-slate-400">
+                Scanning this code opens a public page showing only the document kind, id, status,
+                version and hash — no confidential fields.
+              </p>
+              {qrToken && (
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <a
+                    href={documentQrApi.verifyPageUrl(qrToken)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:underline"
+                  >
+                    Open public verification page
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                  <a
+                    href={documentQrApi.printUrl(
+                      previewDocument.kind,
+                      Number(
+                        previewDocument.backendId && previewDocument.backendId > 0
+                          ? previewDocument.backendId
+                          : previewDocument.id
+                      ),
+                      true
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:underline"
+                  >
+                    Branded print (with QR)
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

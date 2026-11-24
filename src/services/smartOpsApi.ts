@@ -794,10 +794,10 @@ export const smartOpsApi = {
     );
   },
 
-  suspendPosOrder: (orderId: number, notes?: string) =>
+  suspendPosOrder: (orderId: number, payload: { notes?: string; suspendId?: string } = {}) =>
     requestJson<{ suspendedSale: ApiPosSuspendedSale }>(`/api/pos/orders/${orderId}/suspend`, {
       method: 'POST',
-      body: JSON.stringify({ notes }),
+      body: JSON.stringify(payload),
     }),
 
   resumePosOrder: (suspendedSaleId: number) =>
@@ -866,6 +866,7 @@ export interface ApiPosSuspendedSale {
   suspendedAt: string;
   resumedAt: string | null;
   status: 'suspended' | 'resumed';
+  clientToken?: string | null;
 }
 
 export interface ApiPosCatalogItem {

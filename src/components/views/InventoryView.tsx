@@ -187,8 +187,23 @@ export const InventoryView: React.FC = () => {
         adjustmentQty,
         reason: adjustmentReason,
       });
+      if (result.approvalRequired) {
+        const requestId = result.approvalRequest?.id;
+        triggerShortcutNotice(
+          result.message ||
+            `This write-off requires approval${
+              requestId ? ` (request #${requestId})` : ''
+            }. It will post once an approver signs off.`,
+          'error'
+        );
+        setItemToAdjust(null);
+        return;
+      }
+      const adjustment = result.adjustment;
       triggerShortcutNotice(
-        `Adjusted ${result.sku} by ${Number(result.quantityDelta) > 0 ? '+' : ''}${result.quantityDelta} · posted ${result.entryNumber} (new on hand ${result.onHandAfter})`
+        `Adjusted ${adjustment.sku} by ${
+          Number(adjustment.quantityDelta) > 0 ? '+' : ''
+        }${adjustment.quantityDelta} · posted ${adjustment.entryNumber} (new on hand ${adjustment.onHandAfter})`
       );
       setItemToAdjust(null);
     } catch (err: any) {

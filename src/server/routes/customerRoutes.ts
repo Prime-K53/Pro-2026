@@ -82,8 +82,9 @@ export function createCustomerRoutes(db: ServerDatabase): Router {
     try {
       const auth = req.auth!;
       const customerId = Number(req.params.id);
+      const includeInactive = String(req.query.includeInactive || '') === 'true';
       const branches = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
-        customerService.listBranches(tx, auth.companyId, customerId)
+        customerService.listBranches(tx, auth.companyId, customerId, includeInactive)
       );
       return res.json({ branches });
     } catch (err) {
@@ -121,10 +122,24 @@ export function createCustomerRoutes(db: ServerDatabase): Router {
     try {
       const auth = req.auth!;
       const branchId = Number(req.params.branchId);
-      await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
-        customerService.deleteBranch(tx, auth.companyId, branchId)
+      // Soft deactivate — the row is kept so historical documents still resolve.
+      const branch = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        customerService.deactivateBranch(tx, auth.companyId, branchId)
       );
-      return res.json({ deleted: true });
+      return res.json({ deactivated: true, branch });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/customers/:id/branches/:branchId/reactivate', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const branchId = Number(req.params.branchId);
+      const branch = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        customerService.reactivateBranch(tx, auth.companyId, branchId)
+      );
+      return res.json({ branch });
     } catch (err) {
       return handleError(res, err);
     }

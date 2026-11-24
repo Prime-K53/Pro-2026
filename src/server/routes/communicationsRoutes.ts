@@ -92,6 +92,14 @@ export function createCommunicationsRoutes(db: ServerDatabase): Router {
           providerMessageId,
         })
       );
+      // For SMS/WhatsApp, attempt an immediate outbound send. Email stays queued
+      // for the nodemailer dispatcher.
+      if (channel === 'sms' || channel === 'whatsapp') {
+        const dispatched = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+          commsService.dispatchQueuedMessage(tx, auth.companyId, message.id, db.config)
+        );
+        return res.status(201).json({ message: dispatched });
+      }
       return res.status(201).json({ message });
     } catch (err) {
       return handleError(res, err);

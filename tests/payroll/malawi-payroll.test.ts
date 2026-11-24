@@ -195,6 +195,36 @@ async function main() {
     assert.equal(run3.status, 201, run3.text);
     assert.equal(run3.json.run.items[0].grossPay, 20000, 'salary structure must drive gross pay');
 
+    // Approved loan + other deduction are applied in a later run.
+    const loanRes = await c.request('POST', '/api/payroll/loans', {
+      body: { employeeId: employee.id, principal: 1000, installment: 200 },
+    });
+    assert.equal(loanRes.status, 201, loanRes.text);
+    const dedRes = await c.request('POST', '/api/payroll/deductions', {
+      body: { employeeId: employee.id, deductionType: 'union', amount: 100, calculationMethod: 'fixed' },
+    });
+    assert.equal(dedRes.status, 201, dedRes.text);
+
+    const run4 = await c.request('POST', '/api/payroll/runs', {
+      body: {
+        payPeriodStart: '2023-10-01',
+        payPeriodEnd: '2023-10-31',
+        payDate: '2023-10-31',
+        bankAccountId: bank.id,
+        items: [{ employeeId: employee.id, hoursRegular: 0, hoursOvertime: 0 }],
+      },
+    });
+    assert.equal(run4.status, 201, run4.text);
+    assert.ok(
+      Number(run4.json.run.items[0].otherDeductions) >= 300,
+      `loan + deduction must be deducted, got ${run4.json.run.items[0].otherDeductions}`
+    );
+
+    const loans = await c.request('GET', `/api/payroll/loans?employeeId=${employee.id}`);
+    const savedLoan = loans.json.loans.find((l: any) => l.id === loanRes.json.loan.id);
+    assert.ok(savedLoan, 'loan must be listed');
+    assert.equal(Number(savedLoan.balance), 800, 'loan balance must reduce by the installment');
+
     console.log('✅ Malawi statutory payroll tests passed');
   } finally {
     await srv.close();

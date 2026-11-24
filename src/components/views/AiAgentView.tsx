@@ -1,488 +1,1032 @@
-import React, { useState } from 'react';
-import { useAccounting } from '../../context/AccountingContext';
-import { STOCKED_ITEM_TYPES } from '../../types/accounting';
-import { formatCurrency } from '../../utils/currency';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles,
   ShieldAlert,
-  CheckCircle2,
   AlertTriangle,
-  Copy,
+  CheckCircle2,
+  XCircle,
+  Send,
+  Plus,
+  Trash2,
+  RefreshCw,
+  Settings,
   Receipt,
-  Server,
-  Zap,
+  Cpu,
+  Wallet,
+  ListChecks,
+  MessageSquare,
+  Loader2,
+  KeyRound,
 } from 'lucide-react';
+import {
+  aiApi,
+  AiAnomaly,
+  AiBudget,
+  AiCitation,
+  AiConfig,
+  AiConversation,
+  AiMessage,
+  AiProposedAction,
+} from '../../services/v2Api';
+import { useAccounting } from '../../context/AccountingContext';
+import { InlineAlert, Panel, StatCard, StatusBadge } from '../common/ui';
 
-interface Anomaly {
-  id: string;
-  type: 'warning' | 'info' | 'alert';
-  title: string;
-  description: string;
-  recommendation: string;
-  accountOrRef?: string;
-}
+type Tab = 'chat' | 'anomalies' | 'actions' | 'settings';
 
+/**
+ * WS-2 — AI assistant.
+ *
+ * Replaces the previous client-side mock with the real server-backed
+ * `/api/ai/*` endpoints: live provider config + model discovery, RAG chat with
+ * citations, server-side anomaly detection, maker-checker proposed actions,
+ * token/cost budgets, retention purge and an audit trail.
+ */
 export const AiAgentView: React.FC = () => {
-  const {
-    accounts,
-    invoices,
-    bills,
-    bankTransactions,
-    inventoryItems,
-    payrollRuns,
-    setIsOcrScannerOpen,
-    companyProfile,
-    triggerShortcutNotice,
-  } = useAccounting();
-  const currency = companyProfile.currency || 'K';
+  const { setIsOcrScannerOpen, triggerShortcutNotice } = useAccounting();
+  const [tab, setTab] = useState<Tab>('chat');
 
-  const [activeTab, setActiveTab] = useState<'auditor' | 'api' | 'prompt'>('auditor');
-  const [promptQuery, setPromptQuery] = useState('What is our net margin and total cash position?');
-  const [aiAnswer, setAiAnswer] = useState<string | null>(null);
-  const [isAnswering, setIsAnswering] = useState(false);
+  return (
+    <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600 ring-1 ring-brand-100 ring-inset dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-500/20">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <h1 className="text-[22px] font-bold leading-tight tracking-tight text-slate-900 dark:text-white">
+              AI Assistant
+            </h1>
+          </div>
+          <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
+            Record-grounded answers over your own tenant data, with role-aware retrieval, source
+            citations, anomaly detection, and maker-checker approval before any action posts to the
+            ledger.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsOcrScannerOpen(true)}
+          className="btn btn-secondary"
+        >
+          <Receipt className="h-4 w-4" />
+          Launch Receipt OCR Scanner
+        </button>
+      </div>
 
-  // Selected API endpoint in explorer
-  const [selectedEndpoint, setSelectedEndpoint] = useState<'accounts' | 'invoices' | 'bills' | 'reconcile' | 'payroll'>('accounts');
+      <div className="flex w-fit flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 text-xs font-semibold shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        {(
+          [
+            { id: 'chat', label: 'Chat', icon: MessageSquare },
+            { id: 'anomalies', label: 'Anomaly Alerts', icon: ShieldAlert },
+            { id: 'actions', label: 'Proposed Actions', icon: ListChecks },
+            { id: 'settings', label: 'Configuration', icon: Settings },
+          ] as Array<{ id: Tab; label: string; icon: React.ElementType }>
+        ).map(item => {
+          const Icon = item.icon;
+          const active = tab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 transition-colors ${
+                active
+                  ? 'bg-[#0f3d63] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
 
-  // Compute actual ledger anomalies based on real state:
-  const anomalies: Anomaly[] = [];
-
-  // 1. Low stock check (Raw Materials & Stationary Items)
-  const lowStock = inventoryItems.filter(
-    i => STOCKED_ITEM_TYPES.includes(i.type) && i.onHand <= i.reorderPoint
+      {tab === 'chat' && <ChatTab onNotice={triggerShortcutNotice} onConfigure={() => setTab('settings')} />}
+      {tab === 'anomalies' && <AnomaliesTab onNotice={triggerShortcutNotice} />}
+      {tab === 'actions' && <ActionsTab onNotice={triggerShortcutNotice} />}
+      {tab === 'settings' && <SettingsTab onNotice={triggerShortcutNotice} />}
+    </div>
   );
-  if (lowStock.length > 0) {
-    anomalies.push({
-      id: 'anom-1',
-      type: 'warning',
-      title: `${lowStock.length} Stocked Materials Below Reorder Threshold`,
-      description: `${lowStock.map(i => i.sku).join(', ')} have reached safety stock minimums.`,
-      recommendation: 'Issue vendor purchase orders to TypeRight Paper Mills or suppliers to prevent press stoppage.',
-      accountOrRef: 'acc-1300 Inventory Asset',
-    });
-  }
+};
 
-  // 2. Uncleared transactions check
-  const uncleared = bankTransactions.filter(tx => !tx.isCleared);
-  if (uncleared.length > 0) {
-    anomalies.push({
-      id: 'anom-2',
-      type: 'info',
-      title: `${uncleared.length} Uncleared Checks / Payments in Register`,
-      description: `Disbursements totaling ${formatCurrency(uncleared.reduce((s, t) => s + Math.abs(t.amount), 0), currency)} have not yet cleared bank reconciliation.`,
-      recommendation: 'Run monthly bank reconciliation against official bank statement ending balances.',
-      accountOrRef: 'acc-1010 Operating Checking',
-    });
-  }
+// ─── Chat ──────────────────────────────────────────────────────────────────
 
-  // 3. Open invoices check
-  const overdueInvoices = invoices.filter(i => i.balanceDue > 0);
-  if (overdueInvoices.length > 0) {
-    anomalies.push({
-      id: 'anom-3',
-      type: 'alert',
-      title: `${overdueInvoices.length} Unpaid Customer Receivables Pending`,
-      description: `Apex Aerospace and other partners hold outstanding trade balances of ${formatCurrency(overdueInvoices.reduce((s, i) => s + i.balanceDue, 0), currency)}.`,
-      recommendation: 'Send automated payment reminder statements or request electronic ACH remittance.',
-      accountOrRef: 'acc-1200 Accounts Receivable',
-    });
-  }
+const ChatTab: React.FC<{
+  onNotice: (msg: string, tone?: any) => void;
+  onConfigure: () => void;
+}> = ({ onNotice, onConfigure }) => {
+  const [config, setConfig] = useState<AiConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [conversations, setConversations] = useState<AiConversation[]>([]);
+  const [activeId, setActiveId] = useState<number | null>(null);
+  const [messages, setMessages] = useState<AiMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const handleAskFinancialQuery = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!promptQuery.trim()) return;
+  const ready = Boolean(config?.enabled && config?.hasApiKey && config?.provider && config?.modelName);
 
-    setIsAnswering(true);
-    setTimeout(() => {
-      const q = promptQuery.toLowerCase();
-      let response = '';
+  const loadConfig = useCallback(async () => {
+    setConfigLoading(true);
+    try {
+      const res = await aiApi.config();
+      setConfig(res.config ?? null);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load AI configuration');
+    } finally {
+      setConfigLoading(false);
+    }
+  }, []);
 
-      if (q.includes('margin') || q.includes('profit') || q.includes('revenue')) {
-        const rev = accounts.filter(a => a.type === 'Income').reduce((s, a) => s + a.balance, 0);
-        const cogs = accounts.filter(a => a.type === 'CostOfGoodsSold').reduce((s, a) => s + a.balance, 0);
-        const exp = accounts.filter(a => a.type === 'Expense').reduce((s, a) => s + a.balance, 0);
-        const net = rev - cogs - exp;
-        const margin = rev > 0 ? (net / rev) * 100 : 0;
-        response = `Based on your live double-entry ledger:\n• Total Operating Revenue: ${formatCurrency(rev, currency)}\n• Cost of Goods Sold (COGS): ${formatCurrency(cogs, currency)}\n• Operating Expenses: ${formatCurrency(exp, currency)}\n• Net Operating Profit: ${formatCurrency(net, currency)}\n• Net Profit Margin: ${margin.toFixed(1)}%\nYour business maintains positive cash-flow and strong unit economics.`;
-      } else if (q.includes('cash') || q.includes('bank') || q.includes('balance')) {
-        const cash = accounts.filter(a => a.type === 'Bank').reduce((s, a) => s + a.balance, 0);
-        response = `Your total liquid cash across all bank accounts is ${formatCurrency(cash, currency)}:\n• Operating Checking (#1010): ${formatCurrency(accounts.find(a => a.code === '1010')?.balance || 0, currency)}\n• Payroll Checking (#1020): ${formatCurrency(accounts.find(a => a.code === '1020')?.balance || 0, currency)}\n• Petty Cash (#1050): ${formatCurrency(accounts.find(a => a.code === '1050')?.balance || 0, currency)}`;
-      } else if (q.includes('payroll') || q.includes('tax') || q.includes('w-2')) {
-        const totalWages = payrollRuns.reduce((s, r) => s + r.totalGross, 0);
-        const fit = payrollRuns.reduce((s, r) => s + r.items.reduce((sum, it) => sum + it.fit, 0), 0);
-        response = `Payroll Analysis (YTD):\n• Total Gross Wages Disbursed: ${formatCurrency(totalWages, currency)}\n• Federal Income Tax Withheld: ${formatCurrency(fit, currency)}\n• Active Headcount: ${companyProfile.name} currently employs 4 staff members.\n• Form 941 quarterly liability is fully accrued in the general ledger.`;
-      } else {
-        response = `Ledger Query Result for "${promptQuery}":\n• Total Accounts Indexed: ${accounts.length}\n• Ledger Double-Entry Invariant: Verified (Debits = Credits)\n• Open Invoices: ${invoices.filter(i => i.balanceDue > 0).length}\n• Open Bills: ${bills.filter(b => b.balanceDue > 0).length}\nNo reconciliation discrepancies detected.`;
-      }
+  const loadConversations = useCallback(async () => {
+    try {
+      const res = await aiApi.conversations();
+      setConversations(res.conversations || []);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
 
-      setAiAnswer(response);
-      setIsAnswering(false);
-    }, 600);
-  };
+  useEffect(() => {
+    loadConfig();
+    loadConversations();
+  }, [loadConfig, loadConversations]);
 
-  const getEndpointData = () => {
-    switch (selectedEndpoint) {
-      case 'accounts':
-        return {
-          route: 'GET /api/v1/ledger/accounts',
-          description: 'Returns all GAAP accounts, codes, balances, and classifications.',
-          samplePayload: accounts.slice(0, 3).map(a => ({
-            code: a.code,
-            name: a.name,
-            type: a.type,
-            balance: a.balance,
-          })),
-        };
-      case 'invoices':
-        return {
-          route: 'POST /api/v1/invoices',
-          description: 'Creates an invoice, auto-decrements perpetual inventory, and posts COGS.',
-          samplePayload: {
-            customerId: 'cust-1',
-            date: '2026-11-12',
-            dueDate: '2026-12-12',
-            lines: [{ itemId: 'item-prt-1', quantity: 5, rate: 95.00, taxable: true }],
-            subtotal: 475.00,
-            taxAmount: 35.63,
-            total: 510.63,
-          },
-        };
-      case 'bills':
-        return {
-          route: 'POST /api/v1/bills',
-          description: 'Records vendor bills and distributes debits across designated expense accounts.',
-          samplePayload: {
-            vendorId: 'vend-1',
-            date: '2026-11-12',
-            lines: [{ accountId: 'acc-5010', description: 'Raw steel plates', amount: 3450.00 }],
-            total: 3450.00,
-          },
-        };
-      case 'reconcile':
-        return {
-          route: 'POST /api/v1/reconciliation/commit',
-          description: `Validates difference = ${formatCurrency(0, currency)} and marks matched bank register transactions cleared.`,
-          samplePayload: {
-            accountId: 'acc-1010',
-            statementDate: '2026-10-31',
-            statementEndingBalance: 78420.50,
-            difference: 0.00,
-          },
-        };
-      case 'payroll':
-        return {
-          route: 'POST /api/v1/payroll/process',
-          description: 'Calculates US Federal/State tax withholdings and disburses ACH net pay.',
-          samplePayload: {
-            payPeriod: '2026-10-26 to 2026-11-08',
-            employeesCount: 4,
-            totalGross: 11613.85,
-            totalNet: 8639.42,
-          },
-        };
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, sending]);
+
+  const loadMessages = async (id: number) => {
+    setActiveId(id);
+    setError(null);
+    try {
+      const res = await aiApi.messages(id);
+      setMessages(res.messages || []);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load conversation');
     }
   };
 
-  const endpointInfo = getEndpointData();
+  const newConversation = async () => {
+    try {
+      const res = await aiApi.createConversation('New conversation');
+      setActiveId(res.conversation.id);
+      setMessages([]);
+      await loadConversations();
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to start conversation', 'error');
+    }
+  };
+
+  const removeConversation = async (id: number) => {
+    if (!confirm('Delete this conversation and its messages?')) return;
+    try {
+      await aiApi.deleteConversation(id);
+      if (activeId === id) {
+        setActiveId(null);
+        setMessages([]);
+      }
+      await loadConversations();
+      onNotice('Conversation deleted');
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to delete conversation', 'error');
+    }
+  };
+
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setError(null);
+    setInput('');
+    try {
+      const res = await aiApi.chat({
+        message: text,
+        conversationId: activeId ?? undefined,
+      });
+      setActiveId(res.conversationId);
+      setMessages(prev => [...prev, res.message, res.response]);
+      await loadConversations();
+    } catch (err: any) {
+      setError(err?.message || 'The AI request failed');
+      setInput(text);
+      onNotice(err?.message || 'The AI request failed', 'error');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (configLoading) {
+    return <div className="p-6 text-sm text-slate-500">Loading AI configuration…</div>;
+  }
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-amber-500" />
-            <span>AI Agent & 835-Operation API</span>
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Server-backed automation suite designed to work hand-in-hand with CLI agents (Claude Code, Gemini CLI,
-            Grok). Every operation runs through the same authenticated API as the application.
-          </p>
+    <div className="space-y-4">
+      {!ready && (
+        <InlineAlert tone="warning">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>
+              No AI provider is configured yet. Set an API key, provider and model to enable
+              record-grounded answers.
+            </span>
+            <button type="button" onClick={onConfigure} className="btn btn-secondary py-1.5 text-xs">
+              <Settings className="h-3.5 w-3.5" />
+              Configure provider
+            </button>
+          </div>
+        </InlineAlert>
+      )}
+
+      {ready && config && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs dark:border-white/[0.07] dark:bg-slate-900">
+          <StatusBadge tone="success">
+            <Cpu className="mr-1 inline h-3 w-3" />
+            {config.provider} · {config.modelName}
+          </StatusBadge>
+          <span className="text-slate-500 dark:text-slate-400">
+            Answers are grounded only in records this role may read, and include citations.
+          </span>
         </div>
+      )}
 
-        <button
-          onClick={() => setIsOcrScannerOpen(true)}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition-all"
-        >
-          <Receipt className="w-4 h-4" />
-          <span>Launch Receipt OCR Scanner</span>
-        </button>
-      </div>
+      {error && (
+        <InlineAlert tone="error" onDismiss={() => setError(null)}>
+          {error}
+        </InlineAlert>
+      )}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs text-xs font-semibold w-fit">
-        <button
-          onClick={() => setActiveTab('auditor')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeTab === 'auditor'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
+      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+        <Panel
+          title="Conversations"
+          icon={<MessageSquare className="h-4 w-4 text-brand-600" />}
+          bodyClassName="p-3"
+          actions={
+            <button
+              type="button"
+              onClick={newConversation}
+              className="btn btn-secondary px-2 py-1 text-[11px]"
+            >
+              <Plus className="h-3 w-3" />
+              New
+            </button>
+          }
         >
-          Ledger Anomaly Auditor ({anomalies.length} Flagged)
-        </button>
-        <button
-          onClick={() => setActiveTab('prompt')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeTab === 'prompt'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Natural Language Bookkeeper
-        </button>
-        <button
-          onClick={() => setActiveTab('api')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeTab === 'api'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          835-Op API Explorer
-        </button>
-      </div>
+          {conversations.length === 0 ? (
+            <p className="px-1 py-3 text-xs text-slate-500">No conversations yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {conversations.map(c => (
+                <li key={c.id}>
+                  <div
+                    className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 ${
+                      activeId === c.id
+                        ? 'bg-brand-50 dark:bg-brand-500/10'
+                        : 'hover:bg-slate-100 dark:hover:bg-white/[0.05]'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => loadMessages(c.id)}
+                      className="min-w-0 flex-1 truncate text-left text-xs font-medium text-slate-700 dark:text-slate-200"
+                    >
+                      {c.title || `Conversation #${c.id}`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeConversation(c.id)}
+                      title="Delete"
+                      className="shrink-0 text-slate-400 opacity-0 transition-opacity hover:text-rose-600 group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
 
-      {/* 1. ANOMALY AUDITOR */}
-      {activeTab === 'auditor' && (
-        <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-500" />
-              <span>Automated Internal Audit & Anomaly Detection</span>
-            </h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Printing Management System continuously monitors trial balance integrity, uncleared checks, inventory levels, and uncollected receivables.
-            </p>
+        <Panel
+          title={activeId ? `Conversation #${activeId}` : 'New conversation'}
+          icon={<Sparkles className="h-4 w-4 text-amber-500" />}
+          bodyClassName="p-0"
+        >
+          <div
+            ref={scrollRef}
+            className="max-h-[420px] min-h-[280px] space-y-4 overflow-y-auto p-5"
+          >
+            {messages.length === 0 && !sending && (
+              <p className="py-10 text-center text-xs text-slate-500">
+                Ask about revenue, receivables, stock, payroll or anomalies. Answers cite the
+                records they used.
+              </p>
+            )}
+            {messages.map(m => (
+              <ChatBubble key={m.id} message={m} />
+            ))}
+            {sending && (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Thinking over your records…
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 gap-4">
-            {anomalies.map(anom => (
-              <div
-                key={anom.id}
-                className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3"
+          <form
+            onSubmit={send}
+            className="flex items-end gap-2 border-t border-slate-200 p-3 dark:border-white/[0.07]"
+          >
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send(e as any);
+                }
+              }}
+              rows={2}
+              disabled={!ready || sending}
+              placeholder={
+                ready ? 'Ask a question…' : 'Configure an AI provider to start chatting'
+              }
+              className="min-h-[52px] flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900"
+            />
+            <button
+              type="submit"
+              disabled={!ready || sending || !input.trim()}
+              className="btn btn-primary h-[52px]"
+            >
+              <Send className="h-4 w-4" />
+              Send
+            </button>
+          </form>
+        </Panel>
+      </div>
+    </div>
+  );
+};
+
+const ChatBubble: React.FC<{ message: AiMessage }> = ({ message }) => {
+  const isUser = message.role === 'user';
+  const citations: AiCitation[] = message.sourceCitations?.citations || [];
+
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
+          isUser
+            ? 'bg-[#0f3d63] text-white'
+            : 'border border-slate-200 bg-slate-50 text-slate-800 dark:border-white/[0.07] dark:bg-slate-900 dark:text-slate-200'
+        }`}
+      >
+        <pre className="whitespace-pre-wrap break-words font-sans leading-relaxed">
+          {message.content}
+        </pre>
+        {citations.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-200 pt-2 dark:border-white/[0.07]">
+            {citations.map((c, i) => (
+              <span
+                key={`${c.kind}-${c.id}-${i}`}
+                className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-white/10"
+                title={`${c.kind} #${c.id}`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    {anom.type === 'alert' && (
-                      <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />
-                    )}
-                    {anom.type === 'warning' && (
-                      <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
-                    )}
-                    {anom.type === 'info' && (
-                      <CheckCircle2 className="w-5 h-5 text-blue-500 shrink-0" />
-                    )}
-                    <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-                      {anom.title}
-                    </h3>
-                  </div>
-
-                  {anom.accountOrRef && (
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                      {anom.accountOrRef}
-                    </span>
-                  )}
-                </div>
-
-                <p className="text-xs text-slate-600 dark:text-slate-300 pl-7">
-                  {anom.description}
-                </p>
-
-                <div className="ml-7 p-3 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 font-sans flex items-start gap-2">
-                  <span className="font-bold text-blue-600 dark:text-blue-400">Recommendation:</span>
-                  <span>{anom.recommendation}</span>
-                </div>
-              </div>
+                {c.kind} #{c.id} · {c.label}
+              </span>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* 2. NATURAL LANGUAGE BOOKKEEPER */}
-      {activeTab === 'prompt' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs p-6 space-y-6">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
-              AI Financial Analyst & Bookkeeper Assistant
-            </h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Ask questions in plain English regarding your revenue, profit margins, bank positions, or payroll compliance.
-            </p>
+        )}
+        {message.tokenCount != null && (
+          <div
+            className={`mt-1.5 text-[10px] ${
+              isUser ? 'text-slate-300' : 'text-slate-400'
+            }`}
+          >
+            {message.tokenCount} tokens
           </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
-          <form onSubmit={handleAskFinancialQuery} className="space-y-3">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={promptQuery}
-                onChange={e => setPromptQuery(e.target.value)}
-                placeholder="Ask about cash balance, Q4 revenue, unpaid invoices, or payroll taxes..."
-                className="flex-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="submit"
-                disabled={isAnswering}
-                className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition-all active:scale-95"
-              >
-                <Zap className="w-4 h-4" />
-                <span>{isAnswering ? 'Analyzing...' : 'Ask Ledger'}</span>
-              </button>
-            </div>
+// ─── Anomalies ─────────────────────────────────────────────────────────────
 
-            <div className="flex flex-wrap gap-2 text-[11px] text-slate-500">
-              <span className="font-semibold">Suggested queries:</span>
-              <button
-                type="button"
-                onClick={() => setPromptQuery('What is our net margin and total cash position?')}
-                className="underline hover:text-blue-600"
-              >
-                Net margin & cash position
-              </button>
-              <span>·</span>
-              <button
-                type="button"
-                onClick={() => setPromptQuery('Summarize total payroll taxes and employee withholdings')}
-                className="underline hover:text-blue-600"
-              >
-                Payroll taxes & withholdings
-              </button>
-              <span>·</span>
-              <button
-                type="button"
-                onClick={() => setPromptQuery('Show customer receivables balance and overdue amounts')}
-                className="underline hover:text-blue-600"
-              >
-                Customer receivables balance
-              </button>
-            </div>
-          </form>
+const AnomaliesTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onNotice }) => {
+  const [alerts, setAlerts] = useState<AiAnomaly[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [detecting, setDetecting] = useState(false);
 
-          {aiAnswer && (
-            <div className="p-5 rounded-xl bg-slate-950 text-slate-100 font-mono text-xs space-y-2 border border-slate-800">
-              <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-2">
-                <span className="flex items-center gap-1.5 font-bold text-amber-400">
-                  <Sparkles className="w-3.5 h-3.5" /> LEDGER AI ANALYSIS RESULT
-                </span>
-                <span className="text-emerald-400 font-sans text-[11px]">Real-Time Verified</span>
-              </div>
-              <pre className="whitespace-pre-wrap leading-relaxed py-2 text-slate-200">
-                {aiAnswer}
-              </pre>
-            </div>
-          )}
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await aiApi.anomalies();
+      setAlerts(res.alerts || []);
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to load anomalies', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [onNotice]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const detect = async () => {
+    setDetecting(true);
+    try {
+      const res = await aiApi.detectAnomalies();
+      setAlerts(res.alerts || []);
+      onNotice(`Detected ${res.alerts?.length || 0} anomal${(res.alerts?.length || 0) === 1 ? 'y' : 'ies'}`);
+    } catch (err: any) {
+      onNotice(err?.message || 'Anomaly detection failed', 'error');
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const open = useMemo(() => alerts.filter(a => a.status === 'open'), [alerts]);
+
+  const tone = (severity: string) =>
+    severity === 'critical' || severity === 'high'
+      ? 'danger'
+      : severity === 'medium'
+      ? 'warning'
+      : 'info';
+
+  return (
+    <Panel
+      title="Anomaly alerts"
+      description="Rule-based checks over your own records. Detection runs server-side and never sends data to a provider."
+      icon={<ShieldAlert className="h-4 w-4 text-amber-500" />}
+      actions={
+        <>
+          <button type="button" onClick={load} disabled={loading} className="btn btn-secondary py-1.5 text-xs">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button type="button" onClick={detect} disabled={detecting} className="btn btn-primary py-1.5 text-xs">
+            <Sparkles className="h-3.5 w-3.5" />
+            {detecting ? 'Detecting…' : 'Run detection'}
+          </button>
+        </>
+      }
+    >
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading…</p>
+      ) : open.length === 0 ? (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+          <CheckCircle2 className="h-4 w-4" />
+          No open anomalies. Run detection to re-check your records.
         </div>
-      )}
-
-      {/* 3. 835-OPERATION API EXPLORER */}
-      {activeTab === 'api' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs p-6 space-y-6">
-          <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Server className="w-5 h-5 text-indigo-500" />
-              <span>Printing Management System Headless API Specification</span>
-            </h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Every Printing Management System deployment exposes an 835-operation REST and JSON-RPC API so external
-              agents (Claude Code, scripts) can query and post transactions against the same server-side ledger the
-              application uses.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
-            {/* Endpoints Selector */}
-            <div className="space-y-1">
-              <div className="text-[10px] font-bold uppercase text-slate-400 mb-2">
-                Core Domains (835 Operations)
+      ) : (
+        <div className="space-y-3">
+          {open.map(a => (
+            <div
+              key={a.id}
+              className="rounded-xl border border-slate-200 p-4 dark:border-white/[0.07]"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle
+                    className={`h-4 w-4 ${
+                      a.severity === 'critical' || a.severity === 'high'
+                        ? 'text-rose-500'
+                        : 'text-amber-500'
+                    }`}
+                  />
+                  <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                    {a.description}
+                  </span>
+                </div>
+                <StatusBadge tone={tone(a.severity)}>{a.anomalyType}</StatusBadge>
               </div>
-              <button
-                onClick={() => setSelectedEndpoint('accounts')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                  selectedEndpoint === 'accounts'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                /ledger/accounts
-              </button>
-              <button
-                onClick={() => setSelectedEndpoint('invoices')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                  selectedEndpoint === 'invoices'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                /invoices/create
-              </button>
-              <button
-                onClick={() => setSelectedEndpoint('bills')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                  selectedEndpoint === 'bills'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                /bills/enter
-              </button>
-              <button
-                onClick={() => setSelectedEndpoint('payroll')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                  selectedEndpoint === 'payroll'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                /payroll/process
-              </button>
-              <button
-                onClick={() => setSelectedEndpoint('reconcile')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono font-semibold transition-colors ${
-                  selectedEndpoint === 'reconcile'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                /reconciliation/commit
-              </button>
-            </div>
-
-            {/* Spec & Live JSON output */}
-            <div className="md:col-span-3 space-y-4">
-              <div className="p-4 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs space-y-2">
-                <div className="flex items-center justify-between text-slate-400">
-                  <span className="font-bold text-amber-400">{endpointInfo.route}</span>
-                  <span className="text-emerald-400">200 OK</span>
-                </div>
-                <div className="text-slate-400 font-sans text-xs">{endpointInfo.description}</div>
-                <div className="pt-2 text-slate-500 text-[10px] uppercase font-bold">
-                  Live Response Payload:
-                </div>
-                <pre className="bg-slate-950 p-3 rounded-lg overflow-x-auto text-[11px] text-emerald-400">
-                  {JSON.stringify(endpointInfo.samplePayload, null, 2)}
+              {a.evidence && (
+                <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-2 font-mono text-[11px] text-slate-600 dark:bg-slate-900 dark:text-slate-400">
+                  {a.evidence}
                 </pre>
-              </div>
-
-              {/* cURL example */}
-              <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-mono flex items-center justify-between">
-                <code className="text-slate-800 dark:text-slate-200 truncate">
-                  curl -X GET {window.location.origin}/api{endpointInfo.route.split(' ')[1]}
-                </code>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(`curl -X GET ${window.location.origin}/api${endpointInfo.route.split(' ')[1]}`);
-                    triggerShortcutNotice('Copied curl command to clipboard!');
-                  }}
-                  className="p-1 hover:text-blue-600 text-slate-500"
-                  title="Copy curl"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
+              )}
+              <div className="mt-1.5 text-[11px] text-slate-400">
+                {new Date(a.createdAt).toLocaleString()}
               </div>
             </div>
-          </div>
+          ))}
         </div>
       )}
+    </Panel>
+  );
+};
+
+// ─── Proposed actions ──────────────────────────────────────────────────────
+
+const ActionsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onNotice }) => {
+  const [actions, setActions] = useState<AiProposedAction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await aiApi.actions();
+      setActions(res.actions || []);
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to load proposed actions', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [onNotice]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const act = async (id: number, kind: 'approve' | 'reject' | 'execute') => {
+    setBusyId(id);
+    try {
+      if (kind === 'approve') {
+        await aiApi.setActionStatus(id, 'approved');
+        onNotice('Action approved — ready to execute');
+      } else if (kind === 'reject') {
+        await aiApi.setActionStatus(id, 'rejected');
+        onNotice('Action rejected');
+      } else {
+        if (!confirm('Execute this action? It will post to the general ledger.')) return;
+        await aiApi.executeAction(id);
+        onNotice('Action executed and posted');
+      }
+      await load();
+    } catch (err: any) {
+      onNotice(err?.message || `Failed to ${kind} action`, 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Panel
+      title="Proposed actions"
+      description="The assistant never posts on its own. A financial action must be approved and then executed explicitly, and only through the accounting services."
+      icon={<ListChecks className="h-4 w-4 text-indigo-500" />}
+      actions={
+        <button type="button" onClick={load} disabled={loading} className="btn btn-secondary py-1.5 text-xs">
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      }
+    >
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading…</p>
+      ) : actions.length === 0 ? (
+        <p className="py-6 text-center text-xs text-slate-500">
+          No proposed actions. Actions appear here when the assistant suggests a change.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {actions.map(a => (
+            <div key={a.id} className="rounded-xl border border-slate-200 p-4 dark:border-white/[0.07]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                    {a.description}
+                  </span>
+                  <StatusBadge tone="neutral">{a.actionType}</StatusBadge>
+                </div>
+                <StatusBadge
+                  tone={
+                    a.status === 'executed' || a.status === 'approved'
+                      ? 'success'
+                      : a.status === 'rejected'
+                      ? 'danger'
+                      : 'warning'
+                  }
+                >
+                  {a.status}
+                </StatusBadge>
+              </div>
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-2 font-mono text-[11px] text-slate-600 dark:bg-slate-900 dark:text-slate-400">
+                {JSON.stringify(a.parameters, null, 2)}
+              </pre>
+              {a.status === 'pending' && (
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => act(a.id, 'approve')}
+                    disabled={busyId === a.id}
+                    className="btn btn-secondary py-1.5 text-xs"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => act(a.id, 'reject')}
+                    disabled={busyId === a.id}
+                    className="btn btn-secondary py-1.5 text-xs"
+                  >
+                    <XCircle className="h-3.5 w-3.5 text-rose-600" />
+                    Reject
+                  </button>
+                </div>
+              )}
+              {a.status === 'approved' && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => act(a.id, 'execute')}
+                    disabled={busyId === a.id}
+                    className="btn btn-primary py-1.5 text-xs"
+                  >
+                    <ZapIcon />
+                    Execute &amp; post to GL
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+};
+
+const ZapIcon: React.FC = () => <Sparkles className="h-3.5 w-3.5" />;
+
+// ─── Settings ──────────────────────────────────────────────────────────────
+
+const PROVIDERS = [
+  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'gemini', label: 'Google Gemini' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'anthropic', label: 'Anthropic' },
+];
+
+const SettingsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onNotice }) => {
+  const [config, setConfig] = useState<AiConfig | null>(null);
+  const [budget, setBudget] = useState<AiBudget | null>(null);
+  const [logs, setLogs] = useState<any[]>([]);
+
+  const [provider, setProvider] = useState('openrouter');
+  const [modelName, setModelName] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [fallbackProvider, setFallbackProvider] = useState('');
+  const [fallbackModel, setFallbackModel] = useState('');
+  const [fallbackApiKey, setFallbackApiKey] = useState('');
+
+  const [models, setModels] = useState<Array<{ id: string; name?: string }>>([]);
+  const [discovering, setDiscovering] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [tokenLimit, setTokenLimit] = useState('');
+  const [costLimit, setCostLimit] = useState('');
+  const [purgeDays, setPurgeDays] = useState('90');
+
+  const load = useCallback(async () => {
+    try {
+      const [cfg, bud, audit] = await Promise.all([
+        aiApi.config(),
+        aiApi.budget(),
+        aiApi.audit(25),
+      ]);
+      setConfig(cfg.config ?? null);
+      if (cfg.config) {
+        setProvider(cfg.config.provider || 'openrouter');
+        setModelName(cfg.config.modelName || '');
+        setEnabled(cfg.config.enabled);
+      }
+      setBudget(bud.budget ?? null);
+      setTokenLimit(String(bud.budget?.monthlyTokenLimit ?? ''));
+      setCostLimit(String(bud.budget?.monthlyCostLimit ?? ''));
+      setLogs(audit.logs || []);
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to load AI settings', 'error');
+    }
+  }, [onNotice]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const discover = async () => {
+    if (!apiKey.trim()) {
+      onNotice('Enter an API key first', 'error');
+      return;
+    }
+    setDiscovering(true);
+    try {
+      const res = await aiApi.models(provider, apiKey.trim());
+      setModels(res.models || []);
+      onNotice(`Discovered ${res.models?.length || 0} models`);
+    } catch (err: any) {
+      onNotice(err?.message || 'Model discovery failed', 'error');
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await aiApi.saveConfig({
+        provider,
+        modelName: modelName.trim(),
+        apiKey: apiKey.trim() || undefined,
+        enabled,
+        fallbackProvider: fallbackProvider || undefined,
+        fallbackModel: fallbackModel.trim() || undefined,
+        fallbackApiKey: fallbackApiKey.trim() || undefined,
+      });
+      setApiKey('');
+      setFallbackApiKey('');
+      await load();
+      onNotice('AI configuration saved');
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to save configuration', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveBudget = async () => {
+    try {
+      await aiApi.saveBudget({
+        monthlyTokenLimit: tokenLimit ? Number(tokenLimit) : undefined,
+        monthlyCostLimit: costLimit ? Number(costLimit) : undefined,
+      });
+      onNotice('Budget updated');
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to save budget', 'error');
+    }
+  };
+
+  const purge = async () => {
+    if (!confirm(`Permanently delete conversations older than ${purgeDays} days?`)) return;
+    try {
+      const res = await aiApi.purge(Number(purgeDays));
+      onNotice(`Purged ${res.purged} conversation(s)`);
+      await load();
+    } catch (err: any) {
+      onNotice(err?.message || 'Purge failed', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <StatCard
+          label="Provider"
+          value={config?.provider || 'Not set'}
+          hint={config?.modelName || 'No model selected'}
+          icon={<Cpu className="h-4 w-4" />}
+          tone="blue"
+        />
+        <StatCard
+          label="API key"
+          value={config?.hasApiKey ? 'Configured' : 'Missing'}
+          hint="Stored encrypted (AES-256-GCM); never returned by the API"
+          icon={<KeyRound className="h-4 w-4" />}
+          tone={config?.hasApiKey ? 'emerald' : 'rose'}
+        />
+        <StatCard
+          label="Monthly token limit"
+          value={budget ? budget.monthlyTokenLimit.toLocaleString() : '—'}
+          hint={budget ? `Cost cap ${budget.monthlyCostLimit}` : ''}
+          icon={<Wallet className="h-4 w-4" />}
+          tone="amber"
+        />
+      </div>
+
+      <Panel
+        title="Provider configuration"
+        description="The key is encrypted at rest and only decrypted server-side to call the provider. Leave the key blank to keep the existing one."
+        icon={<Settings className="h-4 w-4 text-brand-600" />}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">Provider</span>
+            <select
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            >
+              {PROVIDERS.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Model {models.length > 0 && `(${models.length} available)`}
+            </span>
+            <div className="mt-1 flex gap-2">
+              <input
+                list="ai-model-options"
+                value={modelName}
+                onChange={e => setModelName(e.target.value)}
+                placeholder="e.g. anthropic/claude-3.5-sonnet"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+              />
+              <datalist id="ai-model-options">
+                {models.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.name || m.id}
+                  </option>
+                ))}
+              </datalist>
+              <button
+                type="button"
+                onClick={discover}
+                disabled={discovering}
+                className="btn btn-secondary shrink-0 py-2 text-xs"
+              >
+                {discovering ? '…' : 'Discover'}
+              </button>
+            </div>
+          </label>
+
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              API key {config?.hasApiKey && <span className="text-slate-400">(unchanged if blank)</span>}
+            </span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              autoComplete="off"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+            />
+          </label>
+
+          <label className="flex items-end gap-2 pb-2 text-xs">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={e => setEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Enable the assistant
+            </span>
+          </label>
+
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Fallback provider (optional)
+            </span>
+            <input
+              value={fallbackProvider}
+              onChange={e => setFallbackProvider(e.target.value)}
+              placeholder="openrouter"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+            />
+          </label>
+
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Fallback model (optional)
+            </span>
+            <input
+              value={fallbackModel}
+              onChange={e => setFallbackModel(e.target.value)}
+              placeholder="google/gemini-2.0-flash"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+            />
+          </label>
+
+          <label className="block text-xs md:col-span-2">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Fallback API key (optional, unchanged if blank)
+            </span>
+            <input
+              type="password"
+              value={fallbackApiKey}
+              onChange={e => setFallbackApiKey(e.target.value)}
+              autoComplete="off"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+            />
+          </label>
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <button type="button" onClick={save} disabled={saving || !modelName.trim()} className="btn btn-primary">
+            {saving ? 'Saving…' : 'Save configuration'}
+          </button>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel
+          title="Token & cost budget"
+          description="Checked before every provider call. Over budget fails closed with no provider request."
+          icon={<Wallet className="h-4 w-4 text-amber-600" />}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                Monthly token limit
+              </span>
+              <input
+                type="number"
+                min="0"
+                value={tokenLimit}
+                onChange={e => setTokenLimit(e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-slate-700 dark:bg-slate-900"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                Monthly cost limit
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={costLimit}
+                onChange={e => setCostLimit(e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-slate-700 dark:bg-slate-900"
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button type="button" onClick={saveBudget} className="btn btn-secondary">
+              Save budget
+            </button>
+          </div>
+        </Panel>
+
+        <Panel
+          title="Retention"
+          description="Conversations and messages are deleted on a TTL you control. A purge is permanent."
+          icon={<Trash2 className="h-4 w-4 text-rose-600" />}
+        >
+          <label className="block text-xs">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              Delete conversations older than (days)
+            </span>
+            <input
+              type="number"
+              min="1"
+              value={purgeDays}
+              onChange={e => setPurgeDays(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-slate-700 dark:bg-slate-900"
+            />
+          </label>
+          <div className="mt-4 flex justify-end">
+            <button type="button" onClick={purge} className="btn btn-danger">
+              <Trash2 className="h-3.5 w-3.5" />
+              Purge now
+            </button>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel
+        title="AI audit trail"
+        description="Every configuration change, chat and executed action is logged."
+        icon={<ShieldAlert className="h-4 w-4 text-slate-500" />}
+      >
+        {logs.length === 0 ? (
+          <p className="py-4 text-center text-xs text-slate-500">No AI audit entries yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Action</th>
+                  <th>Query</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map(l => (
+                  <tr key={l.id}>
+                    <td className="whitespace-nowrap text-xs text-slate-500">
+                      {new Date(l.createdAt).toLocaleString()}
+                    </td>
+                    <td>
+                      <StatusBadge tone="info">{l.action}</StatusBadge>
+                    </td>
+                    <td className="max-w-[280px] truncate text-xs">{l.query}</td>
+                    <td className="max-w-[280px] truncate text-xs text-slate-500">
+                      {l.responseSummary || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
     </div>
   );
 };

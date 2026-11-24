@@ -43,8 +43,8 @@ export async function generateQrToken(
   companyId: number,
   documentKind: string,
   documentId: number,
-  options: { version?: number; contentHash?: string | null } = {}
-): Promise<{ token: string; hash: string }> {
+  options: { version?: number; contentHash?: string | null; baseUrl?: string } = {}
+): Promise<{ token: string; hash: string; qrDataUrl: string }> {
   const salt = crypto.randomBytes(16).toString('hex');
   const token = crypto.randomBytes(32).toString('hex');
   const hash = crypto.createHash('sha256').update(token + salt).digest('hex');
@@ -65,7 +65,17 @@ export async function generateQrToken(
     ]
   );
 
-  return { token, hash };
+  const baseUrl = (options.baseUrl || '').replace(/\/+$/, '');
+  const verifyPath = `/api/qr-verify/${token}/page`;
+  const verifyUrl = `${baseUrl}${verifyPath}`;
+  const QRCode = (await import('qrcode')).default;
+  const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+    errorCorrectionLevel: 'M',
+    margin: 1,
+    width: 240,
+  });
+
+  return { token, hash, qrDataUrl };
 }
 
 export async function verifyQrToken(

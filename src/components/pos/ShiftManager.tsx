@@ -1,16 +1,45 @@
-import React, { useState, useEffect } from 'react';
-import { Play, Square, DollarSign, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  Play,
+  Square,
+  Wallet,
+  AlertTriangle,
+  CheckCircle2,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Landmark,
+} from 'lucide-react';
 import { smartOpsApi } from '../../services/smartOpsApi';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
+import {
+  FormField,
+  InlineAlert,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  Panel,
+  StatCard,
+  StatusBadge,
+  SummaryRow,
+} from '../common/ui';
 
 interface ShiftManagerProps {
   onShiftChange?: (shiftId: number | null) => void;
 }
 
+const MOVEMENT_TYPES = [
+  { value: 'cash_in', label: 'Cash in', icon: ArrowDownLeft },
+  { value: 'cash_out', label: 'Cash out', icon: ArrowUpRight },
+  { value: 'paid_in', label: 'Paid in', icon: ArrowDownLeft },
+  { value: 'paid_out', label: 'Paid out', icon: ArrowUpRight },
+  { value: 'deposit', label: 'Bank deposit', icon: Landmark },
+];
+
 export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => {
   const { companyProfile, triggerShortcutNotice } = useAccounting();
   const currency = companyProfile.currency || 'K';
+
   const [currentShift, setCurrentShift] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('100.00');
@@ -20,14 +49,15 @@ export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => 
   const [movementType, setMovementType] = useState('cash_in');
   const [movementAmount, setMovementAmount] = useState('');
   const [movementReason, setMovementReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const loadCurrentShift = async () => {
     try {
       const res = await smartOpsApi.getCurrentPosShift();
       setCurrentShift(res.shift);
       onShiftChange?.(res.shift?.id || null);
-    } catch (err) {
-      console.error('Failed to load current shift:', err);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load the current shift');
     }
   };
 
@@ -37,13 +67,20 @@ export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => 
 
   const handleOpenShift = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const res = await smartOpsApi.openPosShift({ openingFloat: Number(openingFloat), notes });
+      const res = await smartOpsApi.openPosShift({
+        openingFloat: Number(openingFloat),
+        notes: notes.trim() || undefined,
+      });
       setCurrentShift(res.shift);
       onShiftChange?.(res.shift.id);
+      setNotes('');
       triggerShortcutNotice?.('Shift opened successfully');
     } catch (err: any) {
-      triggerShortcutNotice?.(err?.message || 'Failed to open shift');
+      const msg = err?.message || 'Failed to open shift';
+      setError(msg);
+      triggerShortcutNotice?.(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -52,17 +89,22 @@ export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => 
   const handleCloseShift = async () => {
     if (!currentShift) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await smartOpsApi.closePosShift(currentShift.id, {
         actualCash: Number(actualCash),
-        notes,
+        notes: notes.trim() || undefined,
       });
       setCurrentShift(null);
       onShiftChange?.(null);
-      triggerShortcutNotice?.(`Shift closed. Variance: ${formatCurrency(res.variance, currency)}`);
       setShowCloseModal(false);
+      setActualCash('');
+      setNotes('');
+      triggerShortcutNotice?.(`Shift closed · variance ${formatCurrency(Number(res.variance), currency)}`);
     } catch (err: any) {
-      triggerShortcutNotice?.(err?.message || 'Failed to close shift');
+      const msg = err?.message || 'Failed to close shift';
+      setError(msg);
+      triggerShortcutNotice?.(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -71,167 +113,274 @@ export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => 
   const handleRecordMovement = async () => {
     if (!currentShift) return;
     setLoading(true);
+    setError(null);
     try {
       await smartOpsApi.recordPosCashMovement(currentShift.id, {
         movementType,
         amount: Number(movementAmount),
-        reason: movementReason,
+        reason: movementReason.trim() || undefined,
       });
       triggerShortcutNotice?.('Cash movement recorded');
       setMovementAmount('');
       setMovementReason('');
       await loadCurrentShift();
     } catch (err: any) {
-      triggerShortcutNotice?.(err?.message || 'Failed to record cash movement');
+      const msg = err?.message || 'Failed to record cash movement';
+      setError(msg);
+      triggerShortcutNotice?.(msg, 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  /* ── Active shift ─────────────────────────────────────────────────────── */
   if (currentShift) {
+    const shiftTotals = currentShift.totals || currentShift.summary || {};
     return (
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-green-500" />
-            <span className="font-semibold">Shift Open</span>
-          </div>
-          <span className="text-sm text-gray-500">
-            Cashier: {currentShift.cashierName}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-          <div>
-            <span className="text-gray-500">Opening Float:</span>{' '}
-            <span className="font-medium">{formatCurrency(currentShift.openingFloat, currency)}</span>
-          </div>
-          <div>
-            <span className="text-gray-500">Opened:</span>{' '}
-            <span className="font-medium">{new Date(currentShift.openedAt).toLocaleTimeString()}</span>
-          </div>
-        </div>
-        <div className="mb-3 space-y-2 border-t pt-3">
-          <div className="text-sm font-medium text-gray-600">Cash Movements</div>
-          <div className="flex gap-2">
-            <select
-              value={movementType}
-              onChange={(e) => setMovementType(e.target.value)}
-              className="border rounded px-2 py-1 text-sm"
-            >
-              <option value="cash_in">Cash In</option>
-              <option value="cash_out">Cash Out</option>
-              <option value="paid_in">Paid In</option>
-              <option value="paid_out">Paid Out</option>
-              <option value="deposit">Bank Deposit</option>
-            </select>
-            <input
-              type="number"
-              value={movementAmount}
-              onChange={(e) => setMovementAmount(e.target.value)}
-              placeholder="Amount"
-              className="w-28 border rounded px-2 py-1 text-sm"
+      <div className="space-y-4">
+        <Panel
+          title="Shift open"
+          description={`Cashier ${currentShift.cashierName || '—'} · opened ${new Date(
+            currentShift.openedAt
+          ).toLocaleString()}`}
+          icon={<CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+          actions={<StatusBadge tone="success">Open</StatusBadge>}
+        >
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Opening float"
+              value={formatCurrency(Number(currentShift.openingFloat || 0), currency)}
+              icon={<Wallet className="h-4 w-4" />}
+              tone="blue"
+            />
+            <StatCard
+              label="Cash sales"
+              value={formatCurrency(Number(shiftTotals.cashSales || 0), currency)}
+              icon={<ArrowDownLeft className="h-4 w-4" />}
+              tone="emerald"
+            />
+            <StatCard
+              label="Cash movements"
+              value={formatCurrency(
+                Number(shiftTotals.cashIn || 0) - Number(shiftTotals.cashOut || 0),
+                currency
+              )}
+              hint={`In ${formatCurrency(Number(shiftTotals.cashIn || 0), currency)} · out ${formatCurrency(
+                Number(shiftTotals.cashOut || 0),
+                currency
+              )}`}
+              icon={<Landmark className="h-4 w-4" />}
+              tone="amber"
+            />
+            <StatCard
+              label="Expected cash"
+              value={formatCurrency(
+                Number(shiftTotals.expectedCash ?? currentShift.expectedCash ?? 0),
+                currency
+              )}
+              icon={<Wallet className="h-4 w-4" />}
+              tone="neutral"
             />
           </div>
-          <input
-            value={movementReason}
-            onChange={(e) => setMovementReason(e.target.value)}
-            placeholder="Reason (optional)"
-            className="w-full border rounded px-2 py-1 text-sm"
-          />
-          <button
-            onClick={handleRecordMovement}
-            disabled={loading || !movementAmount}
-            className="w-full bg-sky-500 text-white px-4 py-2 rounded hover:bg-sky-600 disabled:opacity-50"
-          >
-            Record Movement
-          </button>
-        </div>
-        <button
-          onClick={() => setShowCloseModal(true)}
-          className="w-full flex items-center justify-center gap-2 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-          disabled={loading}
-        >
-          <Square className="w-4 h-4" />
-          Close Shift
-        </button>
 
-        {showCloseModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-96">
-              <h3 className="text-lg font-semibold mb-4">Close Shift — Cash Reconciliation</h3>
-              <div className="mb-3">
-                <label className="block text-sm text-gray-600 mb-1">Actual Cash Count</label>
+          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <div className="space-y-3">
+              <h4 className="section-title flex items-center gap-1.5">
+                <Landmark className="h-3.5 w-3.5 text-slate-400" />
+                Record a cash movement
+              </h4>
+              <FormField label="Movement type">
+                <select
+                  value={movementType}
+                  onChange={e => setMovementType(e.target.value)}
+                  className="app-input"
+                >
+                  {MOVEMENT_TYPES.map(m => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Amount" required>
                 <input
                   type="number"
-                  value={actualCash}
-                  onChange={(e) => setActualCash(e.target.value)}
-                  className="w-full border rounded px-3 py-2"
+                  min="0"
+                  step="0.01"
+                  value={movementAmount}
+                  onChange={e => setMovementAmount(e.target.value)}
                   placeholder="0.00"
+                  className="app-input app-input-mono"
                 />
-              </div>
-              <div className="mb-3">
-                <label className="block text-sm text-gray-600 mb-1">Notes</label>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full border rounded px-3 py-2"
-                  rows={2}
+              </FormField>
+              <FormField label="Reason">
+                <input
+                  value={movementReason}
+                  onChange={e => setMovementReason(e.target.value)}
+                  placeholder="Optional note for the audit trail"
+                  className="app-input"
                 />
-              </div>
-              <div className="flex gap-2">
+              </FormField>
+              <div className="flex justify-end">
                 <button
-                  onClick={handleCloseShift}
-                  className="flex-1 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-                  disabled={loading || !actualCash}
+                  type="button"
+                  onClick={handleRecordMovement}
+                  disabled={loading || !movementAmount}
+                  className="btn btn-secondary"
                 >
-                  {loading ? 'Closing...' : 'Confirm Close'}
+                  <Landmark className="h-4 w-4" />
+                  Record movement
                 </button>
+              </div>
+            </div>
+
+            <div className="surface p-4">
+              <h4 className="section-title mb-2">Shift summary</h4>
+              <SummaryRow label="Cashier" value={currentShift.cashierName || '—'} />
+              <SummaryRow
+                label="Opened"
+                value={new Date(currentShift.openedAt).toLocaleTimeString()}
+              />
+              <SummaryRow
+                label="Card & mobile"
+                value={formatCurrency(
+                  Number(shiftTotals.cardSales || 0) + Number(shiftTotals.mobileSales || 0),
+                  currency
+                )}
+              />
+              <SummaryRow label="Refunds" value={formatCurrency(Number(shiftTotals.refunds || 0), currency)} tone="rose" />
+              <div className="mt-3">
                 <button
-                  onClick={() => setShowCloseModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setShowCloseModal(true);
+                  }}
+                  disabled={loading}
+                  className="btn btn-danger w-full"
                 >
-                  Cancel
+                  <Square className="h-4 w-4" />
+                  Close shift
                 </button>
               </div>
             </div>
           </div>
+        </Panel>
+
+        {error && (
+          <InlineAlert tone="error" onDismiss={() => setError(null)}>
+            {error}
+          </InlineAlert>
+        )}
+
+        {showCloseModal && (
+          <ModalShell open onClose={() => setShowCloseModal(false)} size="md" titleId="close-shift-title">
+            <ModalHeader
+              title="Close shift"
+              subtitle="Count the drawer and reconcile against the expected cash."
+              icon={<Wallet className="h-4 w-4" />}
+              tone="brand"
+              onClose={() => setShowCloseModal(false)}
+            />
+            <div className="space-y-4 overflow-y-auto p-5">
+              <FormField
+                label="Actual cash counted"
+                required
+                hint="The physical cash in the drawer at close."
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={actualCash}
+                  onChange={e => setActualCash(e.target.value)}
+                  placeholder="0.00"
+                  className="app-input app-input-mono"
+                />
+              </FormField>
+              <FormField label="Notes" hint="Stored on the shift audit record.">
+                <textarea
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  rows={3}
+                  className="app-input resize-none"
+                />
+              </FormField>
+              {error && <InlineAlert tone="error">{error}</InlineAlert>}
+            </div>
+            <ModalFooter
+              onCancel={() => setShowCloseModal(false)}
+              onSubmit={handleCloseShift}
+              submitLabel="Confirm close"
+              submitIcon={<Square className="h-4 w-4" />}
+              tone="rose"
+              busy={loading}
+              disabled={!actualCash}
+            />
+          </ModalShell>
         )}
       </div>
     );
   }
 
+  /* ── No active shift ──────────────────────────────────────────────────── */
   return (
-    <div className="bg-white rounded-lg shadow p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <AlertTriangle className="w-5 h-5 text-amber-500" />
-        <span className="font-semibold">No Active Shift</span>
+    <Panel
+      title="Cashier shift"
+      description="Open a shift before taking payments so every tender is reconciled to a drawer."
+      icon={<Wallet className="h-4 w-4 text-brand-600" />}
+    >
+      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+        <div className="space-y-3">
+          <FormField
+            label="Opening float"
+            required
+            hint="Cash already in the drawer before the first sale."
+          >
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={openingFloat}
+              onChange={e => setOpeningFloat(e.target.value)}
+              className="app-input app-input-mono"
+            />
+          </FormField>
+          <FormField label="Notes">
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Optional handover note"
+              className="app-input resize-none"
+            />
+          </FormField>
+          {error && <InlineAlert tone="error">{error}</InlineAlert>}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleOpenShift}
+              disabled={loading}
+              className="btn btn-primary"
+            >
+              <Play className="h-4 w-4" />
+              {loading ? 'Opening…' : 'Open shift'}
+            </button>
+          </div>
+        </div>
+
+        <div className="surface flex flex-col justify-center gap-2 p-4 text-center">
+          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-1 ring-amber-200/70 ring-inset dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            No active shift
+          </div>
+          <p className="text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">
+            Payments are blocked until a shift is opened. Enter the opening float to begin.
+          </p>
+        </div>
       </div>
-      <div className="mb-3">
-        <label className="block text-sm text-gray-600 mb-1">Opening Float</label>
-        <input
-          type="number"
-          value={openingFloat}
-          onChange={(e) => setOpeningFloat(e.target.value)}
-          className="w-full border rounded px-3 py-2"
-        />
-      </div>
-      <div className="mb-3">
-        <label className="block text-sm text-gray-600 mb-1">Notes</label>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          className="w-full border rounded px-3 py-2"
-          rows={2}
-        />
-      </div>
-      <button
-        onClick={handleOpenShift}
-        className="w-full flex items-center justify-center gap-2 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
-        disabled={loading}
-      >
-        <Play className="w-4 h-4" />
-        {loading ? 'Opening...' : 'Open Shift'}
-      </button>
-    </div>
+    </Panel>
   );
 };

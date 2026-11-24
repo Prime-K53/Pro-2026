@@ -23,6 +23,13 @@ export function createBiRoutes(db: ServerDatabase): Router {
     try {
       const auth = req.auth!;
       const period = String(req.query.period || 'monthly');
+      const groupBy = req.query.groupBy ? String(req.query.groupBy) : null;
+      if (groupBy && ['product', 'category', 'customer'].includes(groupBy)) {
+        const trends = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+          biService.getSalesTrendsGrouped(tx, auth.companyId, groupBy as any, period)
+        );
+        return res.json({ trends });
+      }
       const trends = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
         biService.getSalesTrends(tx, auth.companyId, period)
       );
@@ -121,6 +128,36 @@ export function createBiRoutes(db: ServerDatabase): Router {
         biService.getSalesSplit(tx, auth.companyId)
       );
       return res.json(split);
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.get('/bi/stock-valuation', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const items = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        biService.getStockValuation(tx, auth.companyId)
+      );
+      return res.json({ items });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.get('/bi/printing-job-efficiency', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const jobs = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        biService.getPrintingJobEfficiency(tx, auth.companyId)
+      );
+      return res.json({ jobs });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.get('/bi/payroll-cost-analysis', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const summary = await db.withCompanyDb(auth.companyId, (tx: Transaction) =>
+        biService.getPayrollCostAnalysis(tx, auth.companyId)
+      );
+      return res.json(summary);
     } catch (err) { return handleError(res, err); }
   });
 

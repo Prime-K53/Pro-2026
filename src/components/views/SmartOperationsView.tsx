@@ -24,6 +24,9 @@ import { ReferralsTab } from './smart-ops/ReferralsTab';
 import { PromotionsTab } from './smart-ops/PromotionsTab';
 import { ShiftManager } from '../pos/ShiftManager';
 import { SuspendedSalesView } from '../pos/SuspendedSalesView';
+import { RefundPanel } from '../pos/RefundPanel';
+import { BarcodeScanner } from '../pos/BarcodeScanner';
+import { OnlineStatusBanner } from '../pos/OnlineStatusBanner';
 
 type SmartOpsTab = 'hub' | 'marketing' | 'price-cards' | 'referrals' | 'promotions' | 'shift';
 
@@ -401,9 +404,16 @@ export const SmartOperationsView: React.FC = () => {
       {activeTab === 'price-cards' && <PriceCardsTab />}
       {activeTab === 'referrals' && <ReferralsTab onDataChanged={loadOverview} />}
       {activeTab === 'shift' && (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <ShiftManager />
-          <SuspendedSalesView />
+        <div className="space-y-6">
+          <OnlineStatusBanner />
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ShiftManager />
+            <SuspendedSalesView />
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <BarcodeScanner />
+            <RefundPanel />
+          </div>
         </div>
       )}
       {activeTab === 'promotions' && <PromotionsTab onDataChanged={loadOverview} />}

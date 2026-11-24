@@ -16,6 +16,7 @@ import {
   UnifiedDocumentKind,
 } from '../services/documentsService.ts';
 import { renderContractToRenderModel } from '../services/contractRenderService.ts';
+import * as documentQrService from '../services/documentQrService.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -142,6 +143,23 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
           ['Customer', preview.customerName],
           ['Total', preview.total != null ? `${company.currency || ''}${preview.total}` : undefined],
         ].filter(([, v]) => v !== undefined && v !== null && v !== '') as Array<[string, unknown]>;
+
+        let qrSection = '';
+        const wantQr = String(req.query.qr || '') === '1';
+        if (wantQr && hasPermission(auth.role, 'documents:qr:manage')) {
+          try {
+            const qr = await db.withCompanyDb(auth.companyId, tx =>
+              documentQrService.generateQrToken(tx, auth.companyId, kind, id, {
+                version: (preview as any).version,
+                contentHash: (preview as any).contentHash,
+                baseUrl: `${req.protocol}://${req.get('host') || ''}`,
+              })
+            );
+            qrSection = `<div class="qr"><img src="${esc(qr.qrDataUrl)}" alt="QR verification code" width="140" height="140" /><div class="qr-label">Scan to verify authenticity</div></div>`;
+          } catch (qrErr) {
+            console.error('[documents print] QR generation failed', qrErr);
+          }
+        }
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(company.name || 'Document')} — ${esc(kind)}</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;margin:40px;color:#111;font-size:13px}
@@ -152,6 +170,8 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
   td{padding:7px 10px;border-bottom:1px solid #e5e5e5;vertical-align:top}
   td:first-child{width:160px;color:#555}
   .meta{margin-top:18px;font-size:11px;color:#777}
+  .qr{margin-top:18px;display:flex;flex-direction:column;align-items:flex-end}
+  .qr-label{font-size:11px;color:#777;margin-top:4px}
   button{margin-bottom:16px;padding:8px 14px}
   @media print{button{display:none}}
 </style></head><body>
@@ -163,6 +183,7 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
   <div class="legal">${esc([company.phone, company.email].filter(Boolean).join(' · '))}</div>
 </div>
 <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+${qrSection}
 <div class="meta">Generated ${esc(new Date().toISOString())} · ${esc(company.name || '')}</div>
 </body></html>`;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');

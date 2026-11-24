@@ -1,4 +1,6 @@
 import { Transaction } from '@electric-sql/pglite';
+import { ServerConfig } from '../config.ts';
+import { isTwilioConfigured, sendTwilioMessage, twilioConfigFromEnv } from './twilioService.ts';
 
 export interface Consent { id: number; companyId: number; customerId: number; channel: string; consentType: string; status: string; source: string | null; createdAt: string; }
 export interface Suppression { id: number; companyId: number; channel: string; recipient: string; reason: string | null; createdAt: string; }
@@ -101,6 +103,84 @@ export async function queueMessage(
     ]
   );
   return mapMessage(res.rows[0]);
+}
+
+/**
+ * Attempt an immediate outbound send for a queued message via the configured
+ * provider. Only SMS and WhatsApp are routed through Twilio; email is sent
+ * through the existing nodemailer path and is not handled here.
+ *
+ * Updates the message row in-place with the provider result. Returns the
+ * updated message. If the provider is not configured, the message remains
+ * `queued` and the caller can decide whether to surface that to the user.
+ */
+export async function dispatchQueuedMessage(
+  tx: Transaction,
+  companyId: number,
+  messageId: number,
+  config: ServerConfig
+): Promise<CommunicationMessage> {
+  const row = await tx.query<any>(
+    `SELECT * FROM communications_messages WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, messageId]
+  );
+  if (row.rows.length === 0) {
+    throw new Error(`Communication message ${messageId} not found`);
+  }
+  const msg = row.rows[0];
+  if (msg.status === 'sent' || msg.status === 'delivered') {
+    return mapMessage(msg);
+  }
+  // Suppressed messages are already marked failed; do not attempt a send.
+  if (msg.status === 'failed' && msg.error === 'suppressed') {
+    return mapMessage(msg);
+  }
+  if (msg.channel === 'email') {
+    // Email is handled elsewhere; leave queued.
+    return mapMessage(msg);
+  }
+
+  const cfg = twilioConfigFromEnv(config);
+  if (!isTwilioConfigured(cfg)) {
+    await tx.query(
+      `UPDATE communications_messages SET error = $3 WHERE company_id = $1 AND id = $2`,
+      [companyId, messageId, 'TWILIO_NOT_CONFIGURED']
+    );
+    return mapMessage((await tx.query<any>(
+      `SELECT * FROM communications_messages WHERE company_id = $1 AND id = $2`,
+      [companyId, messageId]
+    )).rows[0]);
+  }
+
+  const result = await sendTwilioMessage(cfg, {
+    to: msg.recipient,
+    body: msg.body,
+    channel: msg.channel === 'whatsapp' ? 'whatsapp' : 'sms',
+  });
+
+  const newStatus: CommunicationStatus = result.ok ? 'sent' : 'failed';
+  await tx.query(
+    `UPDATE communications_messages
+        SET status = $3,
+            provider = COALESCE($4, provider),
+            provider_message_id = COALESCE($5, provider_message_id),
+            error = $6,
+            sent_at = CASE WHEN $3 = 'sent' THEN NOW() ELSE sent_at END
+      WHERE company_id = $1 AND id = $2`,
+    [
+      companyId,
+      messageId,
+      newStatus,
+      'twilio',
+      result.providerMessageId,
+      result.ok ? null : (result.errorMessage || result.errorCode),
+    ]
+  );
+
+  return mapMessage((await tx.query<any>(
+    `SELECT * FROM communications_messages WHERE company_id = $1 AND id = $2`,
+    [companyId, messageId]
+  )).rows[0]);
 }
 
 export async function listMessages(

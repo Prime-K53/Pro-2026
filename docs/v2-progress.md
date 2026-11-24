@@ -126,6 +126,42 @@
 3. **WS-4 R6** — bank-specific file format and payslip PDF branding.
 4. **WS-2 A4/A7/A8** — provider failover, structured citations, deeper injection defence.
 
+## Closure increment (2026-11-23)
+
+The following items from the gap analysis were closed in this increment:
+
+| # | Item | Evidence |
+|---|---|---|
+| 1 | **Orphaned components wired** | `App.tsx` cases `sales-trends`, `kpi-scorecard`, `health`, `delivery-fleet`, `consent-management`, `deduction-rules`, `salary-advances`; `SidebarNavigator` entries for all; `CustomerContactsTab` mounted in `CustomersView`; `TwoFactorSetup` as `AccessControlView` → "My 2FA" tab; `DeductionRulesView` + `SalaryAdvanceModal` as `PayrollView` tabs |
+| 2 | **2FA RLS** | Migration `0055` enables RLS + `app_current_user_id()` helper + owner policies on `user_two_factor_secrets` / `user_backup_codes`; `withCompanyDb` now accepts optional `userId` and sets `app.user_id` GUC; `twoFactorRoutes` passes `auth.userId` |
+| 3 | **POS refunds** | Migration `0056` (`pos_refunds` + `pos_orders.refunded_amount`); `createPosRefund` / `listPosRefunds` in `posService`; `POST /pos/orders/:id/refund` + `GET /pos/refunds`; rejects non-completed orders, double refunds, over-refunds; reverses GL |
+| 4 | **QR image generation** | `qrcode` + `@types/qrcode` installed; `generateQrToken` returns `qrDataUrl` (PNG data URL); `POST /documents/:kind/:id/qr` accepts `baseUrl`; `GET /documents/:kind/:id/print?qr=1` embeds the QR image |
+| 5 | **Twilio outbound adapter** | `twilioService.ts` (`sendTwilioMessage`, `isTwilioConfigured`, `twilioConfigFromEnv`); `config.ts` adds `TWILIO_ACCOUNT_SID` / `TWILIO_FROM_NUMBER` / `TWILIO_MESSAGING_SERVICE_SID` / `TWILIO_WHATSAPP_FROM`; `communicationsService.dispatchQueuedMessage` routes SMS/WhatsApp through Twilio; `POST /communications/send` dispatches immediately for SMS/WhatsApp |
+| 6 | **US payroll residue removed** | `payrollService` writes PAYE→`federal_tax`, pension→`ss_employee`/`ss_employer` (legacy columns kept for compat); sidebar label "Tax Forms (PAYE / P45)"; `PayrollView` header/pay-stub/wizard relabelled to Malawi PAYE + pension; `TaxFormsView` tabs relabelled (PAYE Return, Annual PAYE Reconciliation, Employee P45, Contractor Statement) |
+| 7 | **BI gaps filled** | `getSalesTrendsGrouped` (by product/category/customer), `getStockValuation`, `getPrintingJobEfficiency`, `getPayrollCostAnalysis` in `biService`; `GET /bi/sales-trends?groupBy=...`, `GET /bi/stock-valuation`, `GET /bi/printing-job-efficiency`, `GET /bi/payroll-cost-analysis` |
+| 8 | **E2E + coverage + perf baseline** | `tests/e2e/smoke.spec.ts` expanded with 5 acceptance flows (POS shift, 2FA login, payroll→payslip, QR scan, delivery assignment) + graceful skip when server down; `test:coverage` now enforces `--lines=80 --functions=80 --branches=70 --statements=80`; `docs/release/perf-baseline.md` generated (overall p95 = 28.92 ms, 0 errors) |
+| 9 | **Full regression green** | All 48 test files pass: `npm test` → 48/48 |
+
+### Offline scope decision
+
+The V1/V2 plans assumed an IndexedDB → durable queue → `/api/sync/ops` offline
+architecture. **No such architecture exists in the codebase** and building one
+is out of scope for this closure increment. The explicit decision:
+
+- **Online-only (hard requirement):** AI provider calls, Twilio SMS/WhatsApp
+  sends, live model discovery, payment processing, QR generation. These
+  require network and fail closed with an actionable error when offline.
+- **Online-only (soft, queued server-side):** POS checkout, inventory
+  adjustments, customer creation, quote creation. The server queue
+  (`communications_messages`, `pos_suspended_sales`) provides durability once
+  the request reaches the server, but there is **no client-side offline
+  queue**. The UI must disable these actions when `navigator.onLine === false`
+  and show an "offline — action unavailable" banner.
+
+This is a deliberate scope reduction from `plan.md` §Implementation Contract.
+A future phase may build a real client-side durable queue if offline POS is a
+hard product requirement.
+
 ## Notes / decisions
 
 - **Working-tree corruption (2026-11-22):** an external process reverted uncommitted
@@ -180,3 +216,53 @@
 - `npm run lint` pass.
 - `malawi-payroll` (incl. salary-structure case) pass.
 - Regression: integration, commercial ×3, documents, pos-cash-drawer, ai ×3, comms-admin — all pass.
+
+---
+
+## Frontend closure increment (2026-11-23)
+
+Every plan workstream now has a reachable frontend surface. No component is
+orphaned and no workstream is backend-only.
+
+### New views and navigation
+
+| View / nav id | Workstream | Notes |
+|---|---|---|
+| `bi-dashboard` → `BiDashboard` | WS-8 | KPI tiles, AR ageing, sales split, trend bars, grouped trends (product/category/customer), stock valuation, job efficiency, payroll cost, KPI targets, revenue drill-down |
+| `communications-inbox` → `InboxView` | WS-7 | Send (SMS/WhatsApp/email), message status + errors, templates, suppression list, consents, cost summary |
+| `system-admin` → `SubscriptionManager` | WS-9 | Integrations + secret rotation, backup/restore-readiness, release history, audit summary, subscriptions |
+| `delivery-fleet` → `DeliveryScheduling` + vehicles + drivers | WS-5 | Scheduling with conflict-aware assignment |
+| `health` → `HealthDashboard` | WS-9 | Per-subsystem health checks |
+| `deduction-rules`, `salary-advances` | WS-4 | Also tabs inside Payroll |
+
+### Extended screens
+
+| Screen | Added |
+|---|---|
+| `SmartOperationsView` → Cashier Shift tab | `OnlineStatusBanner`, `BarcodeScanner`, `RefundPanel` |
+| `PosModal` | `OnlineStatusBanner` (no offline theatre) |
+| `SuspendedSalesView` | Park form with a stable `sessionStorage` client token; resume clears the token |
+| `AiAgentView` (rewritten) | Real `/api/ai/*`: chat with citations + token counts, conversation list, anomaly detection, proposed actions with approve/reject/execute, provider config + live model discovery, budget, retention purge, audit trail |
+| `PayrollView` | Tabs: Statutory Config, Structures & Loans, Payslips & Bank File |
+| `CustomersView` | `CustomerBranchesTab` alongside `CustomerContactsTab` |
+| `DocumentPreviewModal` | "QR" button → renders the QR image, public verify link, branded print-with-QR link |
+| `SidebarNavigator` | New groups/items for BI, comms, fleet, health, admin; labels corrected (`Tax Forms (PAYE / P45)`, `AI Assistant`) |
+
+### Supporting changes
+
+- New typed client `src/services/v2Api.ts` covering BI, admin, communications,
+  delivery, payroll statutory config, loans/deductions, QR, POS refunds,
+  customer branches and the full AI surface — all through `http.ts` so CSRF,
+  session-expiry and error shaping stay central.
+- Migrations `0057` (`customer_branches.is_active` for soft deactivate) and
+  `0058` (`pos_suspended_sales.client_token` for deterministic recovery).
+- `customerService`: one-primary-contact enforcement on update, duplicate-contact
+  detection (409), branch ownership validation, branch soft-deactivate/reactivate.
+- `posService`: `suspendPosOrder` accepts a client `suspendId` and is idempotent
+  on it; `listSuspendedSales` returns the token.
+
+### Verification
+- `npm run lint` (tsc --noEmit): **pass**
+- `npm run build`: **pass**
+- `node scripts/run-tests.mjs`: **41 / 41 files pass** (migrations 0055–0058 applied
+  during server boot in the test harness)

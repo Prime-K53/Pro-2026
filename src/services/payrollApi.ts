@@ -36,7 +36,34 @@ export interface ApiPayrollRun {
   }>;
 }
 
+/**
+ * Employee directory row returned by `GET /api/employees`.
+ *
+ * Sensitive HR fields (`ssnMasked`, `payType`, `payRate`, `payFrequency`) are
+ * only populated when the caller's role holds `employees:read_sensitive`
+ * (Administrators). Payroll is Administrator-only, so the payroll centre always
+ * receives the fields it needs to price the run.
+ */
+export interface ApiEmployee {
+  id: number;
+  firstName: string;
+  lastName: string;
+  jobTitle: string | null;
+  department: string | null;
+  email: string | null;
+  hireDate?: string | null;
+  ssnMasked?: string | null;
+  payType?: string | null;
+  payRate?: string | null;
+  payFrequency?: string | null;
+}
+
 export const payrollApi = {
+  async listEmployees(): Promise<ApiEmployee[]> {
+    const d = await requestJson<{ employees: ApiEmployee[] }>('/api/employees');
+    return d.employees || [];
+  },
+
   async listRuns(): Promise<any[]> {
     const d = await requestJson<{ runs: any[] }>('/api/payroll/runs');
     return d.runs || [];

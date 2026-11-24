@@ -29,7 +29,7 @@ import {
   recordStockDamage,
   transferStock,
 } from '../services/inventoryOpsService.ts';
-import { runPayroll } from '../services/payrollService.ts';
+import { runPayroll, listPayslips } from '../services/payrollService.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -206,8 +206,17 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           unitCost: req.body?.unitCost ?? null,
           idempotencyKey:
             (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null,
+          approvalRequestId: req.body?.approvalRequestId ?? null,
         })
       );
+      if (result.approvalRequired) {
+        return res.status(202).json({
+          approvalRequired: true,
+          approvalRequest: result.approvalRequest,
+          message:
+            'This inventory write-off requires approval before it is committed. An approver must approve the request, then re-submit with the approvalRequestId.',
+        });
+      }
       return res.status(201).json({ adjustment: result });
     } catch (err) {
       return handleProtectedError(res, err);
@@ -456,12 +465,13 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
         department: string | null;
         email: string | null;
         ssn_last4_masked: string | null;
+        hire_date: string | null;
         pay_type: string;
         pay_rate: string;
         pay_frequency: string;
       }>(
         `SELECT id, first_name, last_name, job_title, department, email,
-                ssn_last4_masked, pay_type, pay_rate::text, pay_frequency
+                ssn_last4_masked, hire_date::text AS hire_date, pay_type, pay_rate::text, pay_frequency
            FROM employees
           WHERE is_active = TRUE
           ORDER BY id ASC`
@@ -474,6 +484,7 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           jobTitle: e.job_title,
           department: e.department,
           email: e.email,
+          hireDate: e.hire_date ? String(e.hire_date).slice(0, 10) : null,
         };
         if (!includeSensitive) return pub;
         return {
@@ -572,6 +583,8 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           payDate: req.body?.payDate,
           bankAccountId: Number(req.body?.bankAccountId),
           items: Array.isArray(req.body?.items) ? req.body.items : [],
+          idempotencyKey:
+            (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null,
         })
       );
       return res.status(201).json({ run: result });
@@ -584,13 +597,43 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
   router.get('/payroll/runs', requirePermission('payroll:read'), async (req: Request, res: Response) => {
     const auth = req.auth!;
     const runs = await db.withCompanyDb(auth.companyId, async tx => {
-      const r = await tx.query(
-        `SELECT id, run_number, pay_period_start::text, pay_period_end::text,
-                pay_date::text, total_gross::text, total_net::text, status
-           FROM pay_runs
-          ORDER BY pay_date DESC`
+      const r = await tx.query<{
+        id: number;
+        run_number: string;
+        pay_period_start: string;
+        pay_period_end: string;
+        pay_date: string;
+        total_gross: string;
+        total_net: string;
+        total_employee_taxes: string;
+        total_employer_taxes: string;
+        status: string;
+        journal_txn_id: number | null;
+        entry_number: string | null;
+        item_count: number;
+      }>(
+        `SELECT pr.id, pr.run_number,
+                pr.pay_period_start::text AS pay_period_start,
+                pr.pay_period_end::text   AS pay_period_end,
+                pr.pay_date::text         AS pay_date,
+                pr.total_gross::text      AS total_gross,
+                pr.total_net::text        AS total_net,
+                pr.total_employee_taxes::text AS total_employee_taxes,
+                pr.total_employer_taxes::text AS total_employer_taxes,
+                pr.status, pr.journal_txn_id, jt.entry_number,
+                (SELECT COUNT(*) FROM pay_stubs ps
+                  WHERE ps.company_id = pr.company_id AND ps.pay_run_id = pr.id)::int AS item_count
+           FROM pay_runs pr
+           LEFT JOIN journal_transactions jt
+             ON jt.company_id = pr.company_id AND jt.id = pr.journal_txn_id
+          ORDER BY pr.pay_date DESC`
       );
-      return r.rows;
+      const out: any[] = [];
+      for (const row of r.rows) {
+        const payslips = await listPayslips(tx, auth.companyId, Number(row.id));
+        out.push({ ...row, items: payslips });
+      }
+      return out;
     });
     return res.json({ companyId: auth.companyId, runs });
   });

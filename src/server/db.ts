@@ -22,7 +22,7 @@ export interface ServerDatabase {
   pg: PGlite;
   config: ServerConfig;
   withSystemDb<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>;
-  withCompanyDb<T>(companyId: number, fn: (tx: Transaction) => Promise<T>): Promise<T>;
+  withCompanyDb<T>(companyId: number, fn: (tx: Transaction) => Promise<T>, userId?: number): Promise<T>;
   createCompanyWithDefaults(params: {
     name: string;
     legalName?: string;
@@ -622,7 +622,7 @@ export async function createServerDatabase(
         return fn(tx);
       });
     },
-    async withCompanyDb<T>(companyId: number, fn: (tx: Transaction) => Promise<T>): Promise<T> {
+    async withCompanyDb<T>(companyId: number, fn: (tx: Transaction) => Promise<T>, userId?: number): Promise<T> {
       if (!Number.isInteger(companyId) || companyId <= 0) {
         throw new Error('Invalid companyId for scoped transaction');
       }
@@ -630,6 +630,9 @@ export async function createServerDatabase(
         await tx.exec(`SET LOCAL ROLE pms_app_role;`);
         await tx.exec(`SELECT set_config('app.bypass_rls', 'off', true);`);
         await tx.query(`SELECT set_config('app.current_company_id', $1, true)`, [String(companyId)]);
+        if (userId && Number.isInteger(userId) && userId > 0) {
+          await tx.query(`SELECT set_config('app.user_id', $1, true)`, [String(userId)]);
+        }
         return fn(tx);
       });
     },

@@ -199,6 +199,68 @@ async function main() {
       return `journal #${created.json.entry.id} approved and posted`;
     });
 
+    await runTest('3b. Maker-Checker', 'Inventory shrinkage write-off above threshold requires approval before posting', async () => {
+      const policy = await admin.request('PUT', '/api/approvals/policies', {
+        body: { actionType: 'inventory_writeoff', thresholdAmount: '100.0000', isEnabled: true },
+      });
+      assert.equal(policy.status, 200, `inventory writeoff policy failed: ${policy.text}`);
+
+      const created = await admin.request('POST', '/api/inventory', {
+        body: {
+          sku: `WO-${Date.now()}`,
+          name: 'Write-off approval test item',
+          itemType: 'raw_material',
+          unitCost: '10.0000',
+          onHand: '100.0000',
+        },
+      });
+      assert.equal(created.status, 201, `item creation failed: ${created.text}`);
+      const itemId = Number(created.json.item.id);
+      assert.ok(itemId > 0);
+
+      // Shrinkage of 50 units @ 10 = 500 value, above the 100 threshold → 202.
+      const blocked = await admin.request('POST', `/api/inventory/${itemId}/adjust`, {
+        body: { adjustmentQty: -50, reason: 'Damaged in transit' },
+      });
+      assert.equal(blocked.status, 202, `expected 202 approval gate, got ${blocked.status}: ${blocked.text}`);
+      assert.equal(blocked.json.approvalRequired, true);
+      const requestId = Number(blocked.json.approvalRequest.id);
+      assert.ok(requestId > 0);
+
+      // Stock must be unchanged while approval is pending.
+      const mid = await admin.request('GET', `/api/inventory/${itemId}`);
+      assert.equal(mid.status, 200, `item detail failed: ${mid.text}`);
+      assert.equal(Number(mid.json.item.on_hand), 100, `stock changed while approval pending: ${mid.text}`);
+
+      // The requester cannot approve their own write-off.
+      const selfApproval = await admin.request('POST', `/api/approvals/${requestId}/approve`, {
+        body: { note: 'self approval attempt' },
+      });
+      assert.equal(selfApproval.status, 409, `self-approval must be blocked: ${selfApproval.text}`);
+      assert.equal(selfApproval.json.code, 'SELF_APPROVAL_FORBIDDEN');
+
+      // A second approver signs off.
+      const approved = await accountant.request('POST', `/api/approvals/${requestId}/approve`, {
+        body: { note: 'approved by accountant' },
+      });
+      assert.equal(approved.status, 200, `write-off approval failed: ${approved.text}`);
+
+      // Re-submitting with the approval posts the write-off exactly once.
+      const applied = await admin.request('POST', `/api/inventory/${itemId}/adjust`, {
+        body: { adjustmentQty: -50, reason: 'Damaged in transit', approvalRequestId: requestId },
+      });
+      assert.equal(applied.status, 201, `approved write-off failed: ${applied.status} ${applied.text}`);
+      assert.equal(Number(applied.json.adjustment.onHandAfter), 50, `unexpected on hand: ${applied.text}`);
+
+      // The approval is consumed once the write-off posts.
+      const req = await admin.request('GET', `/api/approvals/${requestId}`);
+      assert.equal(req.status, 200);
+      assert.equal(req.json.request.status, 'approved');
+      assert.ok(req.json.request.consumed_at, 'approval must be consumed after the write-off posts');
+
+      return 'write-off of 50 units posted only after a second approver signed off; stock 100 -> 50';
+    });
+
     await runTest('4. Period Close', 'Checklist workflow exposes auto evidence, manual sign-off, and enforcement', async () => {
       const period = await admin.request('POST', '/api/periods', {
         body: {

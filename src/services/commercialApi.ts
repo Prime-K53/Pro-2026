@@ -892,14 +892,22 @@ export const commercialApi = {
       adjustmentDate?: string | null;
       counterAccountId?: number | null;
       unitCost?: string | number | null;
+      approvalRequestId?: number | null;
     }
   ) {
-    const d = await requestJson<{ adjustment: any }>(`/api/inventory/${id}/adjust`, {
+    // 201 → { adjustment } on success; 202 → { approvalRequired, approvalRequest,
+    // message } when a shrinkage write-off is routed through maker-checker approval.
+    const d = await requestJson<{
+      adjustment?: any;
+      approvalRequired?: boolean;
+      approvalRequest?: any;
+      message?: string;
+    }>(`/api/inventory/${id}/adjust`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     emitAccountingUpdated();
-    return d.adjustment;
+    return d;
   },
 
   /** Full item detail: master record, variants, BOM components, valuation. */

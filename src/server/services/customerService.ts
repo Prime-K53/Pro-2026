@@ -24,6 +24,7 @@ export interface CustomerBranch {
   isBillingDefault: boolean;
   isShippingDefault: boolean;
   deliveryInstructions: string | null;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +37,30 @@ export async function createContact(
   customerId: number,
   input: { contactName: string; role?: string; email?: string; phone?: string; isPrimary?: boolean }
 ): Promise<CustomerContact> {
+  // C3 — duplicate-contact detection (name + phone/email fuzzy match).
+  const nameKey = (input.contactName || '').trim().toLowerCase();
+  const phoneKey = (input.phone || '').trim();
+  const emailKey = (input.email || '').trim().toLowerCase();
+  const dup = await tx.query<any>(
+    `SELECT id, contact_name, phone, email
+       FROM customer_contacts
+      WHERE company_id = $1 AND customer_id = $2
+        AND (
+          LOWER(contact_name) = $3
+          OR ($4::TEXT <> '' AND phone = $4)
+          OR ($5::TEXT <> '' AND LOWER(email) = $5)
+        )
+      LIMIT 1`,
+    [companyId, customerId, nameKey, phoneKey, emailKey]
+  );
+  if (dup.rows.length > 0) {
+    const d = dup.rows[0];
+    throw new AccountingError(
+      409,
+      `A contact matching "${d.contact_name}" already exists for this customer`,
+      'CONTACT_DUPLICATE'
+    );
+  }
   if (input.isPrimary) {
     await tx.query(
       `UPDATE customer_contacts SET is_primary = FALSE WHERE company_id = $1 AND customer_id = $2`,
@@ -78,11 +103,20 @@ export async function updateContact(
   }
 
   const c = current.rows[0];
+  const willBePrimary = input.isPrimary ?? c.is_primary;
+  // C1 — exactly one primary contact per customer.
+  if (willBePrimary) {
+    await tx.query(
+      `UPDATE customer_contacts SET is_primary = FALSE, updated_at = NOW()
+        WHERE company_id = $1 AND customer_id = $2 AND id <> $3 AND is_primary = TRUE`,
+      [companyId, c.customer_id, contactId]
+    );
+  }
   const res = await tx.query<any>(
     `UPDATE customer_contacts SET
        contact_name = $3, role = $4, email = $5, phone = $6, is_primary = $7, updated_at = NOW()
      WHERE company_id = $1 AND id = $2 RETURNING *`,
-    [companyId, contactId, input.contactName ?? c.contact_name, input.role ?? c.role, input.email ?? c.email, input.phone ?? c.phone, input.isPrimary ?? c.is_primary]
+    [companyId, contactId, input.contactName ?? c.contact_name, input.role ?? c.role, input.email ?? c.email, input.phone ?? c.phone, willBePrimary]
   );
   return mapContact(res.rows[0]);
 }
@@ -123,10 +157,18 @@ export async function createBranch(
   return mapBranch(res.rows[0]);
 }
 
-export async function listBranches(tx: Transaction, companyId: number, customerId: number): Promise<CustomerBranch[]> {
+export async function listBranches(
+  tx: Transaction,
+  companyId: number,
+  customerId: number,
+  includeInactive = false
+): Promise<CustomerBranch[]> {
   const res = await tx.query<any>(
-    `SELECT * FROM customer_branches WHERE company_id = $1 AND customer_id = $2 ORDER BY is_billing_default DESC, branch_name`,
-    [companyId, customerId]
+    `SELECT * FROM customer_branches
+      WHERE company_id = $1 AND customer_id = $2
+        AND ($3::BOOLEAN OR is_active = TRUE)
+      ORDER BY is_active DESC, is_billing_default DESC, branch_name`,
+    [companyId, customerId, includeInactive]
   );
   return res.rows.map(mapBranch);
 }
@@ -144,21 +186,58 @@ export async function updateBranch(
   if (current.rows.length === 0) throw new AccountingError(404, 'Branch not found', 'BRANCH_NOT_FOUND');
 
   const c = current.rows[0];
+  // C2 — branch defaults must belong to the customer.
   const res = await tx.query<any>(
     `UPDATE customer_branches SET
        branch_name = $3, address = $4, phone = $5, is_billing_default = $6, is_shipping_default = $7, delivery_instructions = $8, updated_at = NOW()
      WHERE company_id = $1 AND id = $2 RETURNING *`,
     [companyId, branchId, input.branchName ?? c.branch_name, input.address ?? c.address, input.phone ?? c.phone, input.isBillingDefault ?? c.is_billing_default, input.isShippingDefault ?? c.is_shipping_default, input.deliveryInstructions ?? c.delivery_instructions]
   );
+  if (input.isBillingDefault || input.isShippingDefault) {
+    await tx.query(
+      `UPDATE customer_branches SET is_billing_default = FALSE
+        WHERE company_id = $1 AND customer_id = $2 AND id <> $3 AND is_billing_default = TRUE`,
+      [companyId, c.customer_id, branchId]
+    );
+    await tx.query(
+      `UPDATE customer_branches SET is_shipping_default = FALSE
+        WHERE company_id = $1 AND customer_id = $2 AND id <> $3 AND is_shipping_default = TRUE`,
+      [companyId, c.customer_id, branchId]
+    );
+  }
   return mapBranch(res.rows[0]);
 }
 
-export async function deleteBranch(tx: Transaction, companyId: number, branchId: number): Promise<void> {
-  const res = await tx.query(
-    `DELETE FROM customer_branches WHERE company_id = $1 AND id = $2`,
+/**
+ * WS-3 C5 — soft-deactivate. The row is kept so historical documents that
+ * reference this branch stay intact; it is hidden from pickers by default.
+ */
+export async function deactivateBranch(
+  tx: Transaction,
+  companyId: number,
+  branchId: number
+): Promise<CustomerBranch> {
+  const res = await tx.query<any>(
+    `UPDATE customer_branches SET is_active = FALSE, updated_at = NOW()
+      WHERE company_id = $1 AND id = $2 RETURNING *`,
     [companyId, branchId]
   );
-  if (res.rowCount === 0) throw new AccountingError(404, 'Branch not found', 'BRANCH_NOT_FOUND');
+  if (res.rows.length === 0) throw new AccountingError(404, 'Branch not found', 'BRANCH_NOT_FOUND');
+  return mapBranch(res.rows[0]);
+}
+
+export async function reactivateBranch(
+  tx: Transaction,
+  companyId: number,
+  branchId: number
+): Promise<CustomerBranch> {
+  const res = await tx.query<any>(
+    `UPDATE customer_branches SET is_active = TRUE, updated_at = NOW()
+      WHERE company_id = $1 AND id = $2 RETURNING *`,
+    [companyId, branchId]
+  );
+  if (res.rows.length === 0) throw new AccountingError(404, 'Branch not found', 'BRANCH_NOT_FOUND');
+  return mapBranch(res.rows[0]);
 }
 
 // ─── Mappers ────────────────────────────────────────────────────────────
@@ -189,6 +268,7 @@ function mapBranch(r: any): CustomerBranch {
     isBillingDefault: r.is_billing_default,
     isShippingDefault: r.is_shipping_default,
     deliveryInstructions: r.delivery_instructions,
+    isActive: r.is_active !== false,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

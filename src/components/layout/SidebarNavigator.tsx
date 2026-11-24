@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { STOCKED_ITEM_TYPES } from '../../types/accounting';
+import { canAccessView } from '../../config/viewPermissions';
 import {
   GitMerge,
   LayoutDashboard,
@@ -25,6 +26,10 @@ import {
   FolderOpen,
   ClipboardCheck,
   Zap,
+  TrendingUp,
+  Truck,
+  Activity,
+  Megaphone,
   X,
 } from 'lucide-react';
 
@@ -56,7 +61,7 @@ export const SidebarNavigator: React.FC = () => {
     isMobileDrawerOpen,
     setIsMobileDrawerOpen,
   } = useAccounting();
-  const { activeCompany } = useAuth();
+  const { activeCompany, permissions } = useAuth();
 
   const drawerRef = useRef<HTMLElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
@@ -206,20 +211,39 @@ export const SidebarNavigator: React.FC = () => {
       groupTitle: 'Payroll & Compliance',
       items: [
         { id: 'payroll', label: 'Payroll Center', icon: BadgeDollarSign },
-        { id: 'tax-forms', label: 'Tax Forms (941 / W-2)', icon: FileCheck2 },
+        { id: 'salary-advances', label: 'Salary Advances', icon: BadgeDollarSign },
+        { id: 'deduction-rules', label: 'Deduction Rules', icon: FileCheck2 },
+        { id: 'tax-forms', label: 'Tax Forms (PAYE / P45)', icon: FileCheck2 },
+        { id: 'consent-management', label: 'Consent Management', icon: ShieldCheck },
+        { id: 'communications-inbox', label: 'Communications Inbox', icon: Megaphone },
       ],
     },
     {
       groupTitle: 'Analytics & Administration',
       items: [
         { id: 'reports', label: 'Financial Reports', icon: BarChart3 },
+        { id: 'bi-dashboard', label: 'BI Dashboard', icon: BarChart3 },
+        { id: 'sales-trends', label: 'Sales Trends', icon: TrendingUp },
+        { id: 'kpi-scorecard', label: 'KPI Scorecard', icon: BarChart3 },
         { id: 'finance-controls', label: 'Finance Controls', icon: ClipboardCheck },
-        { id: 'ai-agent', label: 'AI Agent & 835-Op API', icon: Sparkles },
+        { id: 'delivery-fleet', label: 'Delivery & Fleet', icon: Truck },
+        { id: 'health', label: 'System Health', icon: Activity },
+        { id: 'system-admin', label: 'System Administration', icon: Settings },
+        { id: 'ai-agent', label: 'AI Assistant', icon: Sparkles },
         { id: 'access-control', label: 'Users & Multi-Company', icon: ShieldCheck },
         { id: 'settings', label: 'Company Settings', icon: Settings },
       ],
     },
   ];
+
+  // Only surface modules the signed-in role can actually open. The route guard in
+  // App.tsx is the backstop; this keeps the navigation coherent with it.
+  const visibleNavGroups: NavGroup[] = navGroups
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item => canAccessView(item.id, permissions)),
+    }))
+    .filter(group => group.items.length > 0);
 
   const handleNavClick = (id: string) => {
     setCurrentView(id);
@@ -229,7 +253,7 @@ export const SidebarNavigator: React.FC = () => {
   const sidebarContent = (collapsed: boolean) => (
       <div className="flex flex-col justify-between h-full">
       <nav className="space-y-1 px-2 py-3" aria-label="Workspace navigation">
-        {navGroups.map((group, gIdx) => (
+        {visibleNavGroups.map((group, gIdx) => (
           <div key={gIdx} className="space-y-0.5">
             {!collapsed && <div className="nav-group-label">{group.groupTitle}</div>}
 

@@ -1306,6 +1306,8 @@ export interface PosShiftCloseInput {
 export interface PosSuspendInput {
   posOrderId: number;
   notes?: string | null;
+  /** Client-generated token so a refresh/restart re-sends the same park id. */
+  suspendId?: string | null;
 }
 
 export interface PosResumeInput {
@@ -1962,10 +1964,12 @@ export async function suspendPosOrder(
   }
 
   const suspendIns = await tx.query<{ id: number }>(
-    `INSERT INTO pos_suspended_sales (company_id, shift_id, pos_order_id, status)
-     VALUES ($1, $2, $3, 'suspended')
+    `INSERT INTO pos_suspended_sales (company_id, shift_id, pos_order_id, status, client_token)
+     VALUES ($1, $2, $3, 'suspended', $4)
+     ON CONFLICT (company_id, client_token) WHERE client_token IS NOT NULL
+     DO UPDATE SET client_token = EXCLUDED.client_token
      RETURNING id`,
-    [companyId, order.shift_id, posOrderId]
+    [companyId, order.shift_id, posOrderId, input.suspendId?.trim() || null]
   );
 
   // Log audit
@@ -2041,7 +2045,7 @@ export async function listSuspendedSales(
   tx: Transaction,
   companyId: number,
   filters?: { status?: 'suspended' | 'resumed'; shiftId?: number }
-): Promise<{ suspendedSales: Array<{ id: number; shiftId: number; posOrderId: number; suspendedAt: string; resumedAt: string | null; status: string }> }> {
+): Promise<{ suspendedSales: Array<{ id: number; shiftId: number; posOrderId: number; suspendedAt: string; resumedAt: string | null; status: string; clientToken: string | null }> }> {
   const conditions: string[] = ['company_id = $1'];
   const params: any[] = [companyId];
   let paramIdx = 2;
@@ -2056,7 +2060,7 @@ export async function listSuspendedSales(
   }
 
   const res = await tx.query<any>(
-    `SELECT id, shift_id, pos_order_id, suspended_at, resumed_at, status
+    `SELECT id, shift_id, pos_order_id, suspended_at, resumed_at, status, client_token
        FROM pos_suspended_sales
       WHERE ${conditions.join(' AND ')}
       ORDER BY suspended_at DESC
@@ -2072,6 +2076,7 @@ export async function listSuspendedSales(
       suspendedAt: r.suspended_at,
       resumedAt: r.resumed_at,
       status: r.status,
+      clientToken: r.client_token ?? null,
     })),
   };
 }
@@ -2140,4 +2145,152 @@ export async function getCurrentUserShift(
     return null;
   }
   return getPosShiftSummary(tx, companyId, Number(res.rows[0].id));
+}
+
+// ─── Refunds ───────────────────────────────────────────────────────────
+
+export interface PosRefundInput {
+  posOrderId: number;
+  amount: number | string;
+  reason?: string | null;
+  shiftId?: number | null;
+}
+
+export interface PosRefundResult {
+  id: number;
+  companyId: number;
+  posOrderId: number;
+  shiftId: number | null;
+  refundedBy: number;
+  amount: string;
+  reason: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * Record a refund linked to an original completed POS order.
+ *
+ * Rejects:
+ *  - non-existent orders
+ *  - orders not in `completed` status
+ *  - duplicate refunds (unique partial index on completed refunds per order)
+ *  - amount <= 0 or amount > order total
+ *
+ * The refund is recorded in `pos_refunds`, the order's `refunded_amount` is
+ * incremented, and (when the order has a journal txn) the GL is reversed via
+ * the existing reversal path. Inventory is NOT restored here — that is the
+ * caller's responsibility (or a future `restock` flag) to avoid double-restore
+ * when the caller already handled it.
+ */
+export async function createPosRefund(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: PosRefundInput
+): Promise<PosRefundResult> {
+  const amount4 = parseDecimal4(input.amount);
+  if (amount4 <= 0n) {
+    throw new AccountingError(400, 'Refund amount must be greater than zero', 'REFUND_INVALID_AMOUNT');
+  }
+
+  const poRes = await tx.query<any>(
+    `SELECT id, total::text AS total, status, refunded_amount::text AS refunded_amount, journal_txn_id, invoice_id
+       FROM pos_orders WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, input.posOrderId]
+  );
+  if (poRes.rows.length === 0) {
+    throw new AccountingError(404, 'POS order not found', 'POS_ORDER_NOT_FOUND');
+  }
+  const po = poRes.rows[0];
+  if (po.status !== 'completed') {
+    throw new AccountingError(
+      409,
+      `Refund only allowed for completed orders (current status: ${po.status})`,
+      'POS_ORDER_NOT_REFUNDABLE'
+    );
+  }
+  const total4 = parseDecimal4(po.total);
+  const alreadyRefunded4 = parseDecimal4(po.refunded_amount ?? 0);
+  const nextRefunded4 = alreadyRefunded4 + amount4;
+  if (nextRefunded4 > total4) {
+    throw new AccountingError(
+      400,
+      `Refund amount (${formatDecimal4(amount4)}) exceeds remaining refundable amount (${formatDecimal4(total4 - alreadyRefunded4)})`,
+      'REFUND_EXCEEDS_TOTAL'
+    );
+  }
+
+  let shiftId: number | null = input.shiftId ?? null;
+  if (shiftId == null) {
+    const openShift = await tx.query<{ id: number }>(
+      `SELECT id FROM pos_shifts WHERE company_id = $1 AND cashier_id = $2 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`,
+      [companyId, actor.userId]
+    );
+    shiftId = openShift.rows[0]?.id ?? null;
+  }
+
+  const ins = await tx.query<any>(
+    `INSERT INTO pos_refunds (company_id, pos_order_id, shift_id, refunded_by, amount, reason)
+     VALUES ($1, $2, $3, $4, $5::NUMERIC(19,4), $6)
+     RETURNING id, company_id, pos_order_id, shift_id, refunded_by, amount::text AS amount, reason, status, created_at`,
+    [companyId, input.posOrderId, shiftId, actor.userId, formatDecimal4(amount4), input.reason?.trim() || null]
+  );
+  const row = ins.rows[0];
+
+  await tx.query(
+    `UPDATE pos_orders SET refunded_amount = refunded_amount + $3::NUMERIC(19,4) WHERE company_id = $1 AND id = $2`,
+    [companyId, input.posOrderId, formatDecimal4(amount4)]
+  );
+
+  if (po.journal_txn_id) {
+    await reverseJournalEntry(tx, companyId, actor, Number(po.journal_txn_id), {
+      reason: input.reason?.trim() || `Refund POS Order #${input.posOrderId}`,
+    });
+  }
+
+  return {
+    id: Number(row.id),
+    companyId: Number(row.company_id),
+    posOrderId: Number(row.pos_order_id),
+    shiftId: row.shift_id == null ? null : Number(row.shift_id),
+    refundedBy: Number(row.refunded_by),
+    amount: row.amount,
+    reason: row.reason,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+export async function listPosRefunds(
+  tx: Transaction,
+  companyId: number,
+  opts: { posOrderId?: number; shiftId?: number } = {}
+): Promise<PosRefundResult[]> {
+  const params: any[] = [companyId];
+  let where = 'WHERE company_id = $1';
+  if (opts.posOrderId) {
+    params.push(opts.posOrderId);
+    where += ` AND pos_order_id = $${params.length}`;
+  }
+  if (opts.shiftId) {
+    params.push(opts.shiftId);
+    where += ` AND shift_id = $${params.length}`;
+  }
+  const res = await tx.query<any>(
+    `SELECT id, company_id, pos_order_id, shift_id, refunded_by, amount::text AS amount, reason, status, created_at
+       FROM pos_refunds ${where} ORDER BY created_at DESC`,
+    params
+  );
+  return res.rows.map((r: any) => ({
+    id: Number(r.id),
+    companyId: Number(r.company_id),
+    posOrderId: Number(r.pos_order_id),
+    shiftId: r.shift_id == null ? null : Number(r.shift_id),
+    refundedBy: Number(r.refunded_by),
+    amount: r.amount,
+    reason: r.reason,
+    status: r.status,
+    createdAt: r.created_at,
+  }));
 }

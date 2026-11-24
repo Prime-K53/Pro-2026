@@ -31,9 +31,11 @@ import {
 } from '../services/smartOpsService.ts';
 import {
   checkoutPosOrder,
+  createPosRefund,
   getPosCatalogAndOrders,
   getPosShiftTransactions,
   getCurrentUserShift,
+  listPosRefunds,
   listPosShifts,
   listSuspendedSales,
   lookupBarcode,
@@ -895,7 +897,11 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
       const orderId = Number(req.params.id);
       if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ error: 'Invalid POS order id' });
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        suspendPosOrder(tx, req.auth!.companyId, toActor(req), { posOrderId: orderId, notes: req.body?.notes })
+        suspendPosOrder(tx, req.auth!.companyId, toActor(req), {
+          posOrderId: orderId,
+          notes: req.body?.notes,
+          suspendId: req.body?.suspendId ?? null,
+        })
       );
       return res.json(result);
     } catch (err) {
@@ -916,7 +922,7 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
     }
   });
 
-  // =========================================================================
+// =========================================================================
   // POS BARCODE
   // =========================================================================
   router.post('/pos/scan', requirePermission('pos:read'), async (req: Request, res: Response) => {
@@ -925,8 +931,49 @@ export function createSmartOpsRouter(db: ServerDatabase): Router {
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
         lookupBarcode(tx, req.auth!.companyId, barcode)
       );
-      if (!result.found) return res.status(404).json(result);
+      if (!result.found) {
+        return res.status(404).json(result);
+      }
       return res.json(result);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  // =========================================================================
+  // POS REFUNDS
+  // =========================================================================
+  router.get('/pos/refunds', requirePermission('pos:read'), async (req: Request, res: Response) => {
+    try {
+      const filters: { posOrderId?: number; shiftId?: number } = {};
+      if (req.query.posOrderId) filters.posOrderId = Number(req.query.posOrderId);
+      if (req.query.shiftId) filters.shiftId = Number(req.query.shiftId);
+      const refunds = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listPosRefunds(tx, req.auth!.companyId, filters)
+      );
+      return res.json({ refunds });
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/pos/orders/:id/refund', requirePermission('pos:write'), async (req: Request, res: Response) => {
+    try {
+      const orderId = Number(req.params.id);
+      if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ error: 'Invalid POS order id' });
+      const { amount, reason, shiftId } = req.body || {};
+      if (amount === undefined || amount === null || amount === '') {
+        return res.status(400).json({ error: 'amount is required' });
+      }
+      const refund = await db.withCompanyDb(req.auth!.companyId, tx =>
+        createPosRefund(tx, req.auth!.companyId, toActor(req), {
+          posOrderId: orderId,
+          amount,
+          reason: reason ?? null,
+          shiftId: shiftId ?? null,
+        })
+      );
+      return res.status(201).json({ refund });
     } catch (err) {
       return handleError(res, err);
     }
