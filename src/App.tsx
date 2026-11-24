@@ -39,6 +39,7 @@ import { FixedAssetsView } from './components/views/FixedAssetsView';
 import { InventoryOperationsView } from './components/views/InventoryOperationsView';
 import { ProductionScheduleView } from './components/views/ProductionScheduleView';
 import { TaxCodesView } from './components/views/TaxCodesView';
+import { QuotesView } from './components/views/QuotesView';
 import { canAccessView, VIEW_REQUIRED_PERMISSION } from './config/viewPermissions';
 
 // Route-level code splitting for the heaviest views. These are only needed when
@@ -225,6 +226,8 @@ const AppContent: React.FC = () => {
         return <DashboardView />;
       case 'invoices':
         return <InvoicesView />;
+      case 'quotes':
+        return <QuotesView />;
       case 'customers':
         return <CustomersView />;
       case 'bills':

@@ -14,6 +14,7 @@ export const VIEW_REQUIRED_PERMISSION: Record<string, string | null> = {
   documents: null,
   'quick-print': 'printing:read',
   invoices: 'invoices:read',
+  quotes: 'invoices:read',
   customers: 'customers:read',
   'smart-operations': 'smart_ops:read',
   bills: 'bills:read',

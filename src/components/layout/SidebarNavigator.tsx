@@ -153,6 +153,7 @@ export const SidebarNavigator: React.FC = () => {
           countTone: 'text-blue-600 dark:text-blue-400',
         },
         { id: 'customers', label: 'Customer Center', icon: Users },
+        { id: 'quotes', label: 'Quotes', icon: FileText },
         { id: 'smart-operations', label: 'Smart Operations', icon: Zap },
       ],
     },
