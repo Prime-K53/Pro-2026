@@ -1,19 +1,19 @@
 # Phase 3 — Security, RBAC & Multi-Company Isolation Test Execution Report
 
-- **Execution Timestamp (UTC):** 2026-11-24T15:06:56.804Z
+- **Execution Timestamp (UTC):** 2026-11-24T16:18:36.116Z
 - **Runtime Stack:** Express HTTP Server + PostgreSQL (PGlite WASM) RLS + Supabase JWKS
-- **Result Summary:** **6 / 6 tests passed** (2954 ms total)
+- **Result Summary:** **6 / 6 tests passed** (1891 ms total)
 
 ## Test Matrix Results
 
 | # | Suite | Test Case | Status | Duration | Verification Notes |
 |---|---|---|---|---|---|
-| 1 | 1. Authentication & Fail-Closed | Unauthenticated requests fail closed (401) on all protected endpoints | PASS | 223 ms | 12 protected endpoints rejected anon (401); live Supabase JWKS verified & forged JWT rejected |
-| 2 | 2. Cross-Company Isolation | Block cross-tenant reads, attachments IDOR, report leaks & parameter tampering | PASS | 678 ms | Attachment IDOR blocked (404), cross-company invoice ID blocked (404), query/header/body tampering rejected (403) & audited |
-| 3 | 3. Company Switching | Authorized switch changes RLS scope; unauthorized target company rejected (403) | PASS | 76 ms | Company B switch isolated inventory & financial view; unauthorized switch to Company C denied (403) |
-| 4 | 4. Five-Role RBAC & Redaction | Enforce server-side role permissions, Payroll block, and Estimate/HR field redaction | PASS | 699 ms | Verified Administrator, Bookkeeper, Accountant (#824 redacted), and ProductionManager server enforcement |
-| 5 | 5. Invitations, Read-Only & Revocation | Invite lifecycle, Read-Only mutation blocks, last-admin guard (409), instant revocation | PASS | 611 ms | One-time invite accepted & single-use enforced; Read-Only mutations blocked; last-admin guarded (409); revoked session failed immediately |
-| 6 | 6. Deactivation, Logout, Expiry & Password Reset | Account deactivation, logout, idle expiry & password reset invalidate existing sessions immediately | PASS | 667 ms | Logout replay blocked (401), password reset killed prior sessions (401), deactivation blocked active session, expired session rejected |
+| 1 | 1. Authentication & Fail-Closed | Unauthenticated requests fail closed (401) on all protected endpoints | PASS | 146 ms | 12 protected endpoints rejected anon (401); live Supabase JWKS verified & forged JWT rejected |
+| 2 | 2. Cross-Company Isolation | Block cross-tenant reads, attachments IDOR, report leaks & parameter tampering | PASS | 455 ms | Attachment IDOR blocked (404), cross-company invoice ID blocked (404), query/header/body tampering rejected (403) & audited |
+| 3 | 3. Company Switching | Authorized switch changes RLS scope; unauthorized target company rejected (403) | PASS | 45 ms | Company B switch isolated inventory & financial view; unauthorized switch to Company C denied (403) |
+| 4 | 4. Five-Role RBAC & Redaction | Enforce server-side role permissions, Payroll block, and Estimate/HR field redaction | PASS | 458 ms | Verified Administrator, Bookkeeper, Accountant (#824 redacted), and ProductionManager server enforcement |
+| 5 | 5. Invitations, Read-Only & Revocation | Invite lifecycle, Read-Only mutation blocks, last-admin guard (409), instant revocation | PASS | 366 ms | One-time invite accepted & single-use enforced; Read-Only mutations blocked; last-admin guarded (409); revoked session failed immediately |
+| 6 | 6. Deactivation, Logout, Expiry & Password Reset | Account deactivation, logout, idle expiry & password reset invalidate existing sessions immediately | PASS | 421 ms | Logout replay blocked (401), password reset killed prior sessions (401), deactivation blocked active session, expired session rejected |
 
 ## Verified Security Controls
 

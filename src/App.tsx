@@ -40,6 +40,7 @@ import { InventoryOperationsView } from './components/views/InventoryOperationsV
 import { ProductionScheduleView } from './components/views/ProductionScheduleView';
 import { TaxCodesView } from './components/views/TaxCodesView';
 import { QuotesView } from './components/views/QuotesView';
+import { ComplianceView } from './components/views/ComplianceView';
 import { canAccessView, VIEW_REQUIRED_PERMISSION } from './config/viewPermissions';
 
 // Route-level code splitting for the heaviest views. These are only needed when
@@ -258,6 +259,9 @@ const AppContent: React.FC = () => {
         return <TaxFormsView />;
       case 'tax-codes':
         return <TaxCodesView />;
+      case 'customer-statement':
+      case 'vendor-1099-summary':
+        return <ComplianceView />;
       case 'accounts':
         return <ChartOfAccountsView />;
       case 'reports':

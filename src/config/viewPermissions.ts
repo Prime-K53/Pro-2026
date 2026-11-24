@@ -33,6 +33,8 @@ export const VIEW_REQUIRED_PERMISSION: Record<string, string | null> = {
   'deduction-rules': 'payroll:read',
   'tax-forms': 'tax:read',
   'tax-codes': 'tax:read',
+  'customer-statement': 'invoices:read',
+  'vendor-1099-summary': 'tax:read',
   'consent-management': 'communications:read',
   'communications-inbox': 'communications:read',
   reports: 'reports:read',

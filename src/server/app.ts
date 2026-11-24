@@ -7,6 +7,7 @@ import { createCompanyRouter } from './routes/companyRoutes.ts';
 import { createUserRouter } from './routes/userRoutes.ts';
 import { createAccountingRouter } from './routes/accountingRoutes.ts';
 import { createFixedAssetRouter } from './routes/fixedAssetRoutes.ts';
+import { createComplianceRouter } from './routes/complianceRoutes.ts';
 import { createTaxRouter } from './routes/taxRoutes.ts';
 import { createQuoteRouter } from './routes/quoteRoutes.ts';
 import { createSalesRouter } from './routes/salesRoutes.ts';
@@ -121,6 +122,7 @@ export function createApiExpressApp(db: ServerDatabase): Express {
   app.use('/api', createAccountingRouter(db));
   app.use('/api', createFixedAssetRouter(db));
   app.use('/api', createTaxRouter(db));
+  app.use('/api', createComplianceRouter(db));
   app.use('/api', createQuoteRouter(db));
   app.use('/api', createSalesRouter(db));
   app.use('/api', createPurchasingRouter(db));
