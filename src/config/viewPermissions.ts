@@ -31,6 +31,7 @@ export const VIEW_REQUIRED_PERMISSION: Record<string, string | null> = {
   'salary-advances': 'payroll:read',
   'deduction-rules': 'payroll:read',
   'tax-forms': 'tax:read',
+  'tax-codes': 'tax:read',
   'consent-management': 'communications:read',
   'communications-inbox': 'communications:read',
   reports: 'reports:read',

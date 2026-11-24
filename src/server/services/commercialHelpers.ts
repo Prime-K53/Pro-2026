@@ -14,6 +14,7 @@ export interface ControlAccountMap {
   inventory1200: number;
   ap2000: number;
   salesTax2200: number;
+  useTax1300: number;
   revenue4000: number;
   fxGain4900: number;
   cogs5000: number;
@@ -115,6 +116,20 @@ export async function resolveCommercialContext(
     detailType: 'income',
     description: 'Primary operating sales revenue',
   });
+  // Use-tax clearing: holds use tax accrued on purchases until it is
+  // reclassified to inventory/expense (or remitted). Resolved by code only —
+  // never fall back to the sales-tax liability by type, or the entry would net.
+  const useTax1300 =
+    byCode.get('1300') ??
+    (
+      await createAccount(tx, companyId, actor, {
+        code: '1300',
+        name: 'Use Tax Clearing',
+        accountType: 'OtherCurrentAsset',
+        detailType: 'other_current_asset',
+        description: 'Use tax accrued on purchases, pending reclassification or remittance',
+      })
+    ).id;
   const fxGain4900 =
     byCode.get('4900') ??
     revenue4000;
@@ -155,6 +170,7 @@ export async function resolveCommercialContext(
     inventory1200,
     ap2000,
     salesTax2200,
+    useTax1300,
     revenue4000,
     fxGain4900,
     cogs5000,

@@ -1320,12 +1320,14 @@ export async function createBill(
     }
   }
   if (baseUseTax4 > 0n) {
-    const firstExpAcct = preparedLines[0].accountId;
+    // Accrue use tax to a dedicated clearing account (1300), not the arbitrary
+    // first expense line. The clearing balance is reclassified to inventory /
+    // expense (or remitted) rather than distorting a random expense account.
     jeLines.push({
-      accountId: firstExpAcct,
+      accountId: ctx.useTax1300,
       debit: formatDecimal4(baseUseTax4),
       credit: '0.0000',
-      description: `Use Tax Expense — Bill ${billNumber}`,
+      description: `Use Tax Clearing — Bill ${billNumber}`,
       partyType: 'vendor',
       partyId: vendorId,
     });

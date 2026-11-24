@@ -501,6 +501,10 @@ async function main() {
       assert.equal(pRes.status, 201);
       const periodId = pRes.json.period.id;
 
+      // This test exercises closing entries and period locks, not checklist
+      // governance; opt out of the (now default-enforced) period-close checklist.
+      await adminClient.request('PUT', '/api/periods/checklist-policy', { body: { enabled: false } });
+
       const overlapRes = await adminClient.request('POST', '/api/periods', {
         body: { periodName: 'Overlap', startDate: '2025-12-01', endDate: '2025-12-31' },
       });

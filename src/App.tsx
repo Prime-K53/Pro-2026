@@ -38,6 +38,7 @@ import { AccessControlView } from './components/views/AccessControlView';
 import { FixedAssetsView } from './components/views/FixedAssetsView';
 import { InventoryOperationsView } from './components/views/InventoryOperationsView';
 import { ProductionScheduleView } from './components/views/ProductionScheduleView';
+import { TaxCodesView } from './components/views/TaxCodesView';
 import { canAccessView, VIEW_REQUIRED_PERMISSION } from './config/viewPermissions';
 
 // Route-level code splitting for the heaviest views. These are only needed when
@@ -252,6 +253,8 @@ const AppContent: React.FC = () => {
         return <PayrollView />;
       case 'tax-forms':
         return <TaxFormsView />;
+      case 'tax-codes':
+        return <TaxCodesView />;
       case 'accounts':
         return <ChartOfAccountsView />;
       case 'reports':

@@ -387,7 +387,10 @@ async function isChecklistEnforced(tx: Transaction, companyId: number): Promise<
     `SELECT setting_value FROM company_settings WHERE company_id = $1 AND setting_key = $2 LIMIT 1`,
     [companyId, SETTING_KEY]
   );
-  return String(res.rows[0]?.setting_value || '').toLowerCase() === 'true';
+  // Enforcement is ON by default (safe governance default); a company may opt
+  // out by explicitly setting the flag to 'false'.
+  const value = String(res.rows[0]?.setting_value || '').toLowerCase();
+  return value !== 'false';
 }
 
 export async function enforcePeriodCloseChecklist(

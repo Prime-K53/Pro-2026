@@ -35,6 +35,7 @@ import {
   toMoneyNumber,
 } from '../lib/decimal.ts';
 import { recordReferralAttribution } from './referralAttributionService.ts';
+import { resolveTaxRatePct } from './taxService.ts';
 
 // ============================================================================
 // CUSTOMERS & RESELLER PERMITS & PAYMENT TERMS
@@ -778,6 +779,7 @@ export interface CreateInvoiceInput {
   isTaxExempt?: boolean;
   creditOverrideReason?: string | null;
   taxRate?: string | number | null;
+  taxCodeId?: number | null;
   depositToAccountId?: number | null;
   currencyCode?: string | null;
   exchangeRate?: string | number | null;
@@ -1229,7 +1231,11 @@ export async function createInvoiceOrSalesReceipt(
     requestedTaxExempt
   );
   const isTaxExempt = taxExemption.valid;
-  const taxRatePct6 = isTaxExempt ? 0n : parseDecimal6(input.taxRate ?? 0);
+  const taxRatePct6 = isTaxExempt
+    ? 0n
+    : parseDecimal6(
+        await resolveTaxRatePct(tx, companyId, input.taxCodeId, Number(input.taxRate ?? 0))
+      );
 
   let depositAccountId: number | null = null;
   let depositAccountType: string | null = null;
@@ -1349,12 +1355,12 @@ export async function createInvoiceOrSalesReceipt(
        company_id, invoice_number, customer_id, invoice_date, due_date, terms_label, po_number,
        status, is_sales_receipt, is_tax_exempt, subtotal, tax_rate, tax_amount, total, total_cost,
        amount_paid, balance_due, source_estimate_id, notes,
-       currency_code, exchange_rate, foreign_total, foreign_balance_due, deposit_to_account_id
+       currency_code, exchange_rate, foreign_total, foreign_balance_due, deposit_to_account_id, tax_code_id
      ) VALUES (
        $1, $2, $3, $4::DATE, $5::DATE, $6, $7,
        $8, $9, $10, $11::NUMERIC(19,4), $12::NUMERIC(9,6), $13::NUMERIC(19,4), $14::NUMERIC(19,4), 0.0000,
        $15::NUMERIC(19,4), $16::NUMERIC(19,4), $17, $18,
-       $19, $20::NUMERIC(19,6), $21::NUMERIC(19,4), $22::NUMERIC(19,4), $23
+       $19, $20::NUMERIC(19,6), $21::NUMERIC(19,4), $22::NUMERIC(19,4), $23, $24
      ) RETURNING id`,
     [
       companyId,
@@ -1380,6 +1386,7 @@ export async function createInvoiceOrSalesReceipt(
       formatDecimal4(foreignTotal4),
       formatDecimal4(foreignBalanceDue4),
       depositAccountId,
+      input.taxCodeId ? Number(input.taxCodeId) : null,
     ]
   );
   const invoiceId = Number(hdrIns.rows[0].id);

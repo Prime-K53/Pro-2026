@@ -3,10 +3,10 @@
 - **Batch Key:** `PHASE10-LIVE-01`
 - **Source System:** `SlowBooks-Pro-2026`
 - **Source SHA-256:** `1db06776658ee60d5a16c3e8e1c2b899951e974ea4da56948d150604ff974177`
-- **Source Backup Artifact:** `C:\Users\RHONAL~1\AppData\Local\Temp\pms-phase10-mig-GSKEb5\backups\source\source-slowbooks_PHASE10-LIVE-01.json` (SHA-256: `ace2b7bd968c75acdc7c5954eff7d218b3c9d43188ebbd250e5586a1b301bb32`)
-- **Target Pre-Migration Backup:** `C:\Users\RHONAL~1\AppData\Local\Temp\pms-phase10-mig-GSKEb5\backups\target\target-pms-pre-migration_PHASE10-LIVE-01.json` (SHA-256: `88bf84bf3e7354382deb01270373fdc5784f552fa7da381d98ea243574f71050`)
+- **Source Backup Artifact:** `C:\Users\RHONAL~1\AppData\Local\Temp\pms-phase10-mig-K4teXs\backups\source\source-slowbooks_PHASE10-LIVE-01.json` (SHA-256: `ace2b7bd968c75acdc7c5954eff7d218b3c9d43188ebbd250e5586a1b301bb32`)
+- **Target Pre-Migration Backup:** `C:\Users\RHONAL~1\AppData\Local\Temp\pms-phase10-mig-K4teXs\backups\target\target-pms-pre-migration_PHASE10-LIVE-01.json` (SHA-256: `c4b78fca289e2bfd2df1e33eafe43b77bc7c8ef0d7c433dcd774128f71820a54`)
 - **Cutover Approved:** **YES — SIGNED OFF**
-- **Signed Off By:** admin (2026-11-24 04:25:39.519+00)
+- **Signed Off By:** admin (2026-11-24 13:24:16.171+00)
 - **Sign-Off Statement:** Phase 10 SlowBooks-Pro-2026 financial & entity-count reconciliation signed off for cutover.
 
 ## Safety & Acceptance Gate Checklist
