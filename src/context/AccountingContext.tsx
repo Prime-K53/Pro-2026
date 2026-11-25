@@ -347,6 +347,8 @@ interface WorkspacePrefs {
   phone?: string;
   email?: string;
   website?: string;
+  address?: string;
+  cityStateZip?: string;
   defaultBankAccountId?: string;
 }
 
@@ -1347,6 +1349,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       phone: companyProfile.phone,
       email: companyProfile.email,
       website: companyProfile.website,
+      address: companyProfile.address,
+      cityStateZip: companyProfile.cityStateZip,
       defaultBankAccountId: companyProfile.defaultBankAccountId,
     };
     try {
@@ -1359,6 +1363,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     companyProfile.phone,
     companyProfile.email,
     companyProfile.website,
+    companyProfile.address,
+    companyProfile.cityStateZip,
     companyProfile.defaultBankAccountId,
   ]);
 

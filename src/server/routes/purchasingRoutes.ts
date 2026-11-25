@@ -8,10 +8,13 @@ import { consumeApprovalRequest, evaluateApprovalGate, sumLineAmounts4 } from '.
 import {
   addVendorOpeningBalance,
   applyVendorCreditToBill,
+  approveBillMatchOverride,
   createBill,
   createPurchaseOrder,
   createVendor,
   createVendorCredit,
+  evaluateThreeWayMatch,
+  executeBatchPaymentRun,
   generateSupplierStatement,
   getApAgingReport,
   getVendorApProfile,
@@ -25,6 +28,7 @@ import {
   receivePurchaseOrderToBill,
   recordBillPayment,
   sendSupplierStatement,
+  setBillPaymentHold,
   updateVendor,
   voidBill,
   voidBillPayment,
@@ -557,6 +561,54 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
     }
   });
 
+  router.post('/bills/:id/payment-hold', requirePermission('bills:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid bill id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        setBillPaymentHold(tx, req.auth!.companyId, toActor(req), {
+          billId: id,
+          hold: Boolean(req.body?.hold),
+          reason: req.body?.reason ?? null,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.post('/bills/:id/match/evaluate', requirePermission('bills:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid bill id' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        evaluateThreeWayMatch(tx, req.auth!.companyId, toActor(req), id, {
+          priceTolerance: req.body?.priceTolerance,
+          qtyTolerance: req.body?.qtyTolerance,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.post('/bills/:id/match/override', requirePermission('bills:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid bill id' });
+      const reason = String(req.body?.reason || '').trim();
+      if (!reason) return res.status(400).json({ error: 'reason is required' });
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        approveBillMatchOverride(tx, req.auth!.companyId, toActor(req), { billId: id, reason })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
   // Bill Payments
   router.get('/bill-payments', requirePermission('bills:read'), async (req: Request, res: Response) => {
     try {
@@ -565,6 +617,25 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
         listBillPayments(tx, req.auth!.companyId, vendorId)
       );
       return res.json({ companyId: req.auth!.companyId, billPayments });
+    } catch (err) {
+      return handlePurchasingError(res, err);
+    }
+  });
+
+  router.post('/bill-payments/batch-run', requirePermission('bills:write'), async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const idempotencyKey = (req.headers['idempotency-key'] as string | undefined) || body.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        executeBatchPaymentRun(tx, req.auth!.companyId, toActor(req), {
+          bankAccountId: Number(body.bankAccountId),
+          billIds: Array.isArray(body.billIds) ? body.billIds.map(Number) : [],
+          paymentDate: body.paymentDate,
+          memo: body.memo ?? null,
+          idempotencyKey,
+        })
+      );
+      return res.json(result);
     } catch (err) {
       return handlePurchasingError(res, err);
     }
@@ -612,7 +683,10 @@ export function createPurchasingRouter(db: ServerDatabase): Router {
         }
         return created;
       });
-      return res.status(result.idempotentReplay ? 200 : 201).json(result);
+      return res.status(result.idempotentReplay ? 200 : 201).json({
+        ...result,
+        payment: result.billPayment,
+      });
     } catch (err) {
       return handlePurchasingError(res, err);
     }

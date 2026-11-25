@@ -31,6 +31,7 @@ import {
   Zap,
   TrendingUp,
   Truck,
+  Calendar,
   Activity,
   Megaphone,
   X,
@@ -227,6 +228,7 @@ export const SidebarNavigator: React.FC = () => {
       groupTitle: 'Payroll & Compliance',
       items: [
         { id: 'payroll', label: 'Payroll Center', icon: BadgeDollarSign },
+        { id: 'leave-management', label: 'Leave & Absences', icon: Calendar },
         { id: 'salary-advances', label: 'Salary Advances', icon: BadgeDollarSign },
         { id: 'deduction-rules', label: 'Deduction Rules', icon: FileCheck2 },
         { id: 'tax-forms', label: 'Tax Forms (PAYE / P45)', icon: FileCheck2 },
@@ -244,6 +246,7 @@ export const SidebarNavigator: React.FC = () => {
         { id: 'sales-trends', label: 'Sales Trends', icon: TrendingUp },
         { id: 'kpi-scorecard', label: 'KPI Scorecard', icon: BarChart3 },
         { id: 'finance-controls', label: 'Finance Controls', icon: ClipboardCheck },
+        { id: 'delivery-notes', label: 'Delivery Notes (POD)', icon: Truck },
         { id: 'delivery-fleet', label: 'Delivery & Fleet', icon: Truck },
         { id: 'health', label: 'System Health', icon: Activity },
         { id: 'system-admin', label: 'System Administration', icon: Settings },

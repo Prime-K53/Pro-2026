@@ -71,6 +71,7 @@ const openDetail = (
 import { StockDamageModal } from '../inventory/StockDamageModal';
 import { StockTransferModal } from '../inventory/StockTransferModal';
 import { StockCountModal } from '../inventory/StockCountModal';
+import { TransferReceiveModal } from '../inventory/TransferReceiveModal';
 
 export const InventoryView: React.FC = () => {
   const {
@@ -103,6 +104,7 @@ export const InventoryView: React.FC = () => {
   const [transferItemId, setTransferItemId] = useState<string | number | null>(null);
   const [countOpen, setCountOpen] = useState(false);
   const [countItemId, setCountItemId] = useState<string | number | null>(null);
+  const [receiveTransferOpen, setReceiveTransferOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
@@ -145,6 +147,7 @@ export const InventoryView: React.FC = () => {
       );
 
     if (!matchesSearch) return false;
+    if (filterType === 'low_stock') return STOCKED_ITEM_TYPES.includes(item.type) && item.onHand <= item.reorderPoint;
     if (filterType !== 'all') return item.type === filterType;
     return true;
   });
@@ -377,6 +380,23 @@ export const InventoryView: React.FC = () => {
     }
     if (isStocked && canRecordDamage) {
       defs.push({ id: 'inv.record-damage', label: 'Record Damage / Write-Off', icon: <PackageMinus className="w-3.5 h-3.5 text-rose-600" />, group: 'process', groupLabel: 'Stock', requiredPermission: 'inventory:damage', execute: async () => setDamageItem(item) });
+      defs.push({
+        id: 'inv.scrap-writeoff',
+        label: 'Scrap Write-Off (Job/Reason)',
+        icon: <PackageMinus className="w-3.5 h-3.5 text-orange-600" />,
+        group: 'process',
+        groupLabel: 'Stock',
+        requiredPermission: 'inventory:damage',
+        execute: async () => {
+          const qty = window.prompt(`Scrap quantity for ${item.sku} (${item.name})`, '1');
+          if (qty === null) return;
+          const reason = window.prompt('Scrap reason / job reference (required)', 'Production spoilage');
+          if (reason === null) return;
+          if (!reason.trim()) throw new Error('Reason is required');
+          await commercialApi.recordScrapWriteOff(Number(item.id), { quantity: Number(qty), reason: reason.trim(), reasonCode: 'scrap', jobReference: reason.trim() });
+          triggerShortcutNotice(`Scrap write-off recorded for ${item.sku}`);
+        },
+      });
     }
     defs.push({ id: 'inv.view-ledger', label: 'View Stock Ledger', icon: <History className="w-3.5 h-3.5 text-slate-500" />, group: 'view', groupLabel: 'Detail', requiredPermission: 'inventory:read', execute: async () => openDetail(item.id, item.sku, item.name, 'ledger', setDetailItemId, setDetailItemLabel, setDetailTab) });
     defs.push({ id: 'inv.view-movements', label: 'View Movements', icon: <Boxes className="w-3.5 h-3.5 text-slate-500" />, group: 'view', groupLabel: 'Detail', requiredPermission: 'inventory:read', execute: async () => openDetail(item.id, item.sku, item.name, 'movements', setDetailItemId, setDetailItemLabel, setDetailTab) });
@@ -440,13 +460,24 @@ export const InventoryView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsNewItemOpen(true)}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Catalog Item</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {canTransferStock && (
+            <button
+              onClick={() => setReceiveTransferOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all"
+            >
+              <Truck className="w-4 h-4" />
+              <span>Receive Transfers</span>
+            </button>
+          )}
+          <button
+            onClick={() => setIsNewItemOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Catalog Item</span>
+          </button>
+        </div>
       </div>
 
       {/* KPI strip */}
@@ -502,7 +533,12 @@ export const InventoryView: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div
+          onClick={() => setFilterType(prev => prev === 'low_stock' ? 'all' : 'low_stock')}
+          className={`p-4 rounded-xl bg-white dark:bg-slate-900 border transition-all cursor-pointer flex items-center justify-between ${
+            filterType === 'low_stock' ? 'border-rose-500 ring-2 ring-rose-500/20 shadow-md' : 'border-slate-200 dark:border-slate-800 hover:border-rose-400'
+          }`}
+        >
           <div>
             <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
               Low Stock Warnings
@@ -511,7 +547,7 @@ export const InventoryView: React.FC = () => {
               {lowStockItems.length} SKUs
             </div>
             <div className="text-[11px] text-slate-500 mt-1 font-medium">
-              Below reorder threshold
+              Below reorder threshold · Click to filter
             </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
@@ -525,6 +561,7 @@ export const InventoryView: React.FC = () => {
         <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-medium">
           {[
             { id: 'all', label: `All (${inventoryItems.length})` },
+            { id: 'low_stock', label: `⚠️ Low Stock (${lowStockItems.length})` },
             { id: 'raw_material', label: `Raw Materials (${inventoryItems.filter(i => i.type === 'raw_material').length})` },
             { id: 'printed_product', label: `Printed Products (${inventoryItems.filter(i => i.type === 'printed_product').length})` },
             { id: 'stationery', label: `Stationary Items (${inventoryItems.filter(i => i.type === 'stationery').length})` },
@@ -1409,6 +1446,15 @@ export const InventoryView: React.FC = () => {
           triggerShortcutNotice(msg);
           setCountOpen(false);
           setCountItemId(null);
+        }}
+      />
+
+      <TransferReceiveModal
+        open={receiveTransferOpen}
+        onClose={() => setReceiveTransferOpen(false)}
+        onSuccess={msg => {
+          triggerShortcutNotice(msg);
+          setReceiveTransferOpen(false);
         }}
       />
     </div>

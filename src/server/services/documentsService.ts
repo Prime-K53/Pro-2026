@@ -1007,7 +1007,7 @@ export async function getDocumentPreviewPayload(
     if (pRes.rows.length === 0) throw new AccountingError(404, 'Payment receipt not found', 'NOT_FOUND');
     const p = pRes.rows[0];
     const allocRes = await tx.query<any>(
-      `SELECT pa.amount_applied::text, inv.invoice_number, inv.invoice_date::text
+      `SELECT pa.amount::text, inv.invoice_number, inv.invoice_date::text
          FROM payment_allocations pa
          JOIN invoices inv ON inv.company_id = pa.company_id AND inv.id = pa.invoice_id
         WHERE pa.company_id = $1 AND pa.payment_id = $2`,
@@ -1037,8 +1037,8 @@ export async function getDocumentPreviewPayload(
           ? allocRes.rows.map(a => ({
               description: `Payment applied to Invoice ${a.invoice_number} (dated ${a.invoice_date})`,
               quantity: 1,
-              rate: toMoneyNumber(parseDecimal4(a.amount_applied)),
-              amount: toMoneyNumber(parseDecimal4(a.amount_applied)),
+              rate: toMoneyNumber(parseDecimal4(a.amount)),
+              amount: toMoneyNumber(parseDecimal4(a.amount)),
             }))
           : [
               {

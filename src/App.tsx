@@ -26,6 +26,8 @@ import { HealthDashboard } from './components/admin/HealthDashboard';
 import { SubscriptionManager } from './components/admin/SubscriptionManager';
 import { VehicleManagement, DriverManagement } from './components/delivery/VehicleManagement';
 import { DeliveryScheduling } from './components/delivery/DeliveryScheduling';
+import { DeliveryNotesView } from './components/delivery/DeliveryNotesView';
+import { LeaveManagementView } from './components/payroll/LeaveManagementView';
 import { ConsentManagement } from './components/communications/ConsentManagement';
 import { InboxView } from './components/communications/InboxView';
 import { CustomerContactsTab } from './components/customers/CustomerContactsTab';
@@ -80,7 +82,7 @@ import { OcrReceiptModal } from './components/modals/OcrReceiptModal';
 import { PayBillsModal } from './components/modals/PayBillsModal';
 import { IifImportModal } from './components/modals/IifImportModal';
 import { CustomerStatementModal } from './components/modals/CustomerStatementModal';
-import { DocumentPreviewModal } from './components/modals/DocumentPreviewModal';
+import { PrimeDocumentPreviewModal } from './components/modals/PrimeDocumentPreviewModal';
 import { PosModal } from './components/modals/PosModal';
 
 class AppErrorBoundary extends React.Component<
@@ -288,6 +290,10 @@ const AppContent: React.FC = () => {
         return <HealthDashboard />;
       case 'system-admin':
         return <SubscriptionManager />;
+      case 'delivery-notes':
+        return <DeliveryNotesView />;
+      case 'leave-management':
+        return <LeaveManagementView />;
       case 'delivery-fleet':
         return (
           <div className="space-y-6 p-6">
@@ -400,7 +406,7 @@ const AppContent: React.FC = () => {
       <PayBillsModal />
       <IifImportModal />
       <CustomerStatementModal />
-      <DocumentPreviewModal />
+      <PrimeDocumentPreviewModal />
       <PosModal />
     </div>
   );

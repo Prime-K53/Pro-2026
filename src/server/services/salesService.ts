@@ -837,7 +837,8 @@ export async function consumeLineInventory(
     );
   }
 
-  let unitCost6 = line.explicitUnitCost6 > 0n ? line.explicitUnitCost6 : parseDecimal6(item.unit_cost);
+  const avgCost6 = parseDecimal6(item.avg_cost || '0');
+  let unitCost6 = line.explicitUnitCost6 > 0n ? line.explicitUnitCost6 : (avgCost6 > 0n ? avgCost6 : parseDecimal6(item.unit_cost));
   let inventoryCredit4 = 0n;
 
   if (item.item_type === 'stationery') {
@@ -1048,6 +1049,10 @@ export async function listInvoices(
             i.currency_code, i.exchange_rate::text, i.foreign_total::text, i.foreign_balance_due::text,
             i.subtotal::text, i.tax_rate::text, i.tax_amount::text, i.total::text,
             i.total_cost::text, i.gross_profit::text, i.amount_paid::text, i.balance_due::text,
+            COALESCE(i.deposit_applied_amount, 0)::text AS deposit_applied_amount,
+            COALESCE(i.write_off_amount, 0)::text AS write_off_amount,
+            i.write_off_reason, i.write_off_journal_id,
+            i.disputed_at::text AS disputed_at, i.dispute_reason,
             i.journal_txn_id, i.deposit_to_account_id, i.source_estimate_id, i.notes,
             i.created_at::text
        FROM invoices i
@@ -1122,9 +1127,17 @@ export async function listInvoices(
     totalCostNum: toMoneyNumber(parseDecimal4(r.total_cost)),
     gross_profit: r.gross_profit,
     grossProfitNum: toMoneyNumber(parseDecimal4(r.gross_profit)),
+    amountPaid: toMoneyNumber(parseDecimal4(r.amount_paid)),
     amountPaidNum: toMoneyNumber(parseDecimal4(r.amount_paid)),
     balance_due: r.balance_due,
+    balanceDue: toMoneyNumber(parseDecimal4(r.balance_due)),
     balanceDueNum: toMoneyNumber(parseDecimal4(r.balance_due)),
+    depositAppliedAmount: toMoneyNumber(parseDecimal4(r.deposit_applied_amount)),
+    writeOffAmount: toMoneyNumber(parseDecimal4(r.write_off_amount)),
+    writeOffReason: r.write_off_reason || null,
+    writeOffJournalId: r.write_off_journal_id !== null ? Number(r.write_off_journal_id) : null,
+    disputedAt: r.disputed_at || null,
+    disputeReason: r.dispute_reason || null,
     journalTxnId: r.journal_txn_id !== null ? Number(r.journal_txn_id) : null,
     depositToAccountId: r.deposit_to_account_id !== null ? Number(r.deposit_to_account_id) : null,
     sourceEstimateId: r.source_estimate_id !== null ? Number(r.source_estimate_id) : null,
@@ -1638,6 +1651,15 @@ export async function voidInvoice(
       409,
       `Cannot void invoice ${inv.invoice_number} with applied payments or credits. Void the payment first.`,
       'HAS_APPLIED_PAYMENTS'
+    );
+  }
+
+  // F2 fix: Block voiding of legacy/unlinked invoices whose GL entry is missing
+  if (inv.status !== 'draft' && !inv.journal_txn_id) {
+    throw new AccountingError(
+      409,
+      `Invoice ${inv.invoice_number} has no linked journal entry (journal_txn_id is NULL); record an offsetting credit memo instead of voiding.`,
+      'MISSING_JOURNAL_TXN'
     );
   }
 
@@ -2805,7 +2827,8 @@ export async function voidCreditMemo(
     reversalJournalId = rev.reversal.id;
   }
 
-  await tx.query(`UPDATE credit_memos SET status = 'voided' WHERE company_id = $1 AND id = $2`, [
+  // F3 fix: zero remaining_credit so voided credit memos cannot be re-applied or skew customer balance.
+  await tx.query(`UPDATE credit_memos SET status = 'voided', remaining_credit = 0 WHERE company_id = $1 AND id = $2`, [
     companyId,
     creditMemoId,
   ]);
@@ -4027,4 +4050,391 @@ export async function dispatchInvoiceReminder(
     balanceDue: toMoneyNumber(parseDecimal4(inv.balance_due)),
     status: 'sent',
   };
+}
+
+
+// ─── Pro-ERP AR Action Menu Services: Deposits, Write-offs, Disputes ───────
+
+export async function applyDepositToInvoice(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { invoiceId: number; amount: string | number; sourceType?: 'prepayment' | 'wallet' | 'deposit'; idempotencyKey?: string | null }
+): Promise<{ invoiceId: number; allocatedAmount: string; remainingBalance: string; status: string; journalTxnId: number; idempotentReplay?: boolean }> {
+  const route = 'invoice_apply_deposit';
+  const idemPayload = {
+    invoiceId: Number(input.invoiceId),
+    amount: formatDecimal4(parseDecimal4(String(input.amount ?? 0))),
+    sourceType: input.sourceType || 'deposit',
+  };
+  const idem = await checkRouteIdempotency<any>(tx, companyId, route, input.idempotencyKey, idemPayload);
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+  const invRes = await tx.query<{
+    id: number;
+    customer_id: number;
+    invoice_number: string;
+    balance_due: string;
+    amount_paid: string;
+    deposit_applied_amount: string;
+    status: string;
+  }>(
+    `SELECT id, customer_id, invoice_number, balance_due::text, amount_paid::text,
+            COALESCE(deposit_applied_amount, 0)::text AS deposit_applied_amount, status
+       FROM invoices
+      WHERE company_id = $1 AND id = $2
+      FOR UPDATE`,
+    [companyId, input.invoiceId]
+  );
+  if (!invRes.rows.length) {
+    throw new AccountingError(404, `Invoice ${input.invoiceId} not found`, 'INVOICE_NOT_FOUND');
+  }
+  const inv = invRes.rows[0];
+  if (['draft', 'voided', 'paid'].includes(inv.status)) {
+    throw new AccountingError(422, `Cannot apply deposit to ${inv.status} invoice`, 'INVALID_INVOICE_STATUS');
+  }
+
+  const allocAmount4 = parseDecimal4(String(input.amount));
+  if (allocAmount4 <= 0n) {
+    throw new AccountingError(400, 'Deposit allocation amount must be greater than zero', 'INVALID_AMOUNT');
+  }
+  const currentBalance4 = parseDecimal4(inv.balance_due);
+  if (allocAmount4 > currentBalance4) {
+    throw new AccountingError(400, `Allocation amount (${formatDecimal4(allocAmount4)}) exceeds balance due (${formatDecimal4(currentBalance4)})`, 'ALLOCATION_EXCEEDS_BALANCE');
+  }
+
+  const ctx = await resolveCommercialContext(tx, companyId, actor);
+
+  const depAcctRes = await tx.query<{ id: number }>(
+    `SELECT id
+       FROM accounts
+      WHERE company_id = $1
+        AND is_active = TRUE
+        AND account_type IN ('OtherCurrentLiability', 'CurrentLiability')
+        AND (
+          code IN ('2300', '2050')
+          OR LOWER(COALESCE(name, '')) LIKE '%unearned%'
+          OR LOWER(COALESCE(name, '')) LIKE '%customer deposit%'
+          OR LOWER(COALESCE(name, '')) LIKE '%prepayment%'
+          OR LOWER(COALESCE(name, '')) LIKE '%retainer%'
+        )
+      ORDER BY CASE WHEN code = '2300' THEN 0 WHEN code = '2050' THEN 1 ELSE 2 END, code ASC
+      LIMIT 1`,
+    [companyId]
+  );
+  const depositAccountId = depAcctRes.rows[0]?.id;
+  if (!depositAccountId) {
+    throw new AccountingError(
+      400,
+      'No customer deposit/unearned revenue liability account found (expected 2300/2050 or named unearned/deposit/prepayment account)',
+      'MISSING_DEPOSIT_LIABILITY_ACCOUNT'
+    );
+  }
+
+  const today = todayIsoDate();
+  const journal = await postJournalEntry(tx, companyId, actor, {
+    txnDate: today,
+    description: `Customer Deposit Applied to Invoice #${inv.invoice_number}`,
+    reference: inv.invoice_number,
+    sourceType: 'payment',
+    sourceId: inv.id,
+    idempotencyKey: input.idempotencyKey ? `${String(input.idempotencyKey).trim().slice(0, 100)}:je` : undefined,
+    lines: [
+      {
+        accountId: depositAccountId,
+        debit: formatDecimal4(allocAmount4),
+        credit: '0.0000',
+        description: `Deposit applied to #${inv.invoice_number}`,
+        partyType: 'customer',
+        partyId: inv.customer_id,
+      },
+      {
+        accountId: ctx.ar1100,
+        debit: '0.0000',
+        credit: formatDecimal4(allocAmount4),
+        description: `AR offset from deposit #${inv.invoice_number}`,
+        partyType: 'customer',
+        partyId: inv.customer_id,
+      },
+    ],
+  });
+
+  const newBalance4 = currentBalance4 - allocAmount4;
+  const newAmountPaid4 = parseDecimal4(inv.amount_paid) + allocAmount4;
+  const newDepositApplied4 = parseDecimal4(inv.deposit_applied_amount) + allocAmount4;
+  const newStatus = newBalance4 === 0n ? 'paid' : 'partial';
+
+  await tx.query(
+    `UPDATE invoices
+        SET balance_due = $3::NUMERIC(19,4),
+            amount_paid = $4::NUMERIC(19,4),
+            deposit_applied_amount = $5::NUMERIC(19,4),
+            status = $6
+      WHERE company_id = $1 AND id = $2`,
+    [
+      companyId,
+      inv.id,
+      formatDecimal4(newBalance4),
+      formatDecimal4(newAmountPaid4),
+      formatDecimal4(newDepositApplied4),
+      newStatus,
+    ]
+  );
+
+  await tx.query(
+    `INSERT INTO customer_deposit_allocations (company_id, customer_id, invoice_id, amount, source_type)
+     VALUES ($1, $2, $3, $4::NUMERIC(19,4), $5)`,
+    [companyId, inv.customer_id, inv.id, formatDecimal4(allocAmount4), input.sourceType || 'deposit']
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'INVOICE_DEPOSIT_APPLIED',
+    tableName: 'invoices',
+    recordId: inv.id,
+    newValues: { invoiceNumber: inv.invoice_number, allocatedAmount: formatDecimal4(allocAmount4), newBalance: formatDecimal4(newBalance4) },
+  });
+
+  const result = {
+    invoiceId: inv.id,
+    allocatedAmount: formatDecimal4(allocAmount4),
+    remainingBalance: formatDecimal4(newBalance4),
+    status: newStatus,
+    journalTxnId: journal.transaction.id,
+  };
+  await saveRouteIdempotency(tx, companyId, route, input.idempotencyKey, idem.payloadHash, 200, result, actor.userId);
+  return result;
+}
+
+export async function writeOffInvoiceBalance(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { invoiceId: number; amount: string | number; reason: string; expenseAccountId?: number; idempotencyKey?: string | null }
+): Promise<{ invoiceId: number; writtenOffAmount: string; remainingBalance: string; status: string; journalTxnId: number; idempotentReplay?: boolean }> {
+  const route = 'invoice_write_off';
+  const idemPayload = {
+    invoiceId: Number(input.invoiceId),
+    amount: formatDecimal4(parseDecimal4(String(input.amount ?? 0))),
+    reason: String(input.reason || '').trim(),
+    expenseAccountId: input.expenseAccountId ? Number(input.expenseAccountId) : null,
+  };
+  const idem = await checkRouteIdempotency<any>(tx, companyId, route, input.idempotencyKey, idemPayload);
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+  const invRes = await tx.query<{
+    id: number;
+    customer_id: number;
+    invoice_number: string;
+    balance_due: string;
+    amount_paid: string;
+    write_off_amount: string;
+    status: string;
+  }>(
+    `SELECT id, customer_id, invoice_number, balance_due::text,
+            amount_paid::text,
+            COALESCE(write_off_amount, 0)::text AS write_off_amount, status
+       FROM invoices
+      WHERE company_id = $1 AND id = $2
+      FOR UPDATE`,
+    [companyId, input.invoiceId]
+  );
+  if (!invRes.rows.length) {
+    throw new AccountingError(404, `Invoice ${input.invoiceId} not found`, 'INVOICE_NOT_FOUND');
+  }
+  const inv = invRes.rows[0];
+  if (['draft', 'voided', 'paid'].includes(inv.status)) {
+    throw new AccountingError(422, `Cannot write off balance on ${inv.status} invoice`, 'INVALID_INVOICE_STATUS');
+  }
+  if (!hasPermission(actor.role, 'invoices:writeoff')) {
+    throw new AccountingError(403, 'You do not have permission to write off invoice balances', 'FORBIDDEN');
+  }
+
+  const writeOff4 = parseDecimal4(String(input.amount));
+  if (writeOff4 <= 0n) {
+    throw new AccountingError(400, 'Write-off amount must be greater than zero', 'INVALID_AMOUNT');
+  }
+  const currentBalance4 = parseDecimal4(inv.balance_due);
+  if (writeOff4 > currentBalance4) {
+    throw new AccountingError(400, `Write-off amount (${formatDecimal4(writeOff4)}) exceeds balance due (${formatDecimal4(currentBalance4)})`, 'WRITE_OFF_EXCEEDS_BALANCE');
+  }
+
+  const ctx = await resolveCommercialContext(tx, companyId, actor);
+
+  let expAccountId = input.expenseAccountId ? Number(input.expenseAccountId) : null;
+  if (expAccountId) {
+    const expCheck = await tx.query<{ id: number }>(
+      `SELECT id
+         FROM accounts
+        WHERE company_id = $1 AND id = $2 AND is_active = TRUE
+          AND account_type IN ('Expense', 'OtherExpense', 'CostOfGoodsSold')
+        LIMIT 1`,
+      [companyId, expAccountId]
+    );
+    if (expCheck.rows.length === 0) {
+      throw new AccountingError(400, 'expenseAccountId must be an active expense account', 'INVALID_EXPENSE_ACCOUNT');
+    }
+  } else {
+    const expRes = await tx.query<{ id: number }>(
+      `SELECT id
+         FROM accounts
+        WHERE company_id = $1 AND is_active = TRUE
+          AND account_type IN ('Expense', 'OtherExpense', 'CostOfGoodsSold')
+          AND (code = '6320' OR LOWER(COALESCE(name, '')) LIKE '%bad debt%')
+        ORDER BY CASE WHEN code = '6320' THEN 0 ELSE 1 END, code ASC
+        LIMIT 1`,
+      [companyId]
+    );
+    expAccountId = expRes.rows[0]?.id ?? null;
+  }
+  if (!expAccountId) {
+    throw new AccountingError(
+      400,
+      'No bad debt expense account found (expected code 6320 or name containing "bad debt"). Provide expenseAccountId.',
+      'MISSING_EXPENSE_ACCOUNT'
+    );
+  }
+
+  const today = todayIsoDate();
+  const journal = await postJournalEntry(tx, companyId, actor, {
+    txnDate: today,
+    description: `Bad Debt / Balance Write-off: Invoice #${inv.invoice_number} (${input.reason})`,
+    reference: inv.invoice_number,
+    sourceType: 'manual',
+    sourceId: inv.id,
+    idempotencyKey: input.idempotencyKey ? `${String(input.idempotencyKey).trim().slice(0, 100)}:je` : undefined,
+    lines: [
+      {
+        accountId: expAccountId,
+        debit: formatDecimal4(writeOff4),
+        credit: '0.0000',
+        description: `Write-off expense #${inv.invoice_number} - ${input.reason}`,
+      },
+      {
+        accountId: ctx.ar1100,
+        debit: '0.0000',
+        credit: formatDecimal4(writeOff4),
+        description: `AR relief #${inv.invoice_number}`,
+        partyType: 'customer',
+        partyId: inv.customer_id,
+      },
+    ],
+  });
+
+  const newBalance4 = currentBalance4 - writeOff4;
+  const newWriteOff4 = parseDecimal4(inv.write_off_amount) + writeOff4;
+  const newStatus = newBalance4 === 0n ? 'paid' : 'partial';
+
+  await tx.query(
+    `UPDATE invoices
+        SET balance_due = $3::NUMERIC(19,4),
+            write_off_amount = $4::NUMERIC(19,4),
+            write_off_reason = $5,
+            write_off_journal_id = $6,
+            status = $7
+      WHERE company_id = $1 AND id = $2`,
+    [
+      companyId,
+      inv.id,
+      formatDecimal4(newBalance4),
+      formatDecimal4(newWriteOff4),
+      input.reason,
+      journal.transaction.id,
+      newStatus,
+    ]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'INVOICE_BALANCE_WRITTEN_OFF',
+    tableName: 'invoices',
+    recordId: inv.id,
+    newValues: { invoiceNumber: inv.invoice_number, writtenOffAmount: formatDecimal4(writeOff4), reason: input.reason },
+  });
+
+  const result = {
+    invoiceId: inv.id,
+    writtenOffAmount: formatDecimal4(writeOff4),
+    remainingBalance: formatDecimal4(newBalance4),
+    status: newStatus,
+    journalTxnId: journal.transaction.id,
+  };
+  await saveRouteIdempotency(tx, companyId, route, input.idempotencyKey, idem.payloadHash, 200, result, actor.userId);
+  return result;
+}
+
+export async function toggleInvoiceDispute(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  invoiceId: number,
+  disputeReason?: string,
+  options: { desiredDisputed?: boolean; idempotencyKey?: string | null } = {}
+): Promise<{ invoiceId: number; isDisputed: boolean; disputedAt: string | null; disputeReason: string | null; idempotentReplay?: boolean }> {
+  const route = 'invoice_toggle_dispute';
+  const idemPayload = {
+    invoiceId: Number(invoiceId),
+    disputeReason: disputeReason ? String(disputeReason).trim() : null,
+    desiredDisputed: typeof options.desiredDisputed === 'boolean' ? options.desiredDisputed : null,
+  };
+  const idem = await checkRouteIdempotency<any>(tx, companyId, route, options.idempotencyKey, idemPayload);
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+  const invRes = await tx.query<{ id: number; invoice_number: string; disputed_at: string | null; dispute_reason: string | null }>(
+    `SELECT id, invoice_number, disputed_at, dispute_reason FROM invoices WHERE company_id = $1 AND id = $2`,
+    [companyId, invoiceId]
+  );
+  if (!invRes.rows.length) {
+    throw new AccountingError(404, `Invoice ${invoiceId} not found`, 'INVOICE_NOT_FOUND');
+  }
+  const inv = invRes.rows[0];
+  const isCurrentlyDisputed = Boolean(inv.disputed_at);
+  const targetDisputed = typeof options.desiredDisputed === 'boolean' ? options.desiredDisputed : !isCurrentlyDisputed;
+
+  if (targetDisputed === isCurrentlyDisputed) {
+    const result = {
+      invoiceId,
+      isDisputed: isCurrentlyDisputed,
+      disputedAt: inv.disputed_at,
+      disputeReason: inv.dispute_reason,
+    };
+    await saveRouteIdempotency(tx, companyId, route, options.idempotencyKey, idem.payloadHash, 200, result, actor.userId);
+    return result;
+  }
+
+  let newDisputedAt: string | null = null;
+  let newDisputeReason: string | null = null;
+
+  if (targetDisputed) {
+    newDisputedAt = new Date().toISOString();
+    newDisputeReason = disputeReason || 'Under customer query/dispute';
+  }
+
+  await tx.query(
+    `UPDATE invoices
+        SET disputed_at = $3,
+            dispute_reason = $4
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, invoiceId, newDisputedAt, newDisputeReason]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: targetDisputed ? 'INVOICE_DISPUTE_PLACED' : 'INVOICE_DISPUTE_RELEASED',
+    tableName: 'invoices',
+    recordId: invoiceId,
+    newValues: { invoiceNumber: inv.invoice_number, isDisputed: targetDisputed, disputeReason: newDisputeReason },
+  });
+
+  const result = {
+    invoiceId,
+    isDisputed: targetDisputed,
+    disputedAt: newDisputedAt,
+    disputeReason: newDisputeReason,
+  };
+  await saveRouteIdempotency(tx, companyId, route, options.idempotencyKey, idem.payloadHash, 200, result, actor.userId);
+  return result;
 }

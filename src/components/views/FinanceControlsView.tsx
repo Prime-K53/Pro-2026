@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
+  FileText,
   Gauge,
   Pause,
   Pencil,
@@ -25,8 +26,9 @@ import {
   ReportSchedule,
   financeControlsApi,
 } from '../../services/financeControlsApi';
+import { commercialApi } from '../../services/commercialApi';
 
-type TabKey = 'approvals' | 'periods' | 'reports' | 'schedules' | 'alerts';
+type TabKey = 'approvals' | 'periods' | 'reports' | 'schedules' | 'alerts' | 'expenses' | 'accountingControls';
 
 const TABS: Array<{ key: TabKey; label: string; icon: React.ElementType }> = [
   { key: 'approvals', label: 'Approvals', icon: ShieldCheck },
@@ -34,6 +36,8 @@ const TABS: Array<{ key: TabKey; label: string; icon: React.ElementType }> = [
   { key: 'reports', label: 'Operational Reports', icon: Gauge },
   { key: 'schedules', label: 'Scheduled Reports', icon: CalendarClock },
   { key: 'alerts', label: 'Alerts', icon: Bell },
+  { key: 'expenses', label: 'Expense Claims', icon: FileText },
+  { key: 'accountingControls', label: 'Accounting Controls', icon: ShieldCheck },
 ];
 
 const REPORT_OPTIONS = [
@@ -109,6 +113,8 @@ export const FinanceControlsView: React.FC = () => {
 
   const [alerts, setAlerts] = useState<DashboardAlerts | null>(null);
   const [loading, setLoading] = useState(false);
+  const [expenseClaims, setExpenseClaims] = useState<any[]>([]);
+  const [controlEvents, setControlEvents] = useState<any[]>([]);
 
   const run = useCallback(async (fn: () => Promise<void>) => {
     setLoading(true);
@@ -157,6 +163,18 @@ export const FinanceControlsView: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'alerts') {
       void run(async () => setAlerts(await financeControlsApi.dashboardAlerts()));
+    }
+  }, [activeTab, run]);
+
+  useEffect(() => {
+    if (activeTab === 'expenses') {
+      void run(async () => setExpenseClaims(await commercialApi.listExpenseClaims()));
+    }
+  }, [activeTab, run]);
+
+  useEffect(() => {
+    if (activeTab === 'accountingControls') {
+      void run(async () => setControlEvents(await commercialApi.listAccountingControlEvents(100)));
     }
   }, [activeTab, run]);
 
@@ -709,6 +727,61 @@ export const FinanceControlsView: React.FC = () => {
     </div>
   );
 
+  const renderExpenses = () => (
+    <div className={panelClass()}>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Expense Claims</h3>
+        <button className="btn-secondary px-2 py-1 text-[11px]" onClick={() => void run(async () => setExpenseClaims(await commercialApi.listExpenseClaims()))}><RefreshCw size={12} className="inline mr-1" />Refresh</button>
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-slate-500"><th className="py-1">Claim</th><th>Claimant</th><th>Status</th><th className="text-right">Amount</th><th className="text-right">Actions</th></tr></thead>
+          <tbody>
+            {expenseClaims.length === 0 ? <tr><td colSpan={5} className="py-4 text-center text-slate-400">No expense claims.</td></tr> : expenseClaims.map((c: any) => (
+              <tr key={c.id} className="border-t border-slate-100 dark:border-slate-800">
+                <td className="py-1 font-medium">{c.claim_number || c.id}</td>
+                <td>{c.claimant_name || c.claimantName || '-'}</td>
+                <td><StatusBadge status={c.status || 'draft'} /></td>
+                <td className="text-right font-mono">{c.total_amount ?? c.totalAmount ?? '-'}</td>
+                <td className="text-right space-x-1">
+                  {c.status === 'draft' && <button className="text-[11px] text-brand underline" onClick={() => void run(async () => { await commercialApi.submitExpenseClaim(Number(c.id)); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim submitted'); })}>Submit</button>}
+                  {c.status === 'submitted' && <button className="text-[11px] text-emerald-600 underline" onClick={() => void run(async () => { await commercialApi.approveExpenseClaim(Number(c.id)); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim approved'); })}>Approve</button>}
+                  {c.status === 'submitted' && <button className="text-[11px] text-rose-600 underline" onClick={() => void run(async () => { const reason = window.prompt('Rejection reason') || 'Rejected'; await commercialApi.rejectExpenseClaim(Number(c.id), reason); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim rejected'); })}>Reject</button>}
+                  {c.status === 'approved' && <button className="text-[11px] text-brand underline" onClick={() => void run(async () => { const bank = window.prompt('Bank account ID for reimbursement'); if (!bank) return; await commercialApi.reimburseExpenseClaim(Number(c.id), { bankAccountId: Number(bank) }); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim reimbursed'); })}>Reimburse</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderAccountingControls = () => (
+    <div className={panelClass()}>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Accounting Control Events</h3>
+        <button className="btn-secondary px-2 py-1 text-[11px]" onClick={() => void run(async () => setControlEvents(await commercialApi.listAccountingControlEvents(100)))}><RefreshCw size={12} className="inline mr-1" />Refresh</button>
+      </div>
+      <div className="overflow-auto max-h-[420px]">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-slate-500"><th className="py-1">Time</th><th>Type</th><th>Entity</th><th>Actor</th><th>Note</th></tr></thead>
+          <tbody>
+            {controlEvents.length === 0 ? <tr><td colSpan={5} className="py-4 text-center text-slate-400">No control events.</td></tr> : controlEvents.map((e: any) => (
+              <tr key={e.id} className="border-t border-slate-100 dark:border-slate-800">
+                <td className="py-1 font-mono text-[11px]">{String(e.created_at || e.createdAt || '').slice(0, 19).replace('T', ' ')}</td>
+                <td>{e.event_type || e.eventType}</td>
+                <td>{e.entity_type || e.entityType} #{e.entity_id || e.entityId || '-'}</td>
+                <td>{e.actor_username || e.actorUsername || '-'}</td>
+                <td className="text-slate-500">{e.note || e.reason || '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   const renderAlerts = () => (
     <div className="space-y-3">
       {!alerts && <p className="text-xs text-slate-500">Loading alerts…</p>}
@@ -796,6 +869,8 @@ export const FinanceControlsView: React.FC = () => {
       {activeTab === 'reports' && renderReports()}
       {activeTab === 'schedules' && renderSchedules()}
       {activeTab === 'alerts' && renderAlerts()}
+      {activeTab === 'expenses' && renderExpenses()}
+      {activeTab === 'accountingControls' && renderAccountingControls()}
   {editingSchedule && (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">

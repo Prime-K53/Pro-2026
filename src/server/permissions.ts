@@ -49,6 +49,7 @@ export type Permission =
   | 'reports:view_reconciliation'
   | 'invoices:read'
   | 'invoices:write'
+  | 'invoices:writeoff'
   | 'estimates:read'
   | 'estimates:read_costs'
   | 'estimates:write'
@@ -132,7 +133,22 @@ export type Permission =
   | 'admin:write'
   | 'communications:read'
   | 'communications:write'
-  | 'documents:qr:manage';
+  | 'documents:qr:manage'
+  | 'expenses:read'
+  | 'expenses:write'
+  | 'expenses:reimburse'
+  | 'production:ops:read'
+  | 'production:ops:write'
+  | 'banking:rules:read'
+  | 'banking:rules:manage'
+  | 'tax:controls:read'
+  | 'tax:controls:write'
+  | 'reports:controls:read'
+  | 'reports:controls:write'
+  | 'documents:control:read'
+  | 'documents:control:write'
+  | 'accounting:controls:read'
+  | 'accounting:controls:write';
 
 export interface RoleDefinition {
   role: CompanyRole;
@@ -180,6 +196,7 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'reports:view_reconciliation',
       'invoices:read',
       'invoices:write',
+      'invoices:writeoff',
       'estimates:read',
       'estimates:read_costs',
       'estimates:write',
@@ -263,6 +280,21 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'communications:read',
       'communications:write',
       'documents:qr:manage',
+      'expenses:read',
+      'expenses:write',
+      'expenses:reimburse',
+      'production:ops:read',
+      'production:ops:write',
+      'banking:rules:read',
+      'banking:rules:manage',
+      'tax:controls:read',
+      'tax:controls:write',
+      'reports:controls:read',
+      'reports:controls:write',
+      'documents:control:read',
+      'documents:control:write',
+      'accounting:controls:read',
+      'accounting:controls:write',
     ],
   },
   Bookkeeper: {
@@ -331,6 +363,10 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'communications:read',
       'communications:write',
       'delivery:read',
+      'expenses:read',
+      'expenses:write',
+      'banking:rules:read',
+      'banking:rules:manage',
     ],
   },
   Accountant: {
@@ -362,6 +398,7 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'fx:revalue',
       'reports:view_reconciliation',
       'invoices:read',
+      'invoices:writeoff',
       'estimates:read', // Redacted: unit_cost, total_cost, estimated_profit omitted
       'vendors:read',
       'bills:read',
@@ -399,6 +436,17 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'referral:review_disputes',
       'referral:view_reports',
       'bi:read',
+      'expenses:read',
+      'expenses:reimburse',
+      'banking:rules:read',
+      'tax:controls:read',
+      'tax:controls:write',
+      'reports:controls:read',
+      'reports:controls:write',
+      'documents:control:read',
+      'documents:control:write',
+      'accounting:controls:read',
+      'accounting:controls:write',
     ],
   },
   ProductionManager: {
@@ -448,6 +496,13 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'delivery:write',
       'bi:read',
       'communications:read',
+      'expenses:read',
+      'production:ops:read',
+      'banking:rules:read',
+      'tax:controls:read',
+      'reports:controls:read',
+      'documents:control:read',
+      'accounting:controls:read',
     ],
   },
   'Read-Only': {
@@ -479,6 +534,13 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'referral:read',
       'bi:read',
       'delivery:read',
+      'expenses:read',
+      'production:ops:read',
+      'banking:rules:read',
+      'tax:controls:read',
+      'reports:controls:read',
+      'documents:control:read',
+      'accounting:controls:read',
     ],
   },
 };

@@ -978,6 +978,8 @@ export async function listBills(tx: Transaction, companyId: number, vendorId?: n
             b.total::text, b.amount_paid::text, b.balance_due::text,
             b.purchase_order_id, b.currency_code, b.exchange_rate::text,
             b.foreign_total::text, b.foreign_balance_due::text,
+            COALESCE(b.payment_hold, FALSE) AS payment_hold,
+            COALESCE(b.match_status, 'unmatched') AS match_status,
             b.journal_txn_id, b.memo
        FROM bills b
        JOIN vendors v ON v.company_id = b.company_id AND v.id = b.vendor_id
@@ -1032,6 +1034,8 @@ export async function listBills(tx: Transaction, companyId: number, vendorId?: n
     exchangeRate: Number(r.exchange_rate || 1),
     foreignTotal: toMoneyNumber(parseDecimal4(r.foreign_total)),
     foreignBalanceDue: toMoneyNumber(parseDecimal4(r.foreign_balance_due)),
+    paymentHold: Boolean(r.payment_hold),
+    matchStatus: r.match_status || 'unmatched',
     journalTxnId: r.journal_txn_id !== null ? Number(r.journal_txn_id) : null,
     memo: r.memo || '',
     lines: linesByBill.get(Number(r.id)) ?? [],
@@ -1135,7 +1139,8 @@ export async function createBill(
 
   for (const raw of input.lines) {
     const qty6 = parseDecimal6(raw.quantity ?? 1);
-    const unitCost6 = parseDecimal6(raw.unitCost);
+    const rawCost = raw.unitCost ?? (raw as any).amount;
+      const unitCost6 = parseDecimal6(rawCost);
     if (qty6 <= 0n || unitCost6 < 0n) {
       throw new AccountingError(400, 'Bill line quantity must be > 0 and unitCost >= 0');
     }
@@ -1500,7 +1505,8 @@ export async function listBillPayments(tx: Transaction, companyId: number, vendo
     `SELECT bp.id, bp.payment_number, bp.vendor_id, v.company_name AS vendor_name,
             bp.payment_date::text, bp.amount::text, bp.bank_account_id, a.name AS bank_account_name,
             bp.check_number, bp.currency_code, bp.exchange_rate::text, bp.foreign_amount::text,
-            bp.is_voided, bp.journal_txn_id, bp.memo
+            bp.is_voided, bp.journal_txn_id, bp.memo,
+            COALESCE(bp.withholding_tax_amount, 0)::text AS withholding_tax_amount
        FROM bill_payments bp
        JOIN vendors v ON v.company_id = bp.company_id AND v.id = bp.vendor_id
        JOIN accounts a ON a.company_id = bp.company_id AND a.id = bp.bank_account_id
@@ -1546,6 +1552,7 @@ export async function listBillPayments(tx: Transaction, companyId: number, vendo
     isVoided: Boolean(r.is_voided),
     journalTxnId: r.journal_txn_id !== null ? Number(r.journal_txn_id) : null,
     memo: r.memo || '',
+    withholding_tax_amount: r.withholding_tax_amount ? toMoneyNumber(parseDecimal4(r.withholding_tax_amount)) : 0,
     allocations: allocMap.get(Number(r.id)) ?? [],
   }));
 }
@@ -1564,6 +1571,7 @@ export async function recordBillPayment(
     exchangeRate?: string | number;
     memo?: string | null;
     idempotencyKey?: string | null;
+    withholding_tax_amount?: string | number | null;
     allocations: Array<{ billId: number; amount: string | number }>;
   }
 ) {
@@ -1639,9 +1647,11 @@ export async function recordBillPayment(
       currency_code: string;
       exchange_rate: string;
       foreign_balance_due: string;
+      payment_hold: boolean;
     }>(
       `SELECT id, bill_number, vendor_id, status, total::text, amount_paid::text, balance_due::text,
-              currency_code, exchange_rate::text, foreign_balance_due::text
+              currency_code, exchange_rate::text, foreign_balance_due::text,
+              COALESCE(payment_hold, FALSE) AS payment_hold
          FROM bills WHERE company_id = $1 AND id = $2 FOR UPDATE`,
       [companyId, billId]
     );
@@ -1652,6 +1662,9 @@ export async function recordBillPayment(
     }
     if (bill.status === 'voided') {
       throw new AccountingError(409, `Cannot pay voided bill ${bill.bill_number}`);
+    }
+    if (bill.payment_hold) {
+      throw new AccountingError(409, `Bill ${bill.bill_number} is on payment hold`, 'BILL_PAYMENT_HOLD');
     }
 
     const appliedInput4 = parseDecimal4(alloc.amount);
@@ -1714,8 +1727,9 @@ export async function recordBillPayment(
   const ins = await tx.query<{ id: number }>(
     `INSERT INTO bill_payments (
        company_id, payment_number, vendor_id, payment_date, amount, bank_account_id,
-       check_number, currency_code, exchange_rate, foreign_amount, memo
-     ) VALUES ($1, $2, $3, $4::DATE, $5::NUMERIC(19,4), $6, $7, $8, $9::NUMERIC(19,6), $10::NUMERIC(19,4), $11)
+       check_number, currency_code, exchange_rate, foreign_amount, memo,
+       withholding_tax_amount
+     ) VALUES ($1, $2, $3, $4::DATE, $5::NUMERIC(19,4), $6, $7, $8, $9::NUMERIC(19,6), $10::NUMERIC(19,4), $11, $12::NUMERIC(19,4))
      RETURNING id`,
     [
       companyId,
@@ -1729,6 +1743,7 @@ export async function recordBillPayment(
       fx.rateStr,
       formatDecimal4(cashPaidForeign4),
       input.memo?.trim() || null,
+      formatDecimal4(parseDecimal4(input.withholding_tax_amount ?? 0)),
     ]
   );
   const bpId = Number(ins.rows[0].id);
@@ -2850,6 +2865,319 @@ export async function sendSupplierStatement(
     periodEnd: statement.periodEnd,
     closingBalance: statement.closingBalance,
   };
+}
+
+export async function setBillPaymentHold(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { billId: number; hold: boolean; reason?: string | null }
+) {
+  const billId = Number(input.billId);
+  const res = await tx.query<{ id: number; bill_number: string; payment_hold: boolean; status: string }>(
+    `SELECT id, bill_number, COALESCE(payment_hold, FALSE) AS payment_hold, status
+       FROM bills WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, billId]
+  );
+  if (res.rows.length === 0) throw new AccountingError(404, 'Bill not found', 'BILL_NOT_FOUND');
+  const bill = res.rows[0];
+  if (bill.status === 'voided') throw new AccountingError(409, 'Cannot change payment hold on a voided bill', 'BILL_VOIDED');
+
+  const hold = Boolean(input.hold);
+  const reason = hold ? (String(input.reason || '').trim() || 'Payment hold') : null;
+  await tx.query(
+    `UPDATE bills
+        SET payment_hold = $3::BOOLEAN,
+            payment_hold_reason = $4,
+            payment_hold_at = CASE WHEN $3::BOOLEAN THEN NOW() ELSE NULL END,
+            payment_hold_by_user_id = CASE WHEN $3::BOOLEAN THEN $5::BIGINT ELSE NULL END
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, billId, hold, reason, actor.userId]
+  );
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: hold ? 'BILL_PAYMENT_HOLD_PLACED' : 'BILL_PAYMENT_HOLD_RELEASED',
+    tableName: 'bills',
+    recordId: billId,
+    newValues: { billNumber: bill.bill_number, paymentHold: hold, reason },
+  });
+  return { billId, billNumber: bill.bill_number, paymentHold: hold, reason };
+}
+
+export async function evaluateThreeWayMatch(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  billId: number,
+  options: { priceTolerance?: number; qtyTolerance?: number } = {}
+) {
+  const billRes = await tx.query<any>(
+    `SELECT id, bill_number, vendor_id, purchase_order_id, total::text, status,
+            COALESCE(match_status, 'unmatched') AS match_status
+       FROM bills WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, billId]
+  );
+  if (billRes.rows.length === 0) throw new AccountingError(404, 'Bill not found', 'BILL_NOT_FOUND');
+  const bill = billRes.rows[0];
+
+  const linesRes = await tx.query<any>(
+    `SELECT line_order, item_id, description, quantity::text, unit_cost::text, amount::text, po_line_id
+       FROM bill_lines WHERE company_id = $1 AND bill_id = $2 ORDER BY line_order ASC, id ASC`,
+    [companyId, billId]
+  );
+
+  await tx.query(`DELETE FROM bill_match_discrepancies WHERE company_id = $1 AND bill_id = $2`, [companyId, billId]);
+
+  const discrepancies: any[] = [];
+  const poId = bill.purchase_order_id ? Number(bill.purchase_order_id) : null;
+  let poLinesRows: any[] = [];
+  const grnByPoLineMap = new Map<number, bigint>();
+  const priceTolerance = Number.isFinite(Number(options.priceTolerance)) ? Math.max(0, Number(options.priceTolerance)) : 0.01;
+  const qtyTolerance4 = parseDecimal4(Number.isFinite(Number(options.qtyTolerance)) ? Number(options.qtyTolerance) : 0);
+  if (!poId) {
+    discrepancies.push({
+      lineIndex: 0, varianceType: 'missing_po', expectedValue: null, actualValue: null, deltaAmount: null,
+      note: 'Bill is not linked to a purchase order',
+    });
+  } else {
+    const poRes = await tx.query<any>(
+      `SELECT id, status FROM purchase_orders WHERE company_id = $1 AND id = $2`,
+      [companyId, poId]
+    );
+    if (poRes.rows.length === 0) {
+      discrepancies.push({ lineIndex: 0, varianceType: 'missing_po', expectedValue: null, actualValue: null, deltaAmount: null, note: 'Linked PO not found' });
+    } else {
+      const poLines = await tx.query<any>(
+        `SELECT id, line_order, item_id, description, quantity::text, unit_cost::text, amount::text
+           FROM purchase_order_lines WHERE company_id = $1 AND purchase_order_id = $2 ORDER BY line_order ASC, id ASC`,
+        [companyId, poId]
+      );
+      poLinesRows = poLines.rows;
+      const grnLines = await tx.query<any>(
+        `SELECT grl.po_line_id, SUM(grl.quantity_received::numeric)::text AS qty_received
+           FROM goods_receipt_lines grl
+           JOIN goods_receipts gr ON gr.company_id = grl.company_id AND gr.id = grl.goods_receipt_id
+          WHERE gr.company_id = $1 AND gr.purchase_order_id = $2
+          GROUP BY grl.po_line_id`,
+        [companyId, poId]
+      );
+      for (const g of grnLines.rows) {
+        if (g.po_line_id !== null) grnByPoLineMap.set(Number(g.po_line_id), parseDecimal4(g.qty_received || 0));
+      }
+
+      for (let i = 0; i < linesRes.rows.length; i++) {
+        const bl = linesRes.rows[i];
+        const poLineId = bl.po_line_id ? Number(bl.po_line_id) : null;
+        const poLine = poLineId ? poLinesRows.find((p: any) => Number(p.id) === poLineId) : poLinesRows[i];
+        const billQty = parseDecimal4(bl.quantity || 0);
+        const billUnit = parseDecimal6(bl.unit_cost || 0);
+
+        if (!poLine) {
+          discrepancies.push({ lineIndex: i + 1, varianceType: 'missing_po', expectedValue: null, actualValue: toMoneyNumber(billQty), deltaAmount: toMoneyNumber(parseDecimal4(bl.amount || 0)), note: `No matching PO line for bill line ${i + 1}` });
+          continue;
+        }
+        const poQty = parseDecimal4(poLine.quantity || 0);
+        const poUnit = parseDecimal6(poLine.unit_cost || 0);
+        const grnQty = poLineId ? (grnByPoLineMap.get(poLineId) ?? 0n) : 0n;
+        if (grnQty === 0n) {
+          discrepancies.push({ lineIndex: i + 1, varianceType: 'missing_grn', expectedValue: toMoneyNumber(poQty), actualValue: 0, deltaAmount: toMoneyNumber(parseDecimal4(bl.amount || 0)), note: `No GRN received for PO line ${poLine.line_order}` });
+        } else if (billQty > grnQty + qtyTolerance4) {
+          discrepancies.push({ lineIndex: i + 1, varianceType: 'quantity', expectedValue: toMoneyNumber(grnQty), actualValue: toMoneyNumber(billQty), deltaAmount: toMoneyNumber(billQty - grnQty), note: `Billed qty exceeds received qty on line ${i + 1}` });
+        }
+        const priceDelta = Number(bl.unit_cost || 0) - Number(poLine.unit_cost || 0);
+        if (Math.abs(priceDelta) > priceTolerance) {
+          discrepancies.push({ lineIndex: i + 1, varianceType: 'price', expectedValue: Number(poLine.unit_cost || 0), actualValue: Number(bl.unit_cost || 0), deltaAmount: priceDelta, note: `Unit cost variance on line ${i + 1}` });
+        }
+      }
+    }
+  }
+
+  for (const d of discrepancies) {
+    await tx.query(
+      `INSERT INTO bill_match_discrepancies (company_id, bill_id, po_id, grn_id, line_index, variance_type, expected_value, actual_value, delta_amount)
+       VALUES ($1, $2, $3, NULL, $4, $5, $6::NUMERIC(19,4), $7::NUMERIC(19,4), $8::NUMERIC(19,4))`,
+      [companyId, billId, poId, d.lineIndex, d.varianceType, d.expectedValue, d.actualValue, d.deltaAmount]
+    );
+  }
+
+  const matchStatus = discrepancies.length === 0 ? 'matched' : 'variance_held';
+  await tx.query(
+    `UPDATE bills SET match_status = $3 WHERE company_id = $1 AND id = $2`,
+    [companyId, billId, matchStatus]
+  );
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'BILL_THREE_WAY_MATCH_EVALUATED',
+    tableName: 'bills',
+    recordId: billId,
+    newValues: { billNumber: bill.bill_number, matchStatus, discrepancyCount: discrepancies.length },
+  });
+
+  const matrix = linesRes.rows.map((bl: any, i: number) => {
+    const poLineId = bl.po_line_id ? Number(bl.po_line_id) : null;
+    const poLine = poLineId ? poLinesRows.find((p: any) => Number(p.id) === poLineId) : poLinesRows[i];
+    return {
+      lineIndex: i + 1,
+      description: bl.description,
+      billQty: Number(bl.quantity || 0),
+      billUnitCost: Number(bl.unit_cost || 0),
+      poQty: poLine ? Number(poLine.quantity || 0) : null,
+      poUnitCost: poLine ? Number(poLine.unit_cost || 0) : null,
+      grnQty: poLineId ? Number(formatDecimal4(grnByPoLineMap.get(poLineId) ?? 0n)) : null,
+      hasVariance: discrepancies.some(d => d.lineIndex === i + 1),
+    };
+  });
+
+  return { billId, billNumber: bill.bill_number, matchStatus, discrepancies, matrix, tolerances: { price: priceTolerance, quantity: toMoneyNumber(qtyTolerance4) } };
+}
+
+export async function approveBillMatchOverride(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { billId: number; reason: string }
+) {
+  const billId = Number(input.billId);
+  const reason = String(input.reason || '').trim();
+  if (!reason) throw new AccountingError(400, 'reason is required', 'MISSING_REASON');
+  const res = await tx.query<{ id: number; bill_number: string; match_status: string }>(
+    `SELECT id, bill_number, COALESCE(match_status, 'unmatched') AS match_status
+       FROM bills WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, billId]
+  );
+  if (res.rows.length === 0) throw new AccountingError(404, 'Bill not found', 'BILL_NOT_FOUND');
+  const bill = res.rows[0];
+  await tx.query(
+    `UPDATE bills SET match_status = 'approved_override' WHERE company_id = $1 AND id = $2`,
+    [companyId, billId]
+  );
+  await tx.query(
+    `UPDATE bill_match_discrepancies
+        SET approved_by = $3, approved_at = NOW(), approval_reason = $4
+      WHERE company_id = $1 AND bill_id = $2`,
+    [companyId, billId, actor.userId, reason]
+  );
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'BILL_MATCH_OVERRIDE_APPROVED',
+    tableName: 'bills',
+    recordId: billId,
+    newValues: { billNumber: bill.bill_number, reason, previousStatus: bill.match_status },
+  });
+  return { billId, billNumber: bill.bill_number, matchStatus: 'approved_override', reason };
+}
+
+export async function executeBatchPaymentRun(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { bankAccountId: number; billIds: number[]; paymentDate?: string; memo?: string | null; idempotencyKey?: string | null }
+) {
+  const route = 'ap_batch_payment_run';
+  const idemPayload = {
+    bankAccountId: Number(input.bankAccountId),
+    billIds: (input.billIds || []).map(Number).sort((a, b) => a - b),
+    paymentDate: input.paymentDate || null,
+    memo: input.memo || null,
+  };
+  const idem = await checkRouteIdempotency<any>(tx, companyId, route, input.idempotencyKey, idemPayload);
+  if (idem.hit) return { ...idem.response, idempotentReplay: true };
+
+  if (!Array.isArray(input.billIds) || input.billIds.length === 0) {
+    throw new AccountingError(400, 'billIds is required', 'MISSING_BILL_IDS');
+  }
+  const paymentDate = input.paymentDate ? assertIsoDate(input.paymentDate, 'paymentDate') : todayIsoDate();
+  const bankAccountId = Number(input.bankAccountId);
+  if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
+    throw new AccountingError(400, 'Valid bankAccountId is required', 'INVALID_BANK_ACCOUNT');
+  }
+
+  const billIds = Array.from(new Set(input.billIds.map(Number))).filter(n => Number.isInteger(n) && n > 0);
+  const billsRes = await tx.query<any>(
+    `SELECT id, vendor_id, bill_number, balance_due::text, currency_code, COALESCE(payment_hold, FALSE) AS payment_hold, status
+       FROM bills
+      WHERE company_id = $1 AND id = ANY($2::BIGINT[])
+      FOR UPDATE`,
+    [companyId, billIds]
+  );
+  const byId = new Map(billsRes.rows.map((b: any) => [Number(b.id), b]));
+
+  const groups = new Map<number, any[]>();
+  const skipped: any[] = [];
+  for (const id of billIds) {
+    const b = byId.get(id);
+    if (!b) { skipped.push({ billId: id, reason: 'NOT_FOUND' }); continue; }
+    if (b.status === 'voided' || b.status === 'paid' || parseDecimal4(b.balance_due) <= 0n) {
+      skipped.push({ billId: id, reason: 'NOT_PAYABLE' }); continue;
+    }
+    if (b.payment_hold) { skipped.push({ billId: id, reason: 'PAYMENT_HOLD' }); continue; }
+    const arr = groups.get(Number(b.vendor_id)) ?? [];
+    arr.push(b);
+    groups.set(Number(b.vendor_id), arr);
+  }
+
+  const runNumber = await generateNextDocNumber(tx, companyId, 'ap_payment_runs', 'run_number', 'APRUN');
+  const runIns = await tx.query<{ id: number }>(
+    `INSERT INTO ap_payment_runs (company_id, run_number, bank_account_id, payment_date, total_amount, status, created_by)
+     VALUES ($1, $2, $3, $4::DATE, 0.0000, 'posted', $5) RETURNING id`,
+    [companyId, runNumber, bankAccountId, paymentDate, actor.userId]
+  );
+  const runId = Number(runIns.rows[0].id);
+
+  const results: any[] = [];
+  let total4 = 0n;
+  for (const [vendorId, bills] of groups.entries()) {
+    const allocations = bills.map((b: any) => ({ billId: Number(b.id), amount: b.balance_due }));
+    try {
+      const payment = await recordBillPayment(tx, companyId, actor, {
+        vendorId,
+        paymentDate,
+        bankAccountId,
+        memo: input.memo || `Batch payment run ${runNumber}`,
+        allocations,
+      });
+      const paidAmount4 = allocations.reduce((s, a) => s + parseDecimal4(a.amount), 0n);
+      total4 += paidAmount4;
+      for (const a of allocations) {
+        await tx.query(
+          `INSERT INTO ap_payment_run_items (company_id, payment_run_id, bill_id, bill_payment_id, amount, status)
+           VALUES ($1, $2, $3, $4, $5::NUMERIC(19,4), 'posted')`,
+          [companyId, runId, a.billId, payment.billPayment?.id ?? null, formatDecimal4(parseDecimal4(a.amount))]
+        );
+      }
+      results.push({ vendorId, billPaymentId: payment.billPayment?.id ?? null, billIds: allocations.map(a => a.billId), amount: formatDecimal4(paidAmount4) });
+    } catch (err: any) {
+      for (const a of allocations) {
+        await tx.query(
+          `INSERT INTO ap_payment_run_items (company_id, payment_run_id, bill_id, amount, status, error_message)
+           VALUES ($1, $2, $3, $4::NUMERIC(19,4), 'failed', $5)`,
+          [companyId, runId, a.billId, formatDecimal4(parseDecimal4(a.amount)), String(err?.message || 'Payment failed').slice(0, 500)]
+        );
+        skipped.push({ billId: a.billId, reason: 'FAILED', error: err?.message || 'Payment failed' });
+      }
+    }
+  }
+
+  await tx.query(`UPDATE ap_payment_runs SET total_amount = $3::NUMERIC(19,4) WHERE company_id = $1 AND id = $2`, [companyId, runId, formatDecimal4(total4)]);
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'AP_BATCH_PAYMENT_RUN_EXECUTED',
+    tableName: 'ap_payment_runs',
+    recordId: runId,
+    newValues: { runNumber, bankAccountId, paymentDate, totalAmount: formatDecimal4(total4), paymentCount: results.length, skippedCount: skipped.length },
+  });
+
+  const result = { runId, runNumber, paymentDate, bankAccountId, totalAmount: formatDecimal4(total4), payments: results, skipped };
+  await saveRouteIdempotency(tx, companyId, route, input.idempotencyKey, idem.payloadHash, 200, result, actor.userId);
+  return result;
 }
 
 function formatDecimal2Safe(val4: bigint): string {

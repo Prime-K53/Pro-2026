@@ -934,6 +934,47 @@ export async function voidBankTransaction(
     throw new AccountingError(409, 'Cannot void a reconciled bank transaction; reverse the reconciliation first', 'RECONCILED_ENTRY_LOCKED');
   }
   if (bt.journal_txn_id) {
+    // F1 fix: if this bank transaction was created directly by a customer payment,
+    // bill payment, or sales receipt, voiding only the bank transaction would reverse
+    // the GL while leaving the subledger document active/paid. Require voiding via
+    // the source document so AR/AP subledgers stay in sync with the GL.
+    const linkedPmt = await tx.query<{ payment_number: string }>(
+      `SELECT payment_number FROM payments
+        WHERE company_id = $1 AND journal_txn_id = $2 AND is_voided = FALSE LIMIT 1`,
+      [companyId, bt.journal_txn_id]
+    );
+    if (linkedPmt.rows.length > 0) {
+      throw new AccountingError(
+        409,
+        `Bank transaction is linked to customer payment ${linkedPmt.rows[0].payment_number}; void the payment instead.`,
+        'LINKED_SOURCE_DOCUMENT'
+      );
+    }
+    const linkedBillPmt = await tx.query<{ payment_number: string }>(
+      `SELECT payment_number FROM bill_payments
+        WHERE company_id = $1 AND journal_txn_id = $2 AND is_voided = FALSE LIMIT 1`,
+      [companyId, bt.journal_txn_id]
+    );
+    if (linkedBillPmt.rows.length > 0) {
+      throw new AccountingError(
+        409,
+        `Bank transaction is linked to bill payment ${linkedBillPmt.rows[0].payment_number}; void the bill payment instead.`,
+        'LINKED_SOURCE_DOCUMENT'
+      );
+    }
+    const linkedSr = await tx.query<{ invoice_number: string }>(
+      `SELECT invoice_number FROM invoices
+        WHERE company_id = $1 AND journal_txn_id = $2 AND is_sales_receipt = TRUE AND status <> 'voided' LIMIT 1`,
+      [companyId, bt.journal_txn_id]
+    );
+    if (linkedSr.rows.length > 0) {
+      throw new AccountingError(
+        409,
+        `Bank transaction is linked to sales receipt ${linkedSr.rows[0].invoice_number}; void the sales receipt instead.`,
+        'LINKED_SOURCE_DOCUMENT'
+      );
+    }
+
     const reconLineRes = await tx.query<{ cnt: string }>(
       `SELECT COUNT(*)::text AS cnt
          FROM journal_lines

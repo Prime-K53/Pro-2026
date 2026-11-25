@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { ACCOUNTING_UPDATED_EVENT, accountingApi, ApiAccount } from '../../services/accountingApi';
@@ -32,7 +32,14 @@ import {
   Loader2,
   Lock,
   Eye,
+  Wallet,
+  Scissors,
+  ShieldAlert,
 } from 'lucide-react';
+import { downloadPrimeDocument } from '../../pdf/generatePrimeDocumentBlob';
+import { getStoredCompanyConfig } from '../../pdf/templateSettings';
+import { ApplyCustomerDepositModal } from '../modals/ApplyCustomerDepositModal';
+import { WriteOffBalanceModal } from '../modals/WriteOffBalanceModal';
 
 type SalesTab = 'invoices' | 'payments' | 'creditMemos' | 'estimates' | 'recurring' | 'collections';
 
@@ -82,6 +89,8 @@ export const InvoicesView: React.FC = () => {
   };
 
   // Modals
+  const [depositModalInvoice, setDepositModalInvoice] = useState<ApiInvoice | null>(null);
+  const [writeOffModalInvoice, setWriteOffModalInvoice] = useState<ApiInvoice | null>(null);
   const [isDocModalOpen, setIsDocModalOpen] = useState(false);
   const [docMode, setDocMode] = useState<'invoice' | 'sales_receipt' | 'estimate'>('invoice');
   const [docCustomerId, setDocCustomerId] = useState<number>(0);
@@ -570,8 +579,46 @@ export const InvoicesView: React.FC = () => {
         groupLabel: 'Document',
         requiredPermission: 'invoices:read',
         execute: async () => {
-          await handleOpenPreview(previewKind, inv.id);
-          setTimeout(() => window.print(), 400);
+          try {
+            const pdfData = {
+              type: 'INVOICE',
+              number: inv.invoiceNumber,
+              date: inv.invoiceDate,
+              dueDate: inv.dueDate,
+              paymentTerms: inv.terms,
+              clientName: inv.customerName,
+              address: companyProfile.address,
+              phone: companyProfile.phone,
+              email: companyProfile.email,
+              currency: inv.currencyCode,
+              items: inv.lines.map((line: any) => ({
+                desc: line.description,
+                qty: line.quantity,
+                price: line.rate,
+                total: line.amount,
+              })),
+              subtotal: inv.subtotal,
+              discount: 0,
+              taxAmount: inv.taxAmount,
+              totalAmount: inv.total,
+              amountPaid: inv.amountPaid,
+              balanceDue: inv.balanceDue,
+              status: inv.status,
+            };
+
+            const config = {
+              ...(getStoredCompanyConfig() || {}),
+              companyName: companyProfile.name,
+              address: companyProfile.address,
+              phone: companyProfile.phone,
+              email: companyProfile.email,
+            };
+
+            await downloadPrimeDocument('INVOICE', pdfData, config, `invoice-${inv.invoiceNumber}.pdf`);
+            triggerShortcutNotice(`PDF downloaded for ${inv.invoiceNumber}`);
+          } catch (err: any) {
+            triggerShortcutNotice(`PDF download failed: ${err?.message || 'unknown error'}`, 'error');
+          }
         },
       },
       {
@@ -616,6 +663,61 @@ export const InvoicesView: React.FC = () => {
         isVisible: () => canReceivePayment,
         isEnabled: () => (canReceivePayment ? true : { enabled: false, reason: 'No open balance to receive' }),
         execute: async () => { openReceivePaymentForInvoice(inv); },
+      },
+      {
+        id: 'invoice.apply-deposit',
+        label: 'Apply Customer Deposit',
+        icon: <Wallet className="w-3.5 h-3.5 text-emerald-600" />,
+        group: 'process',
+        groupLabel: 'Payments & Prepayments',
+        requiredPermission: 'invoices:write',
+        isVisible: () => canReceivePayment,
+        isEnabled: () => canReceivePayment ? true : { enabled: false, reason: 'No open balance to apply deposit' },
+        execute: async () => { setDepositModalInvoice(inv); },
+      },
+      {
+        id: 'invoice.toggle-dispute',
+        label: inv.disputedAt ? 'Release Dispute / Hold' : 'Place on Dispute / Hold',
+        icon: <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />,
+        group: 'process',
+        groupLabel: 'Disputes & Holds',
+        requiredPermission: 'invoices:write',
+        isVisible: () => inv.status !== 'voided' && inv.status !== 'draft',
+        confirmation: inv.disputedAt
+          ? {
+              title: `Release hold on ${inv.invoiceNumber}`,
+              message: 'This will release the dispute/hold from the invoice.',
+              confirmLabel: 'Release Hold',
+            }
+          : {
+              title: `Place ${inv.invoiceNumber} on hold`,
+              message: 'This will flag the invoice as disputed/on hold. Provide a reason for the audit trail.',
+              confirmLabel: 'Place Hold',
+              requireReason: true,
+              reasonLabel: 'Dispute reason',
+              reasonPlaceholder: 'e.g. Customer queried paper quality / pricing',
+            },
+        execute: async (_ctx, helpers) => {
+          try {
+            await commercialApi.toggleInvoiceDispute(inv.id, helpers.reason, !inv.disputedAt);
+            triggerShortcutNotice(`Updated dispute status for ${inv.invoiceNumber}`);
+            await loadData();
+          } catch (err: any) {
+            setErrorMsg(err?.message || 'Failed to update dispute');
+            throw err;
+          }
+        },
+      },
+      {
+        id: 'invoice.write-off',
+        label: 'Write-off Balance / Bad Debt',
+        icon: <Scissors className="w-3.5 h-3.5 text-rose-600" />,
+        group: 'danger',
+        groupLabel: 'Adjustments & Write-offs',
+        requiredPermission: 'invoices:writeoff',
+        isVisible: () => canReceivePayment,
+        isEnabled: () => canReceivePayment ? true : { enabled: false, reason: 'No open balance to write off' },
+        execute: async () => { setWriteOffModalInvoice(inv); },
       },
       {
         id: 'invoice.payment-history',
@@ -1884,6 +1986,23 @@ export const InvoicesView: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {depositModalInvoice && (
+        <ApplyCustomerDepositModal
+          invoice={depositModalInvoice}
+          isOpen={true}
+          onClose={() => setDepositModalInvoice(null)}
+          onSuccess={loadData}
+        />
+      )}
+      {writeOffModalInvoice && (
+        <WriteOffBalanceModal
+          invoice={writeOffModalInvoice}
+          isOpen={true}
+          onClose={() => setWriteOffModalInvoice(null)}
+          onSuccess={loadData}
+        />
       )}
 
     </div>

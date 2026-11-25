@@ -52,6 +52,7 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
   const [lines, setLines] = useState<LineState[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<any | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -60,6 +61,7 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
     setLines([newLine(initialItemId != null ? String(initialItemId) : '')]);
     setError(null);
     setSubmitting(false);
+    setDraft(null);
   }, [open, initialItemId]);
 
   const itemById = useMemo(() => new Map(items.map(i => [String(i.id), i])), [items]);
@@ -90,14 +92,10 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
     setLines(prev => prev.map(l => (l.key === key ? { ...l, ...patch } : l)));
   };
 
-  const create = async () => {
+  const createDraft = async () => {
     if (submitting) return;
-    if (activeLines.length === 0) {
-      setError('Add at least one item to count.');
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
+    if (activeLines.length === 0) { setError('Add at least one item to count.'); return; }
+    setSubmitting(true); setError(null);
     try {
       const result = await commercialApi.createStockCount({
         countDate,
@@ -107,24 +105,22 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
           countedQty: l.countedQty.trim() === '' ? String(itemById.get(l.itemId)?.onHand ?? 0) : String(Number(l.countedQty)),
         })),
       });
+      setDraft(result);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to create stock count draft.');
+    } finally { setSubmitting(false); }
+  };
 
-      // Posting is a separate, explicit step so the operator can review the
-      // variance the server computed before it hits the ledger.
-      const posted = await commercialApi.postStockCount(result.countId, {
-        notes: notes.trim() || null,
-      });
-
-      onSuccess(
-        `Count ${posted.countNumber} posted · ${posted.lines.length} line${posted.lines.length === 1 ? '' : 's'} · net variance ${formatCurrency(Number(posted.netVariance))}${
-          posted.entryNumber ? ` · ${posted.entryNumber}` : ' · no journal required'
-        }`
-      );
+  const postDraft = async () => {
+    if (submitting || !draft?.countId) return;
+    setSubmitting(true); setError(null);
+    try {
+      const posted = await commercialApi.postStockCount(draft.countId, { notes: notes.trim() || null });
+      onSuccess(`Count ${posted.countNumber} posted · ${posted.lines.length} line${posted.lines.length === 1 ? '' : 's'} · net variance ${formatCurrency(Number(posted.netVariance))}${posted.entryNumber ? ` · ${posted.entryNumber}` : ' · no journal required'}`);
       onClose();
     } catch (err: any) {
-      setError(err?.message || 'Failed to create or post the stock count.');
-    } finally {
-      setSubmitting(false);
-    }
+      setError(err?.message || 'Failed to post stock count.');
+    } finally { setSubmitting(false); }
   };
 
   return (
@@ -140,7 +136,7 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
         id="stock-count-form"
         onSubmit={e => {
           e.preventDefault();
-          create();
+          if (draft) void postDraft(); else void createDraft();
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
@@ -262,8 +258,8 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
 
           <div className="lg:col-span-2">
             <SummaryRow
-              label="Posting"
-              value="Creates a draft, then posts variances to stock and the general ledger"
+              label="Workflow"
+              value={draft ? `Draft ${draft.countNumber || draft.countId} created — review variances, then post` : 'Step 1: create draft. Step 2: review variances and post to ledger.'}
             />
           </div>
 
@@ -276,8 +272,8 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
         </ModalBody>
         <ModalFooter
           onCancel={onClose}
-          tone="brand"
-          submitLabel="Create & Post Count"
+          tone={draft ? 'emerald' : 'brand'}
+          submitLabel={draft ? 'Post Count to Ledger' : 'Create Draft Count'}
           submitIcon={<Send className="h-3.5 w-3.5" />}
           busy={submitting}
           disabled={activeLines.length === 0}

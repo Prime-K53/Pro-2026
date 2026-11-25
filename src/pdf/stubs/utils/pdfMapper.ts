@@ -1,0 +1,1 @@
+export const generateAccountSummary = (..._args: any[]) => ({ statement: '' });

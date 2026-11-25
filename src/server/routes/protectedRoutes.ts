@@ -23,9 +23,13 @@ import {
   listInventoryMovements,
 } from '../services/inventoryReadService.ts';
 import {
+  createInventoryLot,
   createStockCount,
   deactivateInventoryItem,
+  listInventoryLots,
   postStockCount,
+  receiveStockTransfer,
+  recordScrapWriteOff,
   recordStockDamage,
   transferStock,
 } from '../services/inventoryOpsService.ts';
@@ -379,9 +383,32 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           unitCost: req.body?.unitCost ?? null,
           idempotencyKey:
             (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null,
+          jobReference: req.body?.jobReference ?? null,
+          scrapType: req.body?.scrapType ?? null,
         })
       );
       return res.status(201).json({ damage: result });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.post('/inventory/:id/scrap', requirePermission('inventory:damage'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid inventory item id' });
+      const result = await db.withCompanyDb(auth.companyId, tx =>
+        recordScrapWriteOff(tx, auth.companyId, toActor(req), {
+          itemId: id,
+          quantity: req.body?.quantity ?? 0,
+          reason: req.body?.reason ?? null,
+          reasonCode: req.body?.reasonCode ?? 'scrap',
+          jobReference: req.body?.jobReference ?? null,
+          damageDate: req.body?.damageDate ?? req.body?.date ?? null,
+        })
+      );
+      return res.status(201).json({ scrap: result });
     } catch (err) {
       return handleProtectedError(res, err);
     }
@@ -412,10 +439,105 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
           toLocation: req.body?.toLocation ?? null,
           transferDate: req.body?.transferDate ?? req.body?.date ?? null,
           notes: req.body?.notes ?? null,
+          transferMode: req.body?.transferMode ?? 'direct',
           lines: Array.isArray(req.body?.lines) ? req.body.lines : [],
         })
       );
       return res.status(201).json({ transfer: result });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.get('/inventory/transfers', requirePermission('inventory:read'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const status = String(req.query.status || '').trim();
+      const rows = await db.withCompanyDb(auth.companyId, async tx => {
+        const where = status ? `AND t.status = $2` : '';
+        const params: any[] = [auth.companyId];
+        if (status) params.push(status);
+        const r = await tx.query<any>(
+          `SELECT t.id, t.transfer_number, t.transfer_date::text AS transfer_date, t.from_location, t.to_location,
+                  t.status, t.transfer_mode, t.dispatched_at, t.received_at, t.notes,
+                  t.dispatch_journal_txn_id, t.receive_journal_txn_id,
+                  COALESCE((SELECT COUNT(*)::int FROM stock_transfer_lines l WHERE l.company_id = t.company_id AND l.transfer_id = t.id), 0) AS line_count,
+                  COALESCE((SELECT SUM(l.quantity)::text FROM stock_transfer_lines l WHERE l.company_id = t.company_id AND l.transfer_id = t.id), '0') AS total_qty,
+                  COALESCE((SELECT SUM(COALESCE(l.received_qty,0))::text FROM stock_transfer_lines l WHERE l.company_id = t.company_id AND l.transfer_id = t.id), '0') AS received_qty
+             FROM stock_transfers t
+            WHERE t.company_id = $1 ${where}
+            ORDER BY t.transfer_date DESC, t.id DESC
+            LIMIT 200`,
+          params
+        );
+        return r.rows;
+      });
+      return res.json({ transfers: rows });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.get('/inventory/transfers/:id', requirePermission('inventory:read'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid transfer id' });
+      const result = await db.withCompanyDb(auth.companyId, async tx => {
+        const tRes = await tx.query<any>(
+          `SELECT id, transfer_number, transfer_date::text AS transfer_date, from_location, to_location, status, transfer_mode, dispatched_at, received_at, notes,
+                  dispatch_journal_txn_id, receive_journal_txn_id
+             FROM stock_transfers WHERE company_id = $1 AND id = $2`,
+          [auth.companyId, id]
+        );
+        if (tRes.rows.length === 0) return null;
+        const lRes = await tx.query<any>(
+          `SELECT l.id, l.item_id, l.variant_id, l.quantity::text AS quantity, COALESCE(l.received_qty,0)::text AS received_qty, l.unit_cost::text AS unit_cost, l.lot_id,
+                  i.sku, i.name AS item_name
+             FROM stock_transfer_lines l
+             JOIN inventory_items i ON i.company_id = l.company_id AND i.id = l.item_id
+            WHERE l.company_id = $1 AND l.transfer_id = $2 ORDER BY l.id ASC`,
+          [auth.companyId, id]
+        );
+        return { ...tRes.rows[0], lines: lRes.rows.map((l: any) => ({ ...l, remaining_qty: String(Number(l.quantity) - Number(l.received_qty)) })) };
+      });
+      if (!result) return res.status(404).json({ error: 'Transfer not found' });
+      return res.json({ transfer: result });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.post('/inventory/transfers/:id/receive', requirePermission('inventory:transfer'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid transfer id' });
+      const result = await db.withCompanyDb(auth.companyId, tx =>
+        receiveStockTransfer(tx, auth.companyId, toActor(req), id, req.body || {})
+      );
+      return res.json({ transfer: result });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.get('/inventory/lots', requirePermission('inventory:read'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const itemId = req.query.itemId ? Number(req.query.itemId) : undefined;
+      const lots = await db.withCompanyDb(auth.companyId, tx => listInventoryLots(tx, auth.companyId, itemId));
+      return res.json({ lots });
+    } catch (err) {
+      return handleProtectedError(res, err);
+    }
+  });
+
+  router.post('/inventory/lots', requirePermission('inventory:adjust'), async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const lot = await db.withCompanyDb(auth.companyId, tx => createInventoryLot(tx, auth.companyId, toActor(req), req.body || {}));
+      return res.status(201).json({ lot });
     } catch (err) {
       return handleProtectedError(res, err);
     }

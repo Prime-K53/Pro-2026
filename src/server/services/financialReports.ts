@@ -980,7 +980,10 @@ export interface CashFlowRow {
 }
 
 const ACCUMULATED_RE = /\baccum(?:ulated)?\b.*\b(?:dep(?:rec(?:iation)?)?|amort)/i;
-const CARRIED_IN_SOURCES = new Set(['opening_balance']);
+// 'opening_balance' is a balance-sheet carry-in and must not appear in P&L / Cash Flow flows.
+// 'closing_entry' zeroes out P&L accounts at period close — it must also be excluded from
+// income statement queries so that closed-period P&L still shows the actual activity.
+const CARRIED_IN_SOURCES = new Set(['opening_balance', 'closing_entry']);
 
 export async function getCashFlowStatement(
   tx: Transaction,

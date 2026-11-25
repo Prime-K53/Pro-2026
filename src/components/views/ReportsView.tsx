@@ -110,6 +110,7 @@ export const ReportsView: React.FC = () => {
   const [newSavedName, setNewSavedName] = useState('');
   const [newSavedType, setNewSavedType] = useState('profit_and_loss');
   const [savedRunResult, setSavedRunResult] = useState<{ name: string; output: any } | null>(null);
+  const [exportSnapshots, setExportSnapshots] = useState<any[]>([]);
 
   const fetchActiveReport = useCallback(async () => {
     setLoading(true);
@@ -177,8 +178,12 @@ export const ReportsView: React.FC = () => {
         const rates = await commercialApi.listExchangeRates();
         setFxRates(rates);
       } else if (activeReport === 'saved') {
-        const list = await commercialApi.listSavedReports();
+        const [list, snaps] = await Promise.all([
+          commercialApi.listSavedReports(),
+          commercialApi.listReportExportSnapshots().catch(() => []),
+        ]);
         setSavedReports(list);
+        setExportSnapshots(snaps);
       } else if (activeReport === 'audit') {
         if (!canReadAudit) {
           setAuditLogs([]);
@@ -1537,6 +1542,33 @@ export const ReportsView: React.FC = () => {
                 )}
               </tbody>
             </table>
+
+            <div className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-bold text-slate-700">Export Snapshots</div>
+                <button
+                  type="button"
+                  className="px-2.5 py-1 rounded bg-slate-800 text-white text-[11px] font-bold"
+                  onClick={async () => {
+                    const reportKey = window.prompt('Report key (e.g. profit_and_loss, balance_sheet)', 'profit_and_loss');
+                    if (!reportKey) return;
+                    try {
+                      await commercialApi.createReportExportSnapshot({ reportKey, format: 'json', payload: { generatedAt: new Date().toISOString(), note: 'Manual snapshot from ReportsView' } });
+                      const snaps = await commercialApi.listReportExportSnapshots();
+                      setExportSnapshots(snaps);
+                      triggerShortcutNotice('Report export snapshot created');
+                    } catch (e: any) { setErrorMsg(e?.message || 'Failed to create snapshot'); }
+                  }}
+                >Create Snapshot</button>
+              </div>
+              <div className="max-h-40 overflow-auto text-[11px]">
+                <table className="w-full"><thead><tr className="text-slate-500"><th className="text-left py-1">When</th><th className="text-left">Report</th><th className="text-left">Format</th><th className="text-left">Hash</th></tr></thead>
+                  <tbody>{exportSnapshots.length === 0 ? <tr><td colSpan={4} className="py-2 text-slate-400">No snapshots.</td></tr> : exportSnapshots.slice(0,20).map((s:any)=>(
+                    <tr key={s.id} className="border-t border-slate-200"><td className="py-1 font-mono">{String(s.created_at||s.createdAt||'').slice(0,19).replace('T',' ')}</td><td>{s.report_key||s.reportKey}</td><td>{s.format}</td><td className="font-mono text-slate-500">{String(s.snapshot_hash||s.snapshotHash||'').slice(0,16)}…</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
 
             {savedRunResult && (
               <div className="p-4 bg-slate-900 text-emerald-300 rounded-lg font-mono text-[11px] space-y-2">

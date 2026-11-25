@@ -54,17 +54,23 @@ export const TaxFormsView: React.FC = () => {
   const [mapAccountId, setMapAccountId] = useState<number>(0);
   const [mapTaxLine, setMapTaxLine] = useState<string>('output_vat_standard');
   const [savingMap, setSavingMap] = useState(false);
+  const [filingPeriods, setFilingPeriods] = useState<any[]>([]);
+  const [taxMappings, setTaxMappings] = useState<any[]>([]);
 
   const loadSalesTax = useCallback(async () => {
     setTaxLoading(true);
     setTaxError(null);
     try {
-      const [summary, accts] = await Promise.all([
+      const [summary, accts, periods, mappings] = await Promise.all([
         commercialApi.getTaxSummary(startDate, endDate),
         accountingApi.listAccounts(),
+        commercialApi.listTaxFilingPeriods().catch(() => []),
+        commercialApi.listTaxAccountMappings().catch(() => []),
       ]);
       setTaxSummary(summary);
       setAccounts(accts);
+      setFilingPeriods(periods);
+      setTaxMappings(mappings);
       setMapAccountId(prev => prev || accts[0]?.id || 0);
     } catch (err: any) {
       setTaxError(err?.message || 'Unable to load sales & use tax summary');
@@ -411,6 +417,27 @@ export const TaxFormsView: React.FC = () => {
               </div>
             </div>
           ) : null}
+
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Tax Compliance Controls</h3>
+              <button type="button" className="px-2.5 py-1 rounded border border-slate-300 text-[11px]" onClick={async () => {
+                const jurisdiction = window.prompt('Jurisdiction', 'ZRA') || 'ZRA';
+                const periodStart = window.prompt('Period start (YYYY-MM-DD)', startDate) || startDate;
+                const periodEnd = window.prompt('Period end (YYYY-MM-DD)', endDate) || endDate;
+                await commercialApi.upsertTaxFilingPeriod({ jurisdiction, periodStart, periodEnd, status: 'open' });
+                setFilingPeriods(await commercialApi.listTaxFilingPeriods().catch(() => []));
+              }}>Add Filing Period</button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs"><thead className="text-[10px] uppercase text-slate-500"><tr><th className="py-1">Jurisdiction</th><th>Period</th><th>Status</th><th>Due</th><th className="text-right">Action</th></tr></thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">{filingPeriods.length === 0 ? <tr><td colSpan={5} className="py-3 text-slate-400">No filing periods.</td></tr> : filingPeriods.map((p: any) => (
+                  <tr key={p.id}><td className="py-1">{p.jurisdiction}</td><td className="font-mono">{p.period_start || p.periodStart} → {p.period_end || p.periodEnd}</td><td>{p.status}</td><td className="font-mono">{p.due_date || p.dueDate || '-'}</td><td className="text-right">{p.status !== 'filed' && <button className="text-[11px] text-brand underline" onClick={async () => { await commercialApi.fileTaxFilingPeriod(Number(p.id), `FILE-${p.id}`); setFilingPeriods(await commercialApi.listTaxFilingPeriods().catch(() => [])); }}>Mark Filed</button>}</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="text-[11px] text-slate-500">Account mappings configured: {taxMappings.length}</div>
+          </div>
         </div>
       )}
 

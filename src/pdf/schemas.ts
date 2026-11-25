@@ -1,0 +1,544 @@
+import { z } from 'zod';
+
+// Shared base for all Prime ERP documents
+// verificationToken + documentType (+ official-number aliases) are
+// optional passthrough fields: they survive zod parsing so the generic
+// QR path (attachDocumentSecurity -> buildSecurityQrPayload) always sees
+// the stable token + explicit type, no matter how many mapping layers the
+// payload passed through. They never render PII and never leave the PDF.
+const VerifiableDocFields = {
+  documentType: z.string().optional(),
+  verificationToken: z.string().optional(),
+  quotationNumber: z.string().optional(),
+  quotationId: z.string().optional(),
+  order_number: z.string().optional(),
+  dnNumber: z.string().optional(),
+  deliveryNoteNumber: z.string().optional(),
+  delivery_number: z.string().optional(),
+  receiptNumber: z.string().optional(),
+  paymentId: z.string().optional(),
+  paymentNumber: z.string().optional(),
+  statementNumber: z.string().optional(),
+};
+const BaseDocSchema = z.object({
+  number: z.string().min(1, "Document number is required"),
+  date: z.string().min(1, "Date is required"),
+  ...VerifiableDocFields,
+  dueDate: z.string().optional(),
+  paymentTerms: z.string().optional(),
+  clientName: z.string().min(1, "Client name is required"),
+  address: z.string().optional(),
+  phone: z.string().optional(),
+  createdAtIso: z.string().optional(),
+  createdByName: z.string().optional(),
+  securityQrPayload: z.string().optional(),
+  securityQrCodeDataUrl: z.string().optional(),
+  isConverted: z.boolean().optional(),
+  conversionDetails: z.object({
+    sourceType: z.string(),
+    sourceNumber: z.string(),
+    date: z.string(),
+    acceptedBy: z.string().optional().default('N/A'),
+    locationStamp: z.object({
+      lat: z.number(),
+      lng: z.number()
+    }).optional()
+  }).optional(),
+  // passthrough preserves QP markers (serviceDetails/billableSheets) for
+  // delivery-note page display; required desc/qty still validated.
+  items: z.array(z.object({
+    desc: z.string(),
+    qty: z.number(),
+  }).passthrough()).default([]),
+});
+
+// 1. Financial (Invoice/PO) adds Price logic
+// passthrough preserves Quick Photocopy billing markers (serviceDetails,
+// billableSheets, qpPages/qpCopies, id/sku) so the renderer can display
+// customer-facing pages ("50 pages") while financial qty stays billable
+// sheets. Required fields still validated; extra fields are preserved.
+export const FinancialDocSchema = BaseDocSchema.extend({
+  invoiceNumber: z.string().optional(),
+  orderNumber: z.string().optional(),
+  items: z.array(z.object({
+    desc: z.string(),
+    qty: z.number(),
+    price: z.number(),
+    total: z.number(),
+  }).passthrough()),
+  subtotal: z.number(),
+  discount: z.number().default(0),
+  roundingDifference: z.number().optional(),
+  roundingMethod: z.string().optional(),
+  amountPaid: z.number().default(0),
+  totalAmount: z.number(),
+  status: z.string().optional(),
+  walletBalance: z.number().optional(),
+  totalCustomerOutstanding: z.number().optional(), // Sum of all unpaid invoices for this customer
+});
+
+// 2. Logistics (Work Order/Delivery Note) adds Signature requirements 
+export const LogisticsDocSchema = BaseDocSchema.extend({
+  technician: z.string().optional(), // Specific to Work Orders 
+  instructions: z.string().optional(), // Specific to Work Orders
+  status: z.string().optional(),
+  receivedBy: z.string().optional(), // Specific to Delivery Notes  
+  receivedAt: z.string().optional(),
+  driverName: z.string().optional(),
+  vehicleNo: z.string().optional(),
+  signatureDataUrl: z.string().optional(),
+  proofOfDelivery: z.object({
+    receivedBy: z.string().optional(),
+    timestamp: z.string().optional(),
+    signatureDataUrl: z.string().optional(),
+    signatureInputMode: z.enum(['Draw', 'Upload']).optional(),
+    recipientPhone: z.string().optional(),
+    notes: z.string().optional(),
+    remarks: z.string().optional(),
+    locationStamp: z.object({
+      lat: z.number(),
+      lng: z.number(),
+    }).optional(),
+  }).optional(),
+  notes: z.string().optional(),
+  priority: z.string().optional(),
+  technicalSpecs: z.record(z.string(), z.string()).optional(),
+  materialChecklist: z.array(z.string()).optional(),
+});
+
+// 3. Receipt Schema
+export const ReceiptSchema = z.object({
+  ...VerifiableDocFields,
+  receiptNumber: z.string(),
+  date: z.string(),
+  customerName: z.string(),
+  amountReceived: z.number(),
+  amountApplied: z.number().optional(),
+  amountRetained: z.number().optional(),
+  changeGiven: z.number().optional(),
+  paymentMethod: z.string(),
+  // Display name of the account the payment was received into. Optional:
+  // payments with no accountId resolve to '' and the row is omitted.
+  account: z.string().optional(),
+  appliedInvoices: z.array(z.string()), // ["INV-001", "INV-002"] 
+  appliedOrders: z.array(z.string()).optional(), // ["ORD-001", "ORD-002"]
+  invoiceTotal: z.number().optional(), // Sum of total amount of all applied invoices
+  paymentStatus: z.enum(['PARTIALLY PAID', 'PAID', 'OVERPAID']).optional(),
+  balanceDue: z.number().optional(), // Remaining balance if partially paid
+  overpaymentAmount: z.number().optional(), // Excess amount if overpaid
+  narrative: z.string().optional(), // Specific worded narrative for partial payments
+  currentBalance: z.number(),
+  walletDeposit: z.number().default(0), // Amount moved to wallet if overpaid 
+  calculationVersion: z.number().optional(),
+});
+
+// 3.5 Supplier Payment Schema
+// paymentNumber is the official public voucher number (defaults to the
+// payment record id — the ERP treats the id as the official number).
+// status drives the VERIFIED vs VOID presentation on the portal.
+export const SupplierPaymentSchema = z.object({
+  ...VerifiableDocFields,
+  paymentId: z.string(),
+  paymentNumber: z.string().optional(),
+  date: z.string(),
+  supplierName: z.string(),
+  amountPaid: z.number(),
+  paymentMethod: z.string(),
+  status: z.string().optional(),
+  appliedInvoices: z.array(z.string()), // IDs of bills being paid
+  narrative: z.string().optional(),
+});
+
+// 3.6 POS Receipt Schema
+// passthrough preserves QP markers for receipt desc formatting (pages).
+export const PosReceiptSchema = z.object({
+  ...VerifiableDocFields,
+  receiptNumber: z.string(),
+  date: z.string(),
+  cashierName: z.string(),
+  customerName: z.string().optional(),
+  items: z.array(z.object({
+    desc: z.string(),
+    qty: z.number(),
+    price: z.number(),
+    total: z.number(),
+  }).passthrough()),
+  subtotal: z.number(),
+  discount: z.number().default(0),
+  tax: z.number().default(0),
+  totalAmount: z.number(),
+  paymentMethod: z.string(),
+  amountTendered: z.number(),
+  changeGiven: z.number(),
+  payments: z.array(z.object({
+    method: z.string(),
+    amount: z.number(),
+    accountId: z.string().optional(),
+  })).optional(),
+  footerMessage: z.string().optional(),
+  companyInfo: z.object({
+    name: z.string(),
+    address: z.string(),
+    phone: z.string(),
+    email: z.string().optional(),
+    website: z.string().optional(),
+    footerMessage: z.string().optional(),
+  }).optional(),
+});
+
+// 4. Statement Schema
+// Binds the PDF to ONE immutable statement snapshot (statementNumber +
+// verificationToken). The snapshot — never live ledger data — is what the
+// portal verifies.
+export const StatementSchema = z.object({
+  ...VerifiableDocFields,
+  number: z.string().optional(),
+  statementNumber: z.string().optional(),
+  date: z.string(), // Issue date
+  customerName: z.string(),
+  customerCode: z.string().optional(),
+  address: z.string().optional(),
+  phone: z.string().optional(),
+  email: z.string().optional(),
+  startDate: z.string(),
+  endDate: z.string(),
+  currency: z.string().default('MWK'),
+  openingBalance: z.number().default(0),
+  transactions: z.array(z.object({
+    date: z.string(),
+    reference: z.string(),
+    memo: z.string().optional(),
+    debit: z.number(),
+    credit: z.number(),
+    runningBalance: z.number(),
+    // Bill-details block (frozen only when the statement is issued with Bill
+    // Details on; absent otherwise). Explicit optional fields — required
+    // transaction validation is unchanged; without these, Zod strips the
+    // keys and the PDF renderer never sees them.
+    originalDate: z.string().optional(),
+    status: z.string().optional(),
+    items: z.array(z.object({
+      description: z.string(),
+      qty: z.number().nullable(),
+      price: z.number().nullable(),
+      total: z.number().nullable(),
+    })).optional(),
+  })),
+  totalInvoiced: z.number(),
+  totalReceived: z.number(),
+  finalBalance: z.number(),
+  status: z.string().optional(),
+  // Account scope. A Main statement and a branch statement for the same
+  // customer + period are DIFFERENT documents. Persisted through the schema so
+  // the PDF/QR identifies the exact account — never just the customer name.
+  branchKey: z.string().optional(),
+  subAccountId: z.string().optional(),
+  branchLabel: z.string().optional(),
+  scopeAmbiguous: z.boolean().optional(),
+});
+
+// 6. Sales Exchange Schema
+export const SalesExchangeSchema = z.object({
+  ...VerifiableDocFields,
+  exchangeNumber: z.string(),
+  date: z.string(),
+  customerName: z.string(),
+  address: z.string().optional(),
+  phone: z.string().optional(),
+  invoiceNumber: z.string(),
+  reason: z.string(),
+  remarks: z.string().optional(),
+  items: z.array(z.object({
+    desc: z.string(),
+    qtyReturned: z.number(),
+    qtyReplaced: z.number(),
+    priceDiff: z.number(),
+    replacedProductName: z.string().optional(),
+  })),
+  totalPriceDiff: z.number(),
+});
+
+// 5. Fiscal Report Schema
+export const FiscalReportSchema = z.object({
+  ...VerifiableDocFields,
+  reportName: z.string(),
+  period: z.string(),
+  currency: z.string(),
+  sections: z.array(z.object({
+    title: z.string(),
+    rows: z.array(z.object({
+      label: z.string(),
+      amount: z.number(),
+      prevAmount: z.number().optional(),
+      isTotal: z.boolean().optional(),
+      indent: z.boolean().optional(),
+      subText: z.string().optional()
+    }))
+  })),
+  netPerformance: z.object({
+    label: z.string(),
+    amount: z.number(),
+    prevAmount: z.number().optional()
+  }).optional()
+});
+
+// 7. Subscription Schema
+export const SubscriptionDocSchema = FinancialDocSchema.extend({
+  frequency: z.string().optional(),
+  nextRunDate: z.string().optional(),
+  nextBillingDate: z.string().optional(),
+  billingPeriodStart: z.string().optional(),
+  billingPeriodEnd: z.string().optional(),
+  totalCycles: z.number().optional(),
+  walletBalance: z.number().optional(),
+  autoDeductWallet: z.boolean().optional(),
+  autoEmail: z.boolean().optional(),
+  scheduledDates: z.array(z.string()).optional(),
+  adjustmentSnapshots: z.array(z.object({
+    name: z.string(),
+    type: z.string(),
+    value: z.number(),
+    calculatedAmount: z.number(),
+  })).optional(),
+});
+
+// 8. Examination Invoice Schema
+export const ExaminationInvoiceSchema = FinancialDocSchema.extend({
+  batchId: z.string().optional(),
+  academicYear: z.string().optional(),
+  term: z.string().optional(),
+  examType: z.string().optional(),
+  schoolName: z.string().optional(),
+  subAccountName: z.string().optional(),
+  materialTotal: z.number().optional(),
+  adjustmentTotal: z.number().optional(),
+  preRoundingTotalAmount: z.number().optional(),
+  roundingDifference: z.number().optional(),
+  roundingMethod: z.string().optional(),
+  adjustmentSnapshots: z.array(z.object({
+    name: z.string(),
+    type: z.string(),
+    value: z.number(),
+    calculatedAmount: z.number(),
+  })).optional(),
+  subjects: z.array(z.object({
+    name: z.string(),
+    pages: z.number(),
+    candidates: z.number(),
+    totalSheets: z.number().optional(),
+    internalCost: z.number().optional(),
+    sellingPrice: z.number().optional(),
+  })).optional(),
+  classBreakdown: z.array(z.object({
+    className: z.string(),
+    subjects: z.array(z.string()),
+    totalCandidates: z.number(),
+    chargePerLearner: z.number(),
+    classTotal: z.number(),
+  })).optional(),
+});
+
+// 9. Printing Contract Schema — commercial agreement plus dual-party
+// signatures. Signature blocks are nullable (unsigned / voided states);
+// signatureDataUrl is nullable because the PDF sanitizer converts missing
+// values to null after validation.
+const ContractSignatureSchema = z.object({
+  name: z.string(),
+  role: z.string(),
+  signatureDataUrl: z.string().nullable().optional(),
+  mode: z.enum(['Draw', 'Upload']).optional(),
+  signedAt: z.string(),
+  signedBy: z.string(),
+});
+
+export const PrintingContractSchema = z.object({
+  ...VerifiableDocFields,
+  contractNumber: z.string(),
+  date: z.string(),
+  version: z.number(),
+  status: z.string(),
+  customerName: z.string(),
+  schoolName: z.string().optional(),
+  customerContact: z.string().optional(),
+  customerPhone: z.string().optional(),
+  customerEmail: z.string().optional(),
+  customerAddress: z.string().optional(),
+  customerReference: z.string().optional(),
+  schoolZone: z.string().optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional(),
+  lines: z.array(z.object({
+    desc: z.string(),
+    qty: z.number(),
+    price: z.number(),
+    total: z.number(),
+  }).passthrough()),
+  prepaidAmount: z.number(),
+  maxAssessments: z.number(),
+  assessmentPrice: z.number(),
+  terms: z.string().optional(),
+  notes: z.string().optional(),
+  totalCandidature: z.number().optional(),
+  assessmentSpec: z.string().optional(),
+  chargePerCandidate: z.number().optional(),
+  assessmentSittings: z.string().optional(),
+  printSpecSummary: z.string().optional(),
+  printPaperSummary: z.string().optional(),
+  printColorSummary: z.string().optional(),
+  printTypeSummary: z.string().optional(),
+  printFinishing: z.string().optional(),
+  printPackaging: z.string().optional(),
+  printOrientation: z.string().optional(),
+  pricingRulesSummary: z.string().optional(),
+  deliveryTermsSummary: z.string().optional(),
+  deliveryMethod: z.string().optional(),
+  deliveryTimeline: z.string().optional(),
+  deliveryAddress: z.string().optional(),
+  deliveryNotes: z.string().optional(),
+  vatAmount: z.number().optional(),
+  signatures: z.object({
+    company: ContractSignatureSchema.nullable().optional(),
+    customer: ContractSignatureSchema.nullable().optional(),
+  }).optional(),
+  fullySigned: z.boolean(),
+  contentHash: z.string(),
+  integrityShortCode: z.string().optional(),
+  issuedInvoiceId: z.string().optional(),
+});
+
+// 9.1 Contract Schedule Schema — customer-facing assessment
+// schedule (one row per reserved entitlement unit) with lifecycle
+// counts and schedule totals.
+export const ContractScheduleSchema = z.object({
+  ...VerifiableDocFields,
+  contractNumber: z.string(),
+  date: z.string(),
+  version: z.number(),
+  status: z.string(),
+  customerName: z.string(),
+  schoolName: z.string().optional(),
+  schoolZone: z.string().optional(),
+  customerPhone: z.string().optional(),
+  billedBranch: z.string().optional(),
+  academicYear: z.string().optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional(),
+  schedule: z.array(z.object({
+    sequence: z.number(),
+    assessmentName: z.string(),
+    grade: z.string().optional(),
+    subject: z.string().optional(),
+    assessmentDate: z.string().optional(),
+    status: z.string(),
+    unitPrice: z.number(),
+  }).passthrough()),
+  totalAssessments: z.number(),
+  activeAssessments: z.number().optional(),
+  scheduleComplete: z.boolean(),
+  missingDateSequences: z.array(z.number()),
+  scheduledCount: z.number(),
+  undatedCount: z.number().optional(),
+  consumedCount: z.number(),
+  releasedCount: z.number(),
+  cancelledCount: z.number(),
+  prepaidAmount: z.number(),
+  reservedAmount: z.number(),
+  consumedAmount: z.number(),
+  availableFunds: z.number(),
+  availableFundsSource: z.enum(['generated', 'derived']).optional(),
+  fundPositionConsistent: z.boolean().optional(),
+  fundInconsistencies: z.array(z.string()).optional(),
+  totalValue: z.number(),
+  cancelledValue: z.number().optional(),
+  hashVersion: z.number().optional(),
+  totalCandidature: z.number().optional(),
+  assessmentSpec: z.string().optional(),
+  chargePerCandidate: z.number().optional(),
+  assessmentSittings: z.string().optional(),
+  terms: z.string().optional(),
+  notes: z.string().optional(),
+  /**
+   * Assessments scheduled outside the contract period — disclosed on the
+   * document, never corrected. Absent when every dated assessment is inside.
+   */
+  outOfPeriodRows: z.array(z.object({
+    sequence: z.number(),
+    assessmentName: z.string(),
+    assessmentDate: z.string(),
+    reason: z.enum(['before_period_start', 'after_period_end']),
+  })).optional(),
+  /**
+   * Rows whose recorded price disagrees with the per-candidate pricing basis.
+   */
+  pricingMismatches: z.array(z.object({
+    sequence: z.number(),
+    assessmentName: z.string(),
+    expected: z.number(),
+    recorded: z.number(),
+  })).optional(),
+  /** Value of the released assessments (returned to the available balance). */
+  releasedAmount: z.number().optional(),
+  /** The issued version's own identity — excluded from the content hash. */
+  documentId: z.string().optional(),
+  /** The issued version's own version number — excluded from the content hash. */
+  documentVersion: z.number().optional(),
+  contentHash: z.string(),
+});
+
+// 9.2 Contract Completion Receipt Schema — customer-facing
+// receipt for one consumed assessment: the completed
+// assessment, completion progress against the entitlement,
+// the recognised debit and the resulting fund position.
+export const ContractCompletionReceiptSchema = z.object({
+  ...VerifiableDocFields,
+  receiptNumber: z.string(),
+  contractNumber: z.string(),
+  date: z.string(),
+  version: z.number(),
+  status: z.string(),
+  customerName: z.string(),
+  schoolName: z.string().optional(),
+  academicYear: z.string().optional(),
+  item: z.object({
+    assessmentName: z.string(),
+    grade: z.string().optional(),
+    subject: z.string().optional(),
+    consumedAt: z.string().optional(),
+    unitPrice: z.number(),
+  }).passthrough(),
+  sequence: z.number(),
+  totalAssessments: z.number(),
+  completedToDate: z.number(),
+  remainingAssessments: z.number(),
+  contractValue: z.number(),
+  amountDebited: z.number(),
+  totalConsumedToDate: z.number(),
+  remainingReservedFunds: z.number(),
+  unallocatedFunds: z.number(),
+  walletBalanceAfter: z.number(),
+  walletTransactionId: z.string(),
+  ledgerEntryId: z.string(),
+  notes: z.string().optional(),
+  contentHash: z.string(),
+});
+
+export type FinancialDoc = z.infer<typeof FinancialDocSchema>;export type LogisticsDoc = z.infer<typeof LogisticsDocSchema>;
+export type ReceiptDoc = z.infer<typeof ReceiptSchema>;
+export type SupplierPaymentDoc = z.infer<typeof SupplierPaymentSchema>;
+export type PosReceiptDoc = z.infer<typeof PosReceiptSchema>;
+export type StatementDoc = z.infer<typeof StatementSchema>;
+export type FiscalReportDoc = z.infer<typeof FiscalReportSchema>;
+export type SalesExchangeDoc = z.infer<typeof SalesExchangeSchema>;
+export type SubscriptionDoc = z.infer<typeof SubscriptionDocSchema>;
+export type ExaminationInvoiceDoc = z.infer<typeof ExaminationInvoiceSchema>;
+export type PrintingContractDoc = z.infer<typeof PrintingContractSchema>;
+export type ContractScheduleDoc = z.infer<typeof ContractScheduleSchema>;
+export type ContractCompletionReceiptDoc = z.infer<typeof ContractCompletionReceiptSchema>;
+export type PrimeDocData = FinancialDoc | LogisticsDoc | ReceiptDoc | SupplierPaymentDoc | PosReceiptDoc | StatementDoc | FiscalReportDoc | SalesExchangeDoc | SubscriptionDoc | ExaminationInvoiceDoc | PrintingContractDoc | ContractScheduleDoc | ContractCompletionReceiptDoc;
+
+type UnionKeys<T> = T extends T ? keyof T : never;
+type PickType<T, K extends PropertyKey> = T extends Record<K, infer V> ? V : never;
+
+export type LoosePrimeDocData = {
+  [K in UnionKeys<PrimeDocData>]?: PickType<PrimeDocData, K>;
+};

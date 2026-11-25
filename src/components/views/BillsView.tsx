@@ -10,6 +10,8 @@ import { formatCurrency } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import { ThreeWayMatchInspectionModal } from '../modals/ThreeWayMatchInspectionModal';
+import { BatchPaymentRunModal } from '../modals/BatchPaymentRunModal';
 import {
   Receipt,
   Plus,
@@ -20,6 +22,7 @@ import {
   Copy,
   X,
   Ban,
+  Banknote,
   PackageCheck,
   FilePlus,
   AlertTriangle,
@@ -124,6 +127,9 @@ export const BillsView: React.FC = () => {
   const [applyVcTarget, setApplyVcTarget] = useState<any | null>(null);
   const [applyVcBillId, setApplyVcBillId] = useState<number>(0);
   const [applyVcAmt, setApplyVcAmt] = useState('');
+
+  const [matchModalBill, setMatchModalBill] = useState<ApiBill | null>(null);
+  const [isBatchPayModalOpen, setIsBatchPayModalOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -263,6 +269,80 @@ export const BillsView: React.FC = () => {
                   await loadData();
                 } catch (err: any) {
                   setErrorMsg(err?.message);
+                  throw err;
+                }
+              },
+            } as AdvancedActionDefinition<ApiBill>,
+          ]
+        : []),
+      {
+        id: 'bill.inspect-match',
+        label: bill.matchStatus === 'variance_held' ? 'Inspect Match (Variance)' : 'Inspect 3-Way Match',
+        icon: <ClipboardList className="w-3.5 h-3.5 text-blue-600" />,
+        group: 'process',
+        groupLabel: 'AP Controls',
+        requiredPermission: 'bills:read',
+        isVisible: () => bill.status !== 'voided',
+        execute: async () => { setMatchModalBill(bill); },
+      },
+      ...(canWrite && bill.matchStatus === 'variance_held'
+        ? [
+            {
+              id: 'bill.approve-match-override',
+              label: 'Approve Match Override',
+              icon: <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" />,
+              group: 'process',
+              groupLabel: 'AP Controls',
+              requiredPermission: 'bills:write',
+              confirmation: {
+                title: `Approve match override for ${bill.billNumber}`,
+                message: 'Approve the three-way match variance override. A reason is required for audit.',
+                confirmLabel: 'Approve Override',
+                requireReason: true,
+                reasonLabel: 'Override reason',
+              },
+              execute: async (_ctx, helpers) => {
+                try {
+                  await commercialApi.approveBillMatchOverride(bill.id, helpers.reason || 'Approved override');
+                  triggerShortcutNotice(`Approved match override for ${bill.billNumber}`);
+                  await loadData();
+                } catch (err: any) {
+                  setErrorMsg(err?.message || 'Failed to approve match override');
+                  throw err;
+                }
+              },
+            } as AdvancedActionDefinition<ApiBill>,
+          ]
+        : []),
+      ...(canWrite && bill.status !== 'voided'
+        ? [
+            {
+              id: 'bill.payment-hold',
+              label: bill.paymentHold ? 'Release Payment Hold' : 'Place Payment Hold',
+              icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />,
+              group: 'process',
+              groupLabel: 'AP Controls',
+              requiredPermission: 'bills:write',
+              confirmation: bill.paymentHold
+                ? {
+                    title: `Release payment hold for ${bill.billNumber}`,
+                    message: 'This bill will become eligible for batch payment runs again.',
+                    confirmLabel: 'Release Hold',
+                  }
+                : {
+                    title: `Place payment hold on ${bill.billNumber}`,
+                    message: 'Held bills are excluded from batch disbursement. Provide a reason.',
+                    confirmLabel: 'Place Hold',
+                    requireReason: true,
+                    reasonLabel: 'Hold reason',
+                  },
+              execute: async (_ctx, helpers) => {
+                try {
+                  await commercialApi.setBillPaymentHold(bill.id, !bill.paymentHold, helpers.reason);
+                  triggerShortcutNotice(`${bill.paymentHold ? 'Released' : 'Placed'} payment hold for ${bill.billNumber}`);
+                  await loadData();
+                } catch (err: any) {
+                  setErrorMsg(err?.message || 'Failed to update payment hold');
                   throw err;
                 }
               },
@@ -589,6 +669,12 @@ export const BillsView: React.FC = () => {
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold"
             >
               <DollarSign className="w-3.5 h-3.5" /> Pay Bills
+            </button>
+            <button
+              onClick={() => setIsBatchPayModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-500/40 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 text-xs font-semibold"
+            >
+              <Banknote className="w-3.5 h-3.5" /> Batch Payment Run
             </button>
             <button
               onClick={() => setIsBillModalOpen(true)}
@@ -1752,6 +1838,27 @@ export const BillsView: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {matchModalBill && (
+        <ThreeWayMatchInspectionModal
+          bill={matchModalBill}
+          isOpen={true}
+          onClose={() => setMatchModalBill(null)}
+          onSuccess={() => { setMatchModalBill(null); void loadData(); }}
+        />
+      )}
+
+      {isBatchPayModalOpen && (
+        <BatchPaymentRunModal
+          isOpen={isBatchPayModalOpen}
+          onClose={() => setIsBatchPayModalOpen(false)}
+          onSuccess={() => { setIsBatchPayModalOpen(false); void loadData(); }}
+          bills={bills}
+          bankAccounts={accounts
+            .filter((a: any) => String(a.accountType || a.type || '').toLowerCase() === 'bank')
+            .map((a: any) => ({ id: a.id, name: a.name || a.accountName || `Account ${a.id}`, code: a.code || a.accountCode }))}
+        />
       )}
     </div>
   );

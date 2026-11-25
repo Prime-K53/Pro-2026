@@ -383,7 +383,7 @@ export const NewInvoiceModal: React.FC = () => {
         invoiceDate: date,
         dueDate,
         terms,
-        taxRate: String(taxRate),
+        taxRate: String(Math.max(0, taxPercent)),
         isSalesReceipt,
         notes: notes || undefined,
         lines: payloadLines,

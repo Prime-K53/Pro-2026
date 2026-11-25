@@ -52,5 +52,58 @@ export function createDeliveryRoutes(db: ServerDatabase): Router {
     catch (err) { return handleError(res, err); }
   });
 
+  // ─── Delivery Notes ────────────────────────────────────────────────────────
+
+  router.get('/delivery/notes', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      return res.json({ deliveryNotes: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.listDeliveryNotes(tx, auth.companyId)) });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.post('/delivery/notes', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      if (!req.body?.customerId || !req.body?.dispatchDate) return res.status(400).json({ error: 'customerId and dispatchDate are required' });
+      return res.status(201).json({ deliveryNote: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.createDeliveryNote(tx, auth.companyId, req.body)) });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.get('/delivery/notes/:id', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid id' });
+      return res.json({ deliveryNote: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.getDeliveryNote(tx, auth.companyId, id)) });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.post('/delivery/notes/:id/dispatch', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid id' });
+      return res.json({ deliveryNote: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.dispatchDeliveryNote(tx, auth.companyId, id, req.body || {})) });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.post('/delivery/notes/:id/deliver', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid id' });
+      return res.json({ deliveryNote: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.markDelivered(tx, auth.companyId, id, req.body || {})) });
+    } catch (err) { return handleError(res, err); }
+  });
+
+  router.post('/delivery/notes/:id/cancel', async (req: Request, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid id' });
+      return res.json({ deliveryNote: await db.withCompanyDb(auth.companyId, (tx: Transaction) => deliveryService.cancelDeliveryNote(tx, auth.companyId, id)) });
+    } catch (err) { return handleError(res, err); }
+  });
+
   return router;
 }

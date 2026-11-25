@@ -33,6 +33,8 @@ interface LineState {
   key: string;
   itemId: string;
   quantity: string;
+  lotId: string;
+  lotSearch: string;
 }
 
 let lineSeq = 0;
@@ -40,6 +42,8 @@ const newLine = (itemId = ''): LineState => ({
   key: `l${++lineSeq}`,
   itemId,
   quantity: '',
+  lotId: '',
+  lotSearch: '',
 });
 
 export const StockTransferModal: React.FC<StockTransferModalProps> = ({
@@ -53,9 +57,11 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
   const [toLocation, setToLocation] = useState('Secondary');
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
+  const [transferMode, setTransferMode] = useState<'direct' | 'two_step'>('direct');
   const [lines, setLines] = useState<LineState[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lots, setLots] = useState<any[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -63,9 +69,11 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
     setToLocation('Secondary');
     setDate(new Date().toISOString().slice(0, 10));
     setNotes('');
+    setTransferMode('direct');
     setLines([newLine(initialItemId != null ? String(initialItemId) : '')]);
     setError(null);
     setSubmitting(false);
+    void commercialApi.listInventoryLots().then(setLots).catch(() => setLots([]));
   }, [open, initialItemId]);
 
   if (!open) return null;
@@ -94,7 +102,7 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
     }
     const payload = lines
       .filter(l => l.itemId && Number(l.quantity) > 0)
-      .map(l => ({ itemId: Number(l.itemId), quantity: String(Number(l.quantity)) }));
+      .map(l => ({ itemId: Number(l.itemId), quantity: String(Number(l.quantity)), lotId: l.lotId ? Number(l.lotId) : null }));
 
     if (payload.length === 0) {
       setError('Add at least one line with a quantity greater than zero.');
@@ -109,10 +117,11 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
         toLocation: toLocation.trim(),
         transferDate: date,
         notes: notes.trim() || null,
+        transferMode,
         lines: payload,
       });
       onSuccess(
-        `Transferred ${payload.length} line${payload.length === 1 ? '' : 's'} from ${result.fromLocation} to ${result.toLocation} (${result.transferNumber}) · no journal entry`
+        `Transferred ${payload.length} line${payload.length === 1 ? '' : 's'} from ${result.fromLocation} to ${result.toLocation} (${result.transferNumber}) · ${result.transferMode === 'two_step' ? 'in transit (receive to complete)' : 'no journal entry'}`
       );
       onClose();
     } catch (err: any) {
@@ -169,6 +178,12 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
                 className="app-input font-mono"
               />
             </FormField>
+            <FormField label="Transfer mode">
+              <select value={transferMode} onChange={e => setTransferMode(e.target.value === 'two_step' ? 'two_step' : 'direct')} className="app-input">
+                <option value="direct">Direct (immediate)</option>
+                <option value="two_step">Two-step (dispatch to in-transit, then receive)</option>
+              </select>
+            </FormField>
             <FormField label="Notes">
               <textarea
                 value={notes}
@@ -191,7 +206,7 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
                     <div className="flex items-start gap-2">
                       <select
                         value={line.itemId}
-                        onChange={e => updateLine(line.key, { itemId: e.target.value })}
+                        onChange={e => updateLine(line.key, { itemId: e.target.value, lotId: '', lotSearch: '' })}
                         className="app-input min-w-0 flex-1"
                         aria-label="Item"
                       >
@@ -216,7 +231,7 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <input
                         type="number"
                         min="0"
@@ -228,12 +243,37 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
                         aria-invalid={overdraw}
                         className="app-input w-full font-mono"
                       />
-                      {item && (
-                        <span className="shrink-0 font-mono text-[10px] text-slate-400">
-                          {formatCurrency((Number(line.quantity) || 0) * (Number(item.avgCost) || 0))}
-                        </span>
-                      )}
+                      <input
+                        type="text"
+                        value={line.lotSearch}
+                        onChange={e => updateLine(line.key, { lotSearch: e.target.value })}
+                        placeholder="Search lot..."
+                        aria-label="Search lot"
+                        className="app-input w-full"
+                        disabled={!line.itemId}
+                      />
+                      <select
+                        value={line.lotId}
+                        onChange={e => updateLine(line.key, { lotId: e.target.value })}
+                        className="app-input w-full"
+                        aria-label="Lot"
+                        disabled={!line.itemId}
+                      >
+                        <option value="">No lot</option>
+                        {lots
+                          .filter(l => String(l.itemId) === String(line.itemId))
+                          .filter(l => !line.lotSearch || String(l.lotNumber || '').toLowerCase().includes(line.lotSearch.toLowerCase()) || String(l.supplierRollId || '').toLowerCase().includes(line.lotSearch.toLowerCase()))
+                          .slice(0, 50)
+                          .map(l => (
+                            <option key={l.id} value={l.id}>{l.lotNumber}{l.supplierRollId ? ` · ${l.supplierRollId}` : ''}{l.quantityOnHand != null ? ` (${l.quantityOnHand})` : ''}</option>
+                          ))}
+                      </select>
                     </div>
+                    {item && (
+                      <div className="text-right font-mono text-[10px] text-slate-400">
+                        {formatCurrency((Number(line.quantity) || 0) * (Number(item.avgCost) || 0))}
+                      </div>
+                    )}
                     {overdraw && (
                       <p className="text-[10px] font-semibold text-rose-600 dark:text-rose-400">
                         Exceeds {item?.onHand} at the source location.
@@ -261,7 +301,9 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
           <div className="lg:col-span-2">
             <SummaryRow
               label="Journal impact"
-              value="None — transfers are stock-neutral and do not post a journal entry"
+              value={transferMode === 'two_step'
+                ? 'Dispatch posts DR 1320 Stock in Transit / CR Inventory Asset; receipt reverses it'
+                : 'None — direct transfers are stock-neutral and do not post a journal entry'}
             />
           </div>
 

@@ -1,0 +1,1 @@
+export const normalizeSignatureDataUrl = (value: string) => value || null;

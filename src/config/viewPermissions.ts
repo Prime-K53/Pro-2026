@@ -25,7 +25,7 @@ export const VIEW_REQUIRED_PERMISSION: Record<string, string | null> = {
   accounts: 'accounts:read',
   examinations: 'exams:view',
   'production-schedule': 'printing:read',
-  contracts: 'printing:contracts',
+  contracts: 'printing:contracts:manage',
   inventory: 'inventory:read',
   'inventory-operations': 'inventory:read',
   payroll: 'payroll:read',
@@ -43,11 +43,13 @@ export const VIEW_REQUIRED_PERMISSION: Record<string, string | null> = {
   'kpi-scorecard': 'bi:read',
   'finance-controls': 'approvals:read',
   'delivery-fleet': 'delivery:read',
+  'delivery-notes': 'delivery:read',
+  'leave-management': 'payroll:read',
   health: 'admin:read',
   'system-admin': 'admin:write',
   'ai-agent': 'ai:read',
   'access-control': 'users:manage',
-  settings: 'companies:settings',
+  settings: 'companies:settings:write',
 };
 
 /**

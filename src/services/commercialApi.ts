@@ -46,6 +46,12 @@ export interface ApiInvoice {
   totalCost: number;
   grossProfit: number;
   journalTxnId: number | null;
+  depositAppliedAmount?: number;
+  writeOffAmount?: number;
+  writeOffReason?: string | null;
+  writeOffJournalId?: number | null;
+  disputedAt?: string | null;
+  disputeReason?: string | null;
   notes: string;
   lines: Array<{
     lineOrder: number;
@@ -176,6 +182,8 @@ export interface ApiBill {
   currencyCode: string;
   exchangeRate: number;
   journalTxnId: number | null;
+  paymentHold?: boolean;
+  matchStatus?: 'unmatched' | 'matched' | 'variance_held' | 'approved_override';
   memo: string;
   lines: Array<{
     lineOrder: number;
@@ -275,6 +283,14 @@ function normalizeInvoice(raw: any): ApiInvoice {
     totalCost: Number(raw.totalCostNum ?? raw.total_cost ?? 0),
     grossProfit: Number(raw.grossProfitNum ?? raw.gross_profit ?? 0),
     journalTxnId: raw.journalTxnId !== null && raw.journalTxnId !== undefined ? Number(raw.journalTxnId) : null,
+    depositAppliedAmount: Number(raw.depositAppliedAmount ?? raw.deposit_applied_amount ?? 0),
+    writeOffAmount: Number(raw.writeOffAmount ?? raw.write_off_amount ?? 0),
+    writeOffReason: raw.writeOffReason ?? raw.write_off_reason ?? null,
+    writeOffJournalId: raw.writeOffJournalId !== null && raw.writeOffJournalId !== undefined
+      ? Number(raw.writeOffJournalId)
+      : (raw.write_off_journal_id !== null && raw.write_off_journal_id !== undefined ? Number(raw.write_off_journal_id) : null),
+    disputedAt: raw.disputedAt ?? raw.disputed_at ?? null,
+    disputeReason: raw.disputeReason ?? raw.dispute_reason ?? null,
     notes: raw.notes || '',
     lines: Array.isArray(raw.lines) ? raw.lines : [],
   };
@@ -395,6 +411,33 @@ export const commercialApi = {
     const d = await requestJson<any>(`/api/invoices/${id}/void`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async applyDepositToInvoice(invoiceId: number, amount: number | string, sourceType?: string, idempotencyKey?: string) {
+    const d = await requestJson<any>(`/api/invoices/${invoiceId}/apply-deposit`, {
+      method: 'POST',
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+      body: JSON.stringify({ amount, sourceType }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async writeOffInvoiceBalance(invoiceId: number, amount: number | string, reason: string, expenseAccountId?: number, idempotencyKey?: string) {
+    const d = await requestJson<any>(`/api/invoices/${invoiceId}/write-off`, {
+      method: 'POST',
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+      body: JSON.stringify({ amount, reason, expenseAccountId }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async toggleInvoiceDispute(invoiceId: number, disputeReason?: string, desiredDisputed?: boolean, idempotencyKey?: string) {
+    const d = await requestJson<any>(`/api/invoices/${invoiceId}/toggle-dispute`, {
+      method: 'POST',
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+      body: JSON.stringify({ disputeReason, disputed: desiredDisputed }),
     });
     emitAccountingUpdated();
     return d;
@@ -601,6 +644,36 @@ export const commercialApi = {
     const d = await requestJson<any>(`/api/bills/${id}/void`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async setBillPaymentHold(id: number, hold: boolean, reason?: string) {
+    const d = await requestJson<any>(`/api/bills/${id}/payment-hold`, {
+      method: 'POST',
+      body: JSON.stringify({ hold, reason }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async evaluateBillThreeWayMatch(id: number) {
+    const d = await requestJson<any>(`/api/bills/${id}/match/evaluate`, { method: 'POST' });
+    emitAccountingUpdated();
+    return d;
+  },
+  async approveBillMatchOverride(id: number, reason: string) {
+    const d = await requestJson<any>(`/api/bills/${id}/match/override`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+  async executeBatchPaymentRun(payload: { bankAccountId: number; billIds: number[]; paymentDate?: string; memo?: string; idempotencyKey?: string }) {
+    const d = await requestJson<any>('/api/bill-payments/batch-run', {
+      method: 'POST',
+      headers: payload.idempotencyKey ? { 'Idempotency-Key': payload.idempotencyKey } : undefined,
+      body: JSON.stringify(payload),
     });
     emitAccountingUpdated();
     return d;
@@ -994,6 +1067,8 @@ export const commercialApi = {
       counterAccountId?: number | null;
       unitCost?: string | number | null;
       idempotencyKey?: string;
+      jobReference?: string | null;
+      scrapType?: string | null;
     }
   ) {
     const d = await requestJson<{ damage: any }>(`/api/inventory/${id}/damage`, {
@@ -1002,6 +1077,22 @@ export const commercialApi = {
     });
     emitAccountingUpdated();
     return d.damage;
+  },
+  async recordScrapWriteOff(
+    id: number,
+    payload: { quantity: string | number; reason?: string | null; reasonCode?: string | null; jobReference?: string | null; damageDate?: string | null }
+  ) {
+    const d = await requestJson<{ scrap: any }>(`/api/inventory/${id}/scrap`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.scrap;
+  },
+  async receiveStockTransfer(id: number, payload?: { lines?: Array<{ lineId?: number; itemId?: number; variantId?: number | null; lotId?: number | null; receivedQty: string | number }>; idempotencyKey?: string }) {
+    const d = await requestJson<{ transfer: any }>(`/api/inventory/transfers/${id}/receive`, { method: 'POST', body: JSON.stringify(payload || {}) });
+    emitAccountingUpdated();
+    return d.transfer;
   },
 
   /** Deactivate an item (requires zero on-hand stock and no historical references). */
@@ -1013,13 +1104,34 @@ export const commercialApi = {
     return d.item;
   },
 
+  async listStockTransfers(status?: string) {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const d = await requestJson<{ transfers: any[] }>(`/api/inventory/transfers${qs}`);
+    return d.transfers || [];
+  },
+  async getStockTransfer(id: number) {
+    const d = await requestJson<{ transfer: any }>(`/api/inventory/transfers/${id}`);
+    return d.transfer;
+  },
+  async listInventoryLots(itemId?: number) {
+    const qs = itemId ? `?itemId=${encodeURIComponent(String(itemId))}` : '';
+    const d = await requestJson<{ lots: any[] }>(`/api/inventory/lots${qs}`);
+    return d.lots || [];
+  },
+  async createInventoryLot(payload: { itemId: number; lotNumber: string; supplierRollId?: string | null; paperGrain?: string | null; receiptDate?: string | null; expiryDate?: string | null; quantityOnHand?: string | number | null }) {
+    const d = await requestJson<{ lot: any }>('/api/inventory/lots', { method: 'POST', body: JSON.stringify(payload) });
+    emitAccountingUpdated();
+    return d.lot;
+  },
+
   /** Move stock between storage locations. Stock-neutral, posts no journal. */
   async transferStock(payload: {
     fromLocation?: string | null;
     toLocation?: string | null;
     transferDate?: string | null;
     notes?: string | null;
-    lines: Array<{ itemId: number; quantity: string | number; variantId?: number | null }>;
+    transferMode?: 'direct' | 'two_step';
+    lines: Array<{ itemId: number; quantity: string | number; variantId?: number | null; lotId?: number | null }>;
   }) {
     const d = await requestJson<{ transfer: any }>('/api/inventory/transfer', {
       method: 'POST',
@@ -1187,4 +1299,58 @@ export const commercialApi = {
     emitAccountingUpdated();
     return d.estimate;
   },
+
+  // Module 4: Production / Machine Ops
+  async assignJobMachine(jobId: number, payload: { machineId: number; notes?: string | null }) {
+    const d = await requestJson<any>(`/api/production/jobs/${jobId}/assign-machine`, { method: 'POST', body: JSON.stringify(payload) });
+    emitAccountingUpdated(); return d.assignment;
+  },
+  async moveJobStage(jobId: number, payload: { toStatus: string; reason?: string | null }) {
+    const d = await requestJson<any>(`/api/production/jobs/${jobId}/move-stage`, { method: 'POST', body: JSON.stringify(payload) });
+    emitAccountingUpdated(); return d.job;
+  },
+  async logMachineDowntime(machineId: number, payload: any) {
+    const d = await requestJson<any>(`/api/production/machines/${machineId}/downtime`, { method: 'POST', body: JSON.stringify(payload) });
+    emitAccountingUpdated(); return d.downtime;
+  },
+  async listMachineDowntime(machineId: number) {
+    const d = await requestJson<any>(`/api/production/machines/${machineId}/downtime`);
+    return d.events || [];
+  },
+
+  // Module 5: Expenses
+  async createExpenseClaim(payload: any) { const d = await requestJson<any>('/api/expenses/claims', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.claim; },
+  async submitExpenseClaim(id: number) { const d = await requestJson<any>(`/api/expenses/claims/${id}/submit`, { method: 'POST' }); emitAccountingUpdated(); return d.claim; },
+  async approveExpenseClaim(id: number) { const d = await requestJson<any>(`/api/expenses/claims/${id}/approve`, { method: 'POST' }); emitAccountingUpdated(); return d.claim; },
+  async rejectExpenseClaim(id: number, reason?: string) { const d = await requestJson<any>(`/api/expenses/claims/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }); emitAccountingUpdated(); return d.claim; },
+  async reimburseExpenseClaim(id: number, payload: { bankAccountId: number; idempotencyKey?: string }) { const d = await requestJson<any>(`/api/expenses/claims/${id}/reimburse`, { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.claim; },
+  async listExpenseClaims() { const d = await requestJson<any>('/api/expenses/claims'); return d.claims || []; },
+
+  // Module 6: Banking controls
+  async listBankReconRules() { const d = await requestJson<any>('/api/banking/recon-rules'); return d.rules || []; },
+  async upsertBankReconRule(payload: any) { const d = await requestJson<any>('/api/banking/recon-rules', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.rule; },
+  async exportBankReconRules() { return requestJson<any>('/api/banking/recon-rules/export'); },
+  async importBankReconRules(rules: any[]) { const d = await requestJson<any>('/api/banking/recon-rules/import', { method: 'POST', body: JSON.stringify({ rules }) }); emitAccountingUpdated(); return d; },
+  async getBankGlDrilldown(accountId: number) { const d = await requestJson<any>(`/api/banking/accounts/${accountId}/gl-drilldown`); return d.rows || []; },
+
+  // Module 7: Tax controls
+  async listTaxFilingPeriods() { const d = await requestJson<any>('/api/tax/filing-periods'); return d.periods || []; },
+  async upsertTaxFilingPeriod(payload: any) { const d = await requestJson<any>('/api/tax/filing-periods', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.period; },
+  async fileTaxFilingPeriod(id: number, reference?: string) { const d = await requestJson<any>(`/api/tax/filing-periods/${id}/file`, { method: 'POST', body: JSON.stringify({ reference }) }); emitAccountingUpdated(); return d.period; },
+  async listTaxAccountMappings() { const d = await requestJson<any>('/api/tax/account-mappings'); return d.mappings || []; },
+  async upsertTaxAccountMapping(payload: any) { const d = await requestJson<any>('/api/tax/account-mappings', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.mapping; },
+
+  // Module 8: Reporting controls
+  async listReportExportSnapshots(reportKey?: string) { const qs = reportKey ? `?reportKey=${encodeURIComponent(reportKey)}` : ''; const d = await requestJson<any>(`/api/reports/export-snapshots${qs}`); return d.snapshots || []; },
+  async createReportExportSnapshot(payload: any) { const d = await requestJson<any>('/api/reports/export-snapshots', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.snapshot; },
+
+  // Module 9: Document control
+  async listDocumentVersions(entityType: string, entityId: number) { const d = await requestJson<any>(`/api/documents/${encodeURIComponent(entityType)}/${entityId}/versions`); return d.documents || []; },
+  async approveDocument(id: number, approved: boolean, reason?: string | null) { const d = await requestJson<any>(`/api/documents/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved, reason }) }); emitAccountingUpdated(); return d.document; },
+  async setDocumentRetention(id: number, retentionUntil: string | null) { const d = await requestJson<any>(`/api/documents/${id}/retention`, { method: 'POST', body: JSON.stringify({ retentionUntil }) }); emitAccountingUpdated(); return d.document; },
+
+  // Module 10: Accounting controls
+  async listAccountingControlEvents(limit = 100) { const d = await requestJson<any>(`/api/accounting/control-events?limit=${limit}`); return d.events || []; },
+  async logAccountingControlEvent(payload: any) { const d = await requestJson<any>('/api/accounting/control-events', { method: 'POST', body: JSON.stringify(payload) }); emitAccountingUpdated(); return d.event; },
+  async setJournalApprovalStatus(id: number, status: 'approved' | 'rejected', reason?: string | null) { const d = await requestJson<any>(`/api/accounting/journals/${id}/approval`, { method: 'POST', body: JSON.stringify({ status, reason }) }); emitAccountingUpdated(); return d.journal; },
 };

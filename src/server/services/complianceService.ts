@@ -192,6 +192,7 @@ export interface Vendor1099Row {
   is1099Eligible: boolean;
   totalPaid: number;
   paymentCount: number;
+  totalWithheld: number;
 }
 
 export async function getVendor1099Summary(
@@ -200,17 +201,19 @@ export async function getVendor1099Summary(
   year: number
 ): Promise<{ year: number; vendors: Vendor1099Row[]; totalPaid: number }> {
   const res = await tx.query<{
-    vendor_id: number;
-    vendor_name: string;
-    company_name: string;
-    ein_or_ssn: string | null;
-    is_1099_eligible: boolean;
-    total_paid: string;
-    payment_count: string;
-  }>(
+            vendor_id: number;
+            vendor_name: string;
+            company_name: string;
+            ein_or_ssn: string | null;
+            is_1099_eligible: boolean;
+            total_paid: string;
+            payment_count: string;
+            total_withheld: string;
+          }>(
     `SELECT v.id AS vendor_id, v.name AS vendor_name, v.company_name,
             v.ein_or_ssn, v.is_1099_eligible,
             COALESCE(SUM(bp.amount), 0)::text AS total_paid,
+            COALESCE(SUM(bp.withholding_tax_amount), 0)::text AS total_withheld,
             COUNT(bp.id)::text AS payment_count
        FROM vendors v
        LEFT JOIN bill_payments bp
@@ -228,14 +231,15 @@ export async function getVendor1099Summary(
     companyName: r.company_name,
     tin: r.ein_or_ssn,
     is1099Eligible: Boolean(r.is_1099_eligible),
-    totalPaid: Number(r.total_paid),
+    totalPaid: Number(r.total_paid) + Number(r.total_withheld),
     paymentCount: Number(r.payment_count),
+    totalWithheld: Number(r.total_withheld),
   }));
 
   const totalPaid = vendors.reduce((s, v) => s + v.totalPaid, 0);
   await writeAuditLog(tx, {
     companyId,
-    actorUserId: 0,
+    actorUserId: null,
     actorUsername: 'system',
     action: 'compliance.vendor_1099_summary',
     tableName: 'vendors',

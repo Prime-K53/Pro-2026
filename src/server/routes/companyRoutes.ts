@@ -81,6 +81,70 @@ async function writePrintingPricingSettings(
   }
 }
 
+/**
+ * Additional company-scoped settings stored as `company_settings` key/value
+ * rows (not legal-entity columns): branding, document defaults, banking and
+ * payment-term policy. Each is validated here and audited on write.
+ */
+const COMPANY_SETTING_KEYS = {
+  defaultBankAccountId: 'company.default_bank_account_id',
+  defaultPaymentTerms: 'company.default_payment_terms',
+  logoBase64: 'branding.logo_base64',
+  signatureBase64: 'branding.signature_base64',
+  documentFooter: 'documents.footer_text',
+  invoiceNumberPrefix: 'documents.invoice_number_prefix',
+  defaultTaxCode: 'documents.default_tax_code',
+} as const;
+
+type CompanySettingsKey = keyof typeof COMPANY_SETTING_KEYS;
+
+const COMPANY_SETTING_DEFAULTS: Record<CompanySettingsKey, string> = {
+  defaultBankAccountId: '',
+  defaultPaymentTerms: 'Due on Receipt',
+  logoBase64: '',
+  signatureBase64: '',
+  documentFooter: '',
+  invoiceNumberPrefix: '',
+  defaultTaxCode: '',
+};
+
+async function readCompanySettings(
+  tx: { query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }> },
+  companyId: number
+): Promise<Record<CompanySettingsKey, string>> {
+  const r = await tx.query<{ setting_key: string; setting_value: string | null }>(
+    `SELECT setting_key, setting_value
+       FROM company_settings
+      WHERE company_id = $1 AND setting_key = ANY($2::TEXT[])`,
+    [companyId, Object.values(COMPANY_SETTING_KEYS)]
+  );
+  const byKey = new Map(r.rows.map(row => [row.setting_key, row.setting_value]));
+  const out = {} as Record<CompanySettingsKey, string>;
+  for (const key of Object.keys(COMPANY_SETTING_KEYS) as CompanySettingsKey[]) {
+    const raw = byKey.get(COMPANY_SETTING_KEYS[key]);
+    out[key] = raw === null || raw === undefined ? COMPANY_SETTING_DEFAULTS[key] : raw;
+  }
+  return out;
+}
+
+async function writeCompanySettings(
+  tx: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  companyId: number,
+  values: Partial<Record<CompanySettingsKey, string>>
+): Promise<void> {
+  for (const key of Object.keys(values) as CompanySettingsKey[]) {
+    const value = values[key];
+    if (value === undefined) continue;
+    await tx.query(
+      `INSERT INTO company_settings (company_id, setting_key, setting_value)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (company_id, setting_key)
+       DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()`,
+      [companyId, COMPANY_SETTING_KEYS[key], value]
+    );
+  }
+}
+
 export function createCompanyRouter(db: ServerDatabase): Router {
   const router = Router();
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
@@ -205,15 +269,23 @@ export function createCompanyRouter(db: ServerDatabase): Router {
         name: string;
         legal_name: string;
         tax_id_ein: string | null;
+        address: string | null;
+        city_state_zip: string | null;
+        phone: string | null;
+        email: string | null;
+        website: string | null;
         currency_symbol: string;
         base_currency: string;
         fiscal_year_start_month: number;
         accounting_method: string;
         sales_tax_rate: string;
+        rounding_mode: string;
+        decimal_places: number;
         theme: string;
       }>(
-        `SELECT id, slug, name, legal_name, tax_id_ein, currency_symbol, base_currency,
-                fiscal_year_start_month, accounting_method, sales_tax_rate::text, theme
+        `SELECT id, slug, name, legal_name, tax_id_ein, address, city_state_zip, phone, email, website,
+                currency_symbol, base_currency, fiscal_year_start_month, accounting_method,
+                sales_tax_rate::text, rounding_mode, decimal_places, theme
            FROM companies WHERE id = $1`,
         [auth.companyId]
       );
@@ -223,6 +295,9 @@ export function createCompanyRouter(db: ServerDatabase): Router {
     const printingPricing = await db.withCompanyDb(auth.companyId, tx =>
       readPrintingPricingSettings(tx, auth.companyId)
     );
+    const extraSettings = await db.withCompanyDb(auth.companyId, tx =>
+      readCompanySettings(tx, auth.companyId)
+    );
 
     return res.json({
       id: Number(company.id),
@@ -230,15 +305,29 @@ export function createCompanyRouter(db: ServerDatabase): Router {
       name: company.name,
       legalName: company.legal_name,
       ein: company.tax_id_ein,
+      address: company.address ?? '',
+      cityStateZip: company.city_state_zip ?? '',
+      phone: company.phone ?? '',
+      email: company.email ?? '',
+      website: company.website ?? '',
       currencySymbol: company.currency_symbol,
       baseCurrency: company.base_currency,
       fiscalYearStartMonth: Number(company.fiscal_year_start_month),
       accountingMethod: company.accounting_method,
       salesTaxRate: Number(company.sales_tax_rate),
+      roundingMode: company.rounding_mode,
+      decimalPlaces: Number(company.decimal_places),
       theme: company.theme,
       role: auth.role,
       extraTypingFinishingPerPage: printingPricing.extraTypingFinishingPerPage,
       manualSellingPricePerSheet: printingPricing.manualSellingPricePerSheet,
+      defaultBankAccountId: extraSettings.defaultBankAccountId,
+      defaultPaymentTerms: extraSettings.defaultPaymentTerms,
+      logoBase64: extraSettings.logoBase64,
+      signatureBase64: extraSettings.signatureBase64,
+      documentFooter: extraSettings.documentFooter,
+      invoiceNumberPrefix: extraSettings.invoiceNumberPrefix,
+      defaultTaxCode: extraSettings.defaultTaxCode,
     });
   });
 
@@ -250,13 +339,34 @@ export function createCompanyRouter(db: ServerDatabase): Router {
     requirePermission('companies:settings:write'),
     async (req: Request, res: Response) => {
       const auth = req.auth!;
-      const allowedName = req.body?.name !== undefined ? String(req.body.name).trim() : null;
-      const allowedLegal = req.body?.legalName !== undefined ? String(req.body.legalName).trim() : null;
-      const allowedEin = req.body?.ein !== undefined ? String(req.body.ein).trim() : null;
-      const allowedTaxRate = req.body?.salesTaxRate !== undefined ? Number(req.body.salesTaxRate) : null;
+      const body = req.body ?? {};
+      const str = (v: unknown): string | null =>
+        v !== undefined ? String(v).trim() : null;
+
+      const allowedName = str(body.name);
+      const allowedLegal = str(body.legalName);
+      const allowedEin = str(body.ein);
+      const allowedAddress = str(body.address);
+      const allowedCity = str(body.cityStateZip);
+      const allowedPhone = str(body.phone);
+      const allowedEmail = str(body.email);
+      const allowedWebsite = str(body.website);
+      const allowedTheme = str(body.theme);
+      const allowedRounding = str(body.roundingMode);
+      const allowedTaxRate = body.salesTaxRate !== undefined ? Number(body.salesTaxRate) : null;
+      const allowedDecimals = body.decimalPlaces !== undefined ? Number(body.decimalPlaces) : null;
 
       if (allowedTaxRate !== null && (!Number.isFinite(allowedTaxRate) || allowedTaxRate < 0 || allowedTaxRate > 100)) {
         return res.status(400).json({ error: 'salesTaxRate must be between 0 and 100' });
+      }
+      if (allowedDecimals !== null && (!Number.isInteger(allowedDecimals) || allowedDecimals < 2 || allowedDecimals > 4)) {
+        return res.status(400).json({ error: 'decimalPlaces must be between 2 and 4' });
+      }
+      if (allowedRounding !== null && !['HALF_EVEN', 'HALF_UP'].includes(allowedRounding)) {
+        return res.status(400).json({ error: 'roundingMode must be HALF_EVEN or HALF_UP' });
+      }
+      if (allowedTheme !== null && !['classic', 'slate', 'midnight'].includes(allowedTheme)) {
+        return res.status(400).json({ error: 'theme must be classic, slate, or midnight' });
       }
 
       const parsePricing = (raw: unknown): number | undefined | null => {
@@ -265,17 +375,29 @@ export function createCompanyRouter(db: ServerDatabase): Router {
         if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return null;
         return Math.round(n * 10000) / 10000;
       };
-      const pricingExtra = parsePricing(req.body?.extraTypingFinishingPerPage);
-      const pricingSheet = parsePricing(req.body?.manualSellingPricePerSheet);
+      const pricingExtra = parsePricing(body.extraTypingFinishingPerPage);
+      const pricingSheet = parsePricing(body.manualSellingPricePerSheet);
       if (pricingExtra === null || pricingSheet === null) {
         return res.status(400).json({
           error: 'Printing pricing defaults must be positive amounts',
         });
       }
 
+      // Company-scoped key/value settings (branding, document defaults, banking, terms).
+      const extraPatch: Partial<Record<CompanySettingsKey, string>> = {};
+      if (body.defaultBankAccountId !== undefined) extraPatch.defaultBankAccountId = str(body.defaultBankAccountId) ?? '';
+      if (body.defaultPaymentTerms !== undefined) extraPatch.defaultPaymentTerms = str(body.defaultPaymentTerms) ?? '';
+      if (body.logoBase64 !== undefined) extraPatch.logoBase64 = str(body.logoBase64) ?? '';
+      if (body.signatureBase64 !== undefined) extraPatch.signatureBase64 = str(body.signatureBase64) ?? '';
+      if (body.documentFooter !== undefined) extraPatch.documentFooter = str(body.documentFooter) ?? '';
+      if (body.invoiceNumberPrefix !== undefined) extraPatch.invoiceNumberPrefix = str(body.invoiceNumberPrefix) ?? '';
+      if (body.defaultTaxCode !== undefined) extraPatch.defaultTaxCode = str(body.defaultTaxCode) ?? '';
+
       const updated = await db.withSystemDb(async tx => {
         const before = await tx.query<Record<string, unknown>>(
-          `SELECT name, legal_name, tax_id_ein, sales_tax_rate::text FROM companies WHERE id = $1`,
+          `SELECT name, legal_name, tax_id_ein, address, city_state_zip, phone, email, website,
+                  sales_tax_rate::text, rounding_mode, decimal_places, theme
+             FROM companies WHERE id = $1`,
           [auth.companyId]
         );
 
@@ -284,10 +406,23 @@ export function createCompanyRouter(db: ServerDatabase): Router {
               SET name = COALESCE($1, name),
                   legal_name = COALESCE($2, legal_name),
                   tax_id_ein = COALESCE($3, tax_id_ein),
-                  sales_tax_rate = COALESCE($4, sales_tax_rate)
-            WHERE id = $5
-            RETURNING id, slug, name, legal_name, tax_id_ein, sales_tax_rate::text, currency_symbol`,
-          [allowedName, allowedLegal, allowedEin, allowedTaxRate, auth.companyId]
+                  address = COALESCE($4, address),
+                  city_state_zip = COALESCE($5, city_state_zip),
+                  phone = COALESCE($6, phone),
+                  email = COALESCE($7, email),
+                  website = COALESCE($8, website),
+                  sales_tax_rate = COALESCE($9, sales_tax_rate),
+                  rounding_mode = COALESCE($10, rounding_mode),
+                  decimal_places = COALESCE($11, decimal_places),
+                  theme = COALESCE($12, theme)
+            WHERE id = $13
+            RETURNING id, slug, name, legal_name, tax_id_ein, address, city_state_zip, phone, email, website,
+                      sales_tax_rate::text, rounding_mode, decimal_places, theme, currency_symbol`,
+          [
+            allowedName, allowedLegal, allowedEin, allowedAddress, allowedCity,
+            allowedPhone, allowedEmail, allowedWebsite, allowedTaxRate,
+            allowedRounding, allowedDecimals, allowedTheme, auth.companyId,
+          ]
         );
 
         await writeAuditLog(tx, {
@@ -321,6 +456,23 @@ export function createCompanyRouter(db: ServerDatabase): Router {
             recordId: auth.companyId,
             oldValues: before,
             newValues: { ...before, ...pricingPatch },
+          });
+        });
+      }
+
+      if (Object.keys(extraPatch).length > 0) {
+        await db.withCompanyDb(auth.companyId, async tx => {
+          const before = await readCompanySettings(tx, auth.companyId);
+          await writeCompanySettings(tx, auth.companyId, extraPatch);
+          await writeAuditLog(tx, {
+            companyId: auth.companyId,
+            actorUserId: auth.userId,
+            actorUsername: auth.username,
+            action: 'COMPANY_PREFERENCES_UPDATED',
+            tableName: 'company_settings',
+            recordId: auth.companyId,
+            oldValues: before,
+            newValues: { ...before, ...extraPatch },
           });
         });
       }

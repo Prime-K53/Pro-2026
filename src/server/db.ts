@@ -74,6 +74,7 @@ async function seedDefaultCoa(tx: SqlExecutor, companyId: number): Promise<Recor
        ($1, '6100', 'Payroll Expenses', 'Expense', 'expense', NULL, 'debit', true, false, false, 0.0000),
        ($1, '6200', 'Rent & Utilities Expense', 'Expense', 'expense', NULL, 'debit', true, false, false, 0.0000),
        ($1, '6300', 'Depreciation & Press Wear', 'Expense', 'expense', NULL, 'debit', true, false, false, 0.0000),
+       ($1, '6320', 'Bad Debt Expense', 'Expense', 'expense', NULL, 'debit', true, false, false, 0.0000),
        ($1, '6810', 'Bank Charges & Fees', 'Expense', 'expense', NULL, 'debit', true, false, false, 0.0000),
        ($1, '6900', 'Other Non-Operating Expense', 'OtherExpense', 'other_expense', NULL, 'debit', true, false, false, 0.0000)
      RETURNING id, code`,
@@ -306,14 +307,14 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
 
     await tx.query(
       `INSERT INTO inventory_items (
-         company_id, sku, name, item_type, description, unit_cost, sales_price, on_hand, reorder_point,
+         company_id, sku, name, item_type, description, unit_cost, avg_cost, sales_price, on_hand, reorder_point,
          purchase_unit, usage_unit, conversion_factor, asset_account_id, cogs_account_id, income_account_id
        ) VALUES
-         ($1, 'RM-A4-80G', 'A4 80gsm White Bond Paper', 'raw_material', 'Internal press paper ream', 145.000000, 0.0000, 120.000000, 25.000000, 'Ream', 'Sheet', 500.000000, $2, $3, $4),
-         ($1, 'RM-TONER-K', 'Kyocera TK-1124 Toner Cartridge', 'raw_material', 'Black toner cartridge for press', 320.000000, 0.0000, 40.000000, 8.000000, 'Cartridge', 'Impression', 10000.000000, $2, $3, $4),
-         ($1, 'PP-EXBOOK-A4', 'Custom School Exercise Book', 'printed_product', 'Non-stocked BOM printed item', 6.400000, 14.0000, 0.000000, 0.000000, 'Book', 'Book', 1.000000, $2, $3, $4),
-         ($1, 'ST-PEN-BOX', 'Blue Ballpoint Pen Box (12s)', 'stationery', 'Stocked retail stationery', 18.000000, 32.0000, 48.000000, 10.000000, 'Box', 'Box', 1.000000, $2, $3, $4),
-         ($1, 'PS-DUPLEX-EXAM', 'Duplex Exam Printing Service', 'printing_service', 'Automated duplex press service', 0.390000, 1.2500, 0.000000, 0.000000, 'Page', 'Page', 1.000000, $2, $3, $4)`,
+         ($1, 'RM-A4-80G', 'A4 80gsm White Bond Paper', 'raw_material', 'Internal press paper ream', 145.000000, 145.000000, 0.0000, 120.000000, 25.000000, 'Ream', 'Sheet', 500.000000, $2, $3, $4),
+         ($1, 'RM-TONER-K', 'Kyocera TK-1124 Toner Cartridge', 'raw_material', 'Black toner cartridge for press', 320.000000, 320.000000, 0.0000, 40.000000, 8.000000, 'Cartridge', 'Impression', 10000.000000, $2, $3, $4),
+         ($1, 'PP-EXBOOK-A4', 'Custom School Exercise Book', 'printed_product', 'Non-stocked BOM printed item', 6.400000, 6.400000, 14.0000, 0.000000, 0.000000, 'Book', 'Book', 1.000000, $2, $3, $4),
+         ($1, 'ST-PEN-BOX', 'Blue Ballpoint Pen Box (12s)', 'stationery', 'Stocked retail stationery', 18.000000, 18.000000, 32.0000, 48.000000, 10.000000, 'Box', 'Box', 1.000000, $2, $3, $4),
+         ($1, 'PS-DUPLEX-EXAM', 'Duplex Exam Printing Service', 'printing_service', 'Automated duplex press service', 0.390000, 0.390000, 1.2500, 0.000000, 0.000000, 'Page', 'Page', 1.000000, $2, $3, $4)`,
       [compA.companyId, compA.accountsByCode['1200'], compA.accountsByCode['5000'], compA.accountsByCode['4000']]
     );
 
@@ -563,10 +564,10 @@ async function seedDemoWorkspaceIfEmpty(db: ServerDatabase): Promise<void> {
     );
     await tx.query(
       `INSERT INTO inventory_items (
-         company_id, sku, name, item_type, description, unit_cost, sales_price, on_hand, reorder_point,
+         company_id, sku, name, item_type, description, unit_cost, avg_cost, sales_price, on_hand, reorder_point,
          purchase_unit, usage_unit, conversion_factor, asset_account_id, cogs_account_id, income_account_id
        ) VALUES (
-         $1, 'CB-NCR-A4', 'Carbonless NCR Receipt Pads', 'printed_product', 'Company B exclusive book', 22.000000, 45.0000, 0.000000, 0.000000,
+         $1, 'CB-NCR-A4', 'Carbonless NCR Receipt Pads', 'printed_product', 'Company B exclusive book', 22.000000, 22.000000, 45.0000, 0.000000, 0.000000,
          'Pad', 'Pad', 1.000000, $2, $3, $4
        )`,
       [compB.companyId, compB.accountsByCode['1200'], compB.accountsByCode['5000'], compB.accountsByCode['4000']]

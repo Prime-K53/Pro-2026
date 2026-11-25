@@ -46,6 +46,9 @@ import {
   voidCreditMemo,
   voidCustomerPayment,
   voidInvoice,
+  applyDepositToInvoice,
+  writeOffInvoiceBalance,
+  toggleInvoiceDispute,
 } from '../services/salesService.ts';
 import {
   listFxRevaluationRuns,
@@ -442,6 +445,67 @@ export function createSalesRouter(db: ServerDatabase): Router {
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid invoice id' });
       const result = await db.withCompanyDb(req.auth!.companyId, tx =>
         voidInvoice(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.post('/invoices/:id/apply-deposit', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid invoice id' });
+      const amount = req.body?.amount;
+      if (!amount) return res.status(400).json({ error: 'amount is required' });
+      const idempotencyKey = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        applyDepositToInvoice(tx, req.auth!.companyId, toActor(req), {
+          invoiceId: id,
+          amount,
+          sourceType: req.body?.sourceType,
+          idempotencyKey,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.post('/invoices/:id/write-off', requirePermission('invoices:writeoff'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid invoice id' });
+      const { amount, reason, expenseAccountId } = req.body || {};
+      const cleanReason = String(reason || '').trim();
+      if (!amount || !cleanReason) return res.status(400).json({ error: 'amount and reason are required' });
+      const idempotencyKey = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        writeOffInvoiceBalance(tx, req.auth!.companyId, toActor(req), {
+          invoiceId: id,
+          amount,
+          reason: cleanReason,
+          expenseAccountId: expenseAccountId ? Number(expenseAccountId) : undefined,
+          idempotencyKey,
+        })
+      );
+      return res.json(result);
+    } catch (err) {
+      return handleSalesError(res, err);
+    }
+  });
+
+  router.post('/invoices/:id/toggle-dispute', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid invoice id' });
+      const idempotencyKey = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const desiredDisputed = typeof req.body?.disputed === 'boolean'
+        ? req.body.disputed
+        : (typeof req.body?.desiredDisputed === 'boolean' ? req.body.desiredDisputed : undefined);
+      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
+        toggleInvoiceDispute(tx, req.auth!.companyId, toActor(req), id, req.body?.disputeReason, { desiredDisputed, idempotencyKey })
       );
       return res.json(result);
     } catch (err) {

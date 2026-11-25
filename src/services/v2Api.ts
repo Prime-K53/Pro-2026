@@ -380,6 +380,78 @@ export const deliveryApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  notes: () => requestJson<{ deliveryNotes: any[] }>('/api/delivery/notes'),
+  getNote: (id: number) => requestJson<{ deliveryNote: any }>(`/api/delivery/notes/${id}`),
+  createNote: (payload: {
+    customerId: number;
+    dispatchDate: string;
+    driverName?: string;
+    vehicleReg?: string;
+    notes?: string;
+    deliveryCost?: number;
+    lines?: Array<{ description: string; quantityDispatched: number; printingJobId?: number; examPaperId?: number }>;
+  }) =>
+    requestJson<{ deliveryNote: any }>('/api/delivery/notes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  dispatchNote: (id: number, payload?: { driverName?: string; vehicleReg?: string }) =>
+    requestJson<{ deliveryNote: any }>(`/api/delivery/notes/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  markDelivered: (id: number, payload?: { recipientName?: string; notes?: string }) =>
+    requestJson<{ deliveryNote: any }>(`/api/delivery/notes/${id}/deliver`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  cancelNote: (id: number) =>
+    requestJson<{ deliveryNote: any }>(`/api/delivery/notes/${id}/cancel`, {
+      method: 'POST',
+    }),
+};
+
+export const leaveApi = {
+  types: () => requestJson<{ leaveTypes: any[] }>('/api/leave/types'),
+  createType: (payload: { code: string; name: string; accrualDays?: number; maxCarryForward?: number; isPaid?: boolean }) =>
+    requestJson<{ leaveType: any }>('/api/leave/types', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  requests: (params?: { employeeId?: number; status?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.employeeId) q.set('employeeId', String(params.employeeId));
+    if (params?.status) q.set('status', params.status);
+    const qs = q.toString();
+    return requestJson<{ requests: any[] }>(`/api/leave/requests${qs ? `?${qs}` : ''}`);
+  },
+  createRequest: (payload: {
+    employeeId: number;
+    leaveTypeId: number;
+    startDate: string;
+    endDate: string;
+    daysRequested: number;
+    reason?: string;
+  }) =>
+    requestJson<{ request: any }>('/api/leave/requests', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  approveRequest: (id: number) =>
+    requestJson<{ request: any }>(`/api/leave/requests/${id}/approve`, {
+      method: 'POST',
+    }),
+  rejectRequest: (id: number, reason: string) =>
+    requestJson<{ request: any }>(`/api/leave/requests/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectionReason: reason }),
+    }),
+  cancelRequest: (id: number) =>
+    requestJson<{ request: any }>(`/api/leave/requests/${id}/cancel`, {
+      method: 'POST',
+    }),
+  balances: (employeeId: number, year?: number) =>
+    requestJson<{ balances: any[] }>(`/api/leave/balances/${employeeId}${year ? `?year=${year}` : ''}`),
 };
 
 // ─── WS-4 Payroll statutory configuration ──────────────────────────────────

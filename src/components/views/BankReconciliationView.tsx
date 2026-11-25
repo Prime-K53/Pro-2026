@@ -34,6 +34,8 @@ export const BankReconciliationView: React.FC = () => {
 
   const [reverseTarget, setReverseTarget] = useState<any | null>(null);
   const [reverseReason, setReverseReason] = useState('');
+  const [reconRules, setReconRules] = useState<any[]>([]);
+  const [rulesBusy, setRulesBusy] = useState(false);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -85,14 +87,21 @@ export const BankReconciliationView: React.FC = () => {
     loadPreviewAndHistory();
   }, [loadPreviewAndHistory]);
 
+  const loadRules = useCallback(async () => {
+    try { setReconRules(await commercialApi.listBankReconRules()); } catch { /* non-blocking */ }
+  }, []);
+
+  useEffect(() => { void loadRules(); }, [loadRules]);
+
   useEffect(() => {
     const handler = () => {
       loadAccounts();
       loadPreviewAndHistory();
+      void loadRules();
     };
     window.addEventListener(ACCOUNTING_UPDATED_EVENT, handler);
     return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, handler);
-  }, [loadAccounts, loadPreviewAndHistory]);
+  }, [loadAccounts, loadPreviewAndHistory, loadRules]);
 
   const items: any[] = preview?.items || [];
   const payments = items.filter(t => t.amount < 0);
@@ -343,6 +352,38 @@ export const BankReconciliationView: React.FC = () => {
               </button>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Banking Rules (Module 6) */}
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+        <div className="px-4 py-3 border-b font-bold text-xs flex items-center justify-between">
+          <span>Reconciliation Rules</span>
+          <button
+            type="button"
+            className="px-2.5 py-1 rounded border border-slate-300 text-[11px] font-semibold hover:bg-slate-50"
+            disabled={rulesBusy}
+            onClick={async () => {
+              const ruleName = window.prompt('Rule name');
+              if (!ruleName) return;
+              const matchPattern = window.prompt('Match pattern (description contains)', ruleName) || ruleName;
+              setRulesBusy(true);
+              try {
+                await commercialApi.upsertBankReconRule({ ruleName, matchField: 'description', matchPattern, autoPost: false, isActive: true });
+                await loadRules();
+                triggerShortcutNotice('Reconciliation rule saved');
+              } catch (e: any) { setErrorMsg(e?.message || 'Failed to save rule'); }
+              finally { setRulesBusy(false); }
+            }}
+          >Add Rule</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase text-[10px] font-bold border-b"><tr><th className="px-4 py-2">Name</th><th className="px-4 py-2">Field</th><th className="px-4 py-2">Pattern</th><th className="px-4 py-2">Active</th></tr></thead>
+            <tbody className="divide-y">{reconRules.length === 0 ? <tr><td colSpan={4} className="px-4 py-4 text-center text-slate-400">No recon rules.</td></tr> : reconRules.map((r: any) => (
+              <tr key={r.id}><td className="px-4 py-2">{r.rule_name || r.ruleName}</td><td className="px-4 py-2">{r.match_field || r.matchField}</td><td className="px-4 py-2 font-mono">{r.match_pattern || r.matchPattern}</td><td className="px-4 py-2">{String(r.is_active ?? r.isActive)}</td></tr>
+            ))}</tbody>
+          </table>
         </div>
       </div>
 

@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { printingApi, ApiPrintingJob } from '../../services/printingApi';
+import { commercialApi } from '../../services/commercialApi';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
-import { Loader2, Printer, X, TrendingUp } from 'lucide-react';
+import { Loader2, Printer, Wrench, X, TrendingUp } from 'lucide-react';
 
 /** Preferred left-to-right column order; any other statuses append in alpha order. */
 const STATUS_ORDER = [
@@ -108,6 +109,15 @@ export const ProductionScheduleView: React.FC = () => {
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
           Refresh
         </button>
+      </div>
+
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1"><Wrench className="w-3.5 h-3.5" />Machine Ops</span>
+          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const jobId = Number(window.prompt('Job ID')); const machineId = Number(window.prompt('Machine ID')); if (!jobId || !machineId) return; try { await commercialApi.assignJobMachine(jobId, { machineId }); alert('Machine assigned'); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Assign Machine</button>
+          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const jobId = Number(window.prompt('Job ID')); const toStatus = window.prompt('New status (e.g. in_production, completed)', 'in_production'); if (!jobId || !toStatus) return; try { await commercialApi.moveJobStage(jobId, { toStatus }); alert('Job stage moved'); load(); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Move Stage</button>
+          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const machineId = Number(window.prompt('Machine ID')); if (!machineId) return; const reason = window.prompt('Downtime reason', 'Maintenance') || 'Maintenance'; try { await commercialApi.logMachineDowntime(machineId, { reason, startTime: new Date().toISOString() }); alert('Downtime logged'); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Log Downtime</button>
+        </div>
       </div>
 
       {error && (

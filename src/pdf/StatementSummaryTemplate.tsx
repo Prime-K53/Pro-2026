@@ -1,0 +1,274 @@
+import React from 'react';
+import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
+import { StatementDoc } from './schemas.ts';
+import { docStyles, docStylesMono } from './styles.ts';
+import type { PrimeColorMode } from './pdfPrintMode.ts';
+import { monoText, monoFill, monoLine, monoInk } from './pdfPrintMode.ts';
+import { CompanyConfig } from './stubs/types.ts';
+import { resolvePdfLogoSource } from './companyAssetUtils';
+import {
+  getStoredCompanyConfig,
+  resolvePrimeTemplateSettings,
+} from './templateSettings.ts';
+import { resolvePdfQrCodeSource } from './companyAssetUtils';
+import { PortalCopyWatermark } from './PortalCopyWatermark.tsx';
+import {
+  PaginationFurniture,
+  VerificationLabel,
+  paginationIdentity,
+} from './documentPagination.tsx';
+
+// Format amount helper
+const formatAmount = (amount: number) => {
+  return (amount || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+// DD/MM/YYYY, mirroring the statement screen's safeFormatDate. Snapshot
+// dates are ISO (yyyy-MM-dd); anything else passes through untouched.
+const formatStatementDate = (value: unknown): string => {
+  const s = String(value ?? '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return s || '—';
+};
+
+const pickFirstText = (...values: Array<unknown>) => {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+};
+
+const buildFooterLine1 = (config?: CompanyConfig | null) => {
+  return pickFirstText(
+    config?.footer,
+    config?.receiptFooter,
+    config?.transactionSettings?.pos?.receiptFooter,
+    'This is a computer-generated document. No signature required. For enquiries contact'
+  );
+};
+
+const buildFooterLine2 = (config?: CompanyConfig | null) => {
+  return 'Prime Printing Service, Along M5 Road, Mtakataka, Phone +265 992 528 222,';
+};
+
+export const StatementSummaryTemplate: React.FC<{ data: StatementDoc; configOverride?: CompanyConfig | null; channel?: 'erp' | 'portal'; colorMode?: PrimeColorMode }> = ({ data, configOverride = null, channel = 'erp', colorMode = 'brand' }) => {
+  const mode: PrimeColorMode = colorMode ?? 'brand';
+  const s = mode === 'mono' ? docStylesMono : docStyles;
+  const currency = data.currency || 'MWK';
+  const config = configOverride || getStoredCompanyConfig();
+  const templateSettings = resolvePrimeTemplateSettings(config);
+  const pageStyle = {
+    fontFamily: templateSettings.fontFamily,
+    fontSize: templateSettings.bodyFontSize,
+  };
+  const companyName = pickFirstText(config?.companyName, 'Prime ERP');
+  const logo = resolvePdfLogoSource(config, templateSettings.showCompanyLogo);
+  const fontScale = templateSettings.bodyFontSize / 12;
+
+  const isCancelled =
+    String(data.status || (data as any).transactionStatus || '').toLowerCase() === 'cancelled' ||
+    String(data.status || (data as any).transactionStatus || '').toLowerCase() === 'canceled' ||
+    (data as any).isCancelled === true ||
+    (data as any).cancelled === true;
+
+  return (
+    <Document
+      title={`Statement - ${data.customerName}`}
+      author={companyName}
+      subject="Account Statement Summary"
+      creator="Prime ERP System"
+    >
+      <Page size="A4" style={[s.page, pageStyle]}>
+        {channel === 'portal' && <PortalCopyWatermark colorMode={mode} />}
+        {/* Global pagination framing (shared capability; presentation only). */}
+        <PaginationFurniture colorMode={mode}
+          identity={paginationIdentity('ACCOUNT_STATEMENT', data as unknown as Record<string, unknown>, data.customerName || '')}
+          companyName={companyName}
+        />
+        {isCancelled && (
+          <View style={s.watermarkContainer} fixed>
+            <Text style={s.watermarkText}>CANCELLED</Text>
+          </View>
+        )}
+        {/* Conversion History for Statement (if applicable) */}
+        {templateSettings.showConversionHistory !== false && 'isConverted' in data && !!(data as any).isConverted && !!(data as any).conversionDetails && (
+          <View style={[s.conversionBox, { position: 'absolute', top: 40, right: 40, zIndex: 10 }]}>
+            <Text style={s.conversionTitle}>Conversion History</Text>
+            <Text>Converted from {(data as any).conversionDetails.sourceType} {(data as any).conversionDetails.sourceNumber}</Text>
+            <Text>on {(data as any).conversionDetails.date}</Text>
+          </View>
+        )}
+        {/* Header Section — company logo pinned to the left margin */}
+        <View style={[s.headerContainer, { alignItems: 'flex-start' }]}>
+          {/* Left: Company logo only */}
+          <View style={[s.companySide, { alignItems: 'flex-start', paddingLeft: 0, marginLeft: 0 }]}>
+            {logo ? (
+              <Image src={logo} style={{ marginBottom: 6, marginLeft: 0, paddingLeft: 0, width: templateSettings.logoWidth, alignSelf: 'flex-start' }} />
+            ) : null}
+            <Text style={{ fontSize: 8, color: monoText(mode, '#64748b'), fontStyle: 'italic', marginTop: 2 }}>Generated on: {new Date().toLocaleString('en-GB')}</Text>
+          </View>
+
+          {/* Right: Statement Title and Balance Summary Table */}
+          <View style={s.statementSide}>
+            <Text style={[s.title, { fontSize: 24, marginBottom: 2 }]}>Account Statement</Text>
+            {Boolean((data as any).statementNumber || (data as any).number) && (
+              <Text style={{ fontSize: 10, color: monoText(mode, '#64748b'), marginBottom: 2 }}>
+                Statement Number: {String((data as any).statementNumber || (data as any).number)}
+              </Text>
+            )}
+            <Text style={{ fontSize: 10, color: monoText(mode, '#64748b'), marginBottom: 5 }}>{data.startDate} — {data.endDate}</Text>
+
+            <View style={s.summaryTable}>
+              <View style={s.summaryRow}>
+                <Text style={{ fontWeight: 'bold', color: monoText(mode, '#475569') }}>Opening Balance</Text>
+                <Text style={{ fontWeight: 'bold' }}>{currency} {formatAmount(data.openingBalance)}</Text>
+              </View>
+              <View style={s.summaryRow}>
+                <Text style={{ color: monoText(mode, '#475569') }}>Invoiced Amount</Text>
+                <Text>{currency} {formatAmount(data.totalInvoiced)}</Text>
+              </View>
+              <View style={s.summaryRow}>
+                <Text style={{ color: monoText(mode, '#475569') }}>Amount Received</Text>
+                <Text>{currency} {formatAmount(data.totalReceived)}</Text>
+              </View>
+              <View style={[s.summaryRow, { borderBottomWidth: 0, marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: monoLine(mode, '#e2e8f0') }]}>
+                <Text style={{ fontWeight: 'bold', color: monoText(mode, '#1e293b') }}>Balance Due</Text>
+                <Text style={{ fontWeight: 'bold', fontSize: 13, color: monoText(mode, '#2563eb') }}>{currency} {formatAmount(data.finalBalance)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Customer "To" Section */}
+        <View style={{ marginTop: 1.5, paddingLeft: 5, borderLeftWidth: 3, borderLeftColor: monoLine(mode, '#2563eb'), paddingVertical: 2 }}>
+          <Text style={{ fontSize: 9, fontWeight: 'bold', color: monoText(mode, '#64748b'), textTransform: 'uppercase', marginBottom: 4 }}>Statement For</Text>
+          <Text style={{ fontSize: 14, fontWeight: 'bold', color: monoText(mode, '#1e293b') }}>{data.customerName}</Text>
+          {'address' in data && !!(data as any).address && (
+            <Text style={{ fontSize: 10, color: monoText(mode, '#475569'), marginTop: 4 }}>{(data as any).address}</Text>
+          )}
+        </View>
+
+        {/* Transactions Section Title */}
+        <Text style={{ fontSize: 12, fontWeight: 'bold', marginTop: 15, marginBottom: 8, color: monoText(mode, '#1e293b'), textTransform: 'uppercase', letterSpacing: 1 }}>Transaction History</Text>
+
+        {/* Transactions Table */}
+        <View style={[s.tableHeader, { backgroundColor: monoFill(mode, '#f8fafc'), paddingHorizontal: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: monoLine(mode, '#cbd5e1') }]}>
+          <Text style={{ flex: 1.2, fontSize: 10, fontWeight: 'bold' }}>Date</Text>
+          <Text style={{ flex: 1.5, fontSize: 10, fontWeight: 'bold' }}>Reference</Text>
+          <Text style={{ flex: 2.5, fontSize: 10, fontWeight: 'bold' }}>Description</Text>
+          <Text style={{ flex: 1, fontSize: 10, fontWeight: 'bold', textAlign: 'right' }}>Debit</Text>
+          <Text style={{ flex: 1, fontSize: 10, fontWeight: 'bold', textAlign: 'right' }}>Credit</Text>
+          <Text style={{ flex: 1.3, fontSize: 10, fontWeight: 'bold', textAlign: 'right' }}>Balance</Text>
+        </View>
+
+        {data.transactions.map((txn, i) => {
+          // Bill-details lines frozen into the snapshot (present only when
+          // the statement was issued with Bill Details on). Unchecked keeps
+          // the existing row-only layout byte-identical.
+          const txnItems = Array.isArray((txn as any).items) ? (txn as any).items : [];
+          // Bill-details block mirrors the screen: meta row when an original
+          // date was frozen (unchecked snapshots carry no originalDate, so
+          // the compact layout is byte-identical), items table when lines
+          // were frozen.
+          const txnOriginalDate = String((txn as any).originalDate ?? '').trim();
+          const txnStatus = String((txn as any).status ?? '').trim();
+          return (
+          <React.Fragment key={i}>
+          <View style={[s.row, { paddingHorizontal: 8, borderBottomColor: monoLine(mode, '#f1f5f9') }]} wrap={false}>
+            <Text style={{ flex: 1.2, fontSize: 9 }}>{txn.date}</Text>
+            <Text style={{ flex: 1.5, fontSize: 9, fontWeight: 'bold' }}>{txn.reference}</Text>
+            <Text style={{ flex: 2.5, fontSize: 9, color: monoText(mode, '#475569') }}>{txn.memo || '-'}</Text>
+            <Text style={{ flex: 1, fontSize: 9, textAlign: 'right', color: monoText(mode, txn.debit > 0 ? '#e11d48' : '#64748b') }}>{txn.debit > 0 ? formatAmount(txn.debit) : '-'}</Text>
+            <Text style={{ flex: 1, fontSize: 9, textAlign: 'right', color: monoText(mode, txn.credit > 0 ? '#059669' : '#64748b') }}>{txn.credit > 0 ? formatAmount(txn.credit) : '-'}</Text>
+            <Text style={{ flex: 1.3, fontSize: 9, textAlign: 'right', fontWeight: 'bold' }}>{formatAmount(txn.runningBalance)}</Text>
+          </View>
+          {txnOriginalDate && (
+            <View key={`${i}-meta`} style={{ paddingHorizontal: 8, paddingTop: 2, flexDirection: 'row', backgroundColor: monoFill(mode, '#f8fafc') }}>
+              <Text style={{ flex: 1, fontSize: 8, color: monoText(mode, '#64748b'), fontStyle: 'italic' }}>Original date: {formatStatementDate(txnOriginalDate)}</Text>
+              <Text style={{ flex: 1, fontSize: 8, color: monoText(mode, '#64748b'), fontStyle: 'italic' }}>Status: {txnStatus || '—'}</Text>
+            </View>
+          )}
+          {txnItems.length > 0 && (
+            <View key={`${i}-items`} style={{ paddingHorizontal: 8, paddingTop: 2, paddingBottom: 4, backgroundColor: monoFill(mode, '#f8fafc') }}>
+              <View style={{ flexDirection: 'row', paddingVertical: 2 }}>
+                <Text style={{ flex: 3.5, fontSize: 7.5, fontWeight: 'bold', color: monoText(mode, '#64748b') }}>Description</Text>
+                <Text style={{ flex: 1, fontSize: 7.5, fontWeight: 'bold', color: monoText(mode, '#64748b'), textAlign: 'right' }}>Qty</Text>
+                <Text style={{ flex: 1.4, fontSize: 7.5, fontWeight: 'bold', color: monoText(mode, '#64748b'), textAlign: 'right' }}>Price</Text>
+                <Text style={{ flex: 1.4, fontSize: 7.5, fontWeight: 'bold', color: monoText(mode, '#64748b'), textAlign: 'right' }}>Total</Text>
+              </View>
+              {txnItems.map((line: any, li: number) => (
+                <View key={li} style={{ flexDirection: 'row', paddingVertical: 1.5 }}>
+                  <Text style={{ flex: 3.5, fontSize: 8, color: monoText(mode, '#475569') }}>{String(line?.description ?? '—')}</Text>
+                  <Text style={{ flex: 1, fontSize: 8, color: monoText(mode, '#475569'), textAlign: 'right' }}>{line?.qty ?? '—'}</Text>
+                  <Text style={{ flex: 1.4, fontSize: 8, color: monoText(mode, '#475569'), textAlign: 'right' }}>{line?.price != null ? `${currency} ${formatAmount(Number(line.price))}` : '—'}</Text>
+                  <Text style={{ flex: 1.4, fontSize: 8, color: monoText(mode, '#475569'), textAlign: 'right' }}>{line?.total != null ? `${currency} ${formatAmount(Number(line.total))}` : '—'}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          </React.Fragment>
+          );
+        })}
+
+          {/* Thank-you line: identical wording/placement to invoice, receipt
+              and quotation so every document closes consistently. */}
+          <View wrap={false} style={{ marginTop: 10, alignItems: 'center' }}>
+            <Text style={{ fontSize: Number((12 * fontScale).toFixed(2)), color: monoText(mode, '#334155') }}>
+              Thank you for choosing <Text style={{ fontWeight: 'bold' }}>{companyName}</Text>
+            </Text>
+          </View>
+
+          {/* Security Footer — digitally-generated line (kept tick circle),
+              official body copy, QR, bottom rule. The title/shield block and
+              SCAN TO VERIFY pill were removed per product direction. Flows
+              once after the final content. */}
+          <View wrap={false} style={{ marginTop: 10, borderTopWidth: 0.5, borderColor: monoLine(mode, '#e2e8f0'), paddingTop: 8, width: '100%' }}>
+            <VerificationLabel fontScale={fontScale} />
+            {(() => {
+              const qrUrl = resolvePdfQrCodeSource(String((data as any)?.securityQrCodeDataUrl || '').trim());
+              const displayCompany = pickFirstText(config?.companyName, 'Prime Printing');
+              const shortCompany = displayCompany.replace(/\s+(Service|Services)$/i, '').trim() || displayCompany;
+              const footerQrSize = 72;
+              return (
+                <View style={{ flexDirection: 'column' }}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}>
+                        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: monoInk(mode, '#10b981'), alignItems: 'center', justifyContent: 'center' }}>
+                          <View style={{ width: 6, height: 3.5, borderLeftWidth: 1.2, borderBottomWidth: 1.2, borderColor: '#ffffff', transform: 'rotate(-45deg)', marginTop: -1 }} />
+                        </View>
+                        <Text style={{ fontSize: 8.5 * fontScale, fontWeight: 'bold', color: monoText(mode, '#2563eb') }}>Digitally generated</Text>
+                        <Text style={{ fontSize: 8.5 * fontScale, color: monoText(mode, '#64748b') }}>•</Text>
+                        <Text style={{ fontSize: 8.5 * fontScale, fontWeight: 'bold', color: monoText(mode, '#059669') }}>Verification available online</Text>
+                      </View>
+                      <Text style={{ marginTop: 6, fontSize: 9 * fontScale, color: '#000', lineHeight: 1.45 }}>
+                        This is an official {shortCompany} document. It was electronically generated and is valid
+                        without a handwritten signature. Scan the QR code to verify the document&apos;s authenticity
+                        and confirm its current record. or contact us on +265 992 528 222
+                      </Text>
+                    </View>
+                    <View style={{ width: 1, backgroundColor: monoFill(mode, '#cbd5e1'), alignSelf: 'stretch' }} />
+                    <View style={{ width: footerQrSize + 18, alignItems: 'center' }}>
+                      <View style={{ alignItems: 'center' }}>
+                        {qrUrl ? (
+                          <Image src={qrUrl} style={{ width: footerQrSize, height: footerQrSize }} />
+                        ) : (
+                          <View style={{ width: footerQrSize, height: footerQrSize, backgroundColor: monoFill(mode, '#f1f5f9') }} />
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                  <View style={{ marginTop: 8, height: 1, backgroundColor: monoFill(mode, '#dbeafe'), width: '100%' }} />
+                </View>
+              );
+            })()}
+          </View>
+      </Page>
+    </Document>
+  );
+};

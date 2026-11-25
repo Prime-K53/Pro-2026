@@ -3,6 +3,7 @@ import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { ACCOUNTING_UPDATED_EVENT } from '../../services/accountingApi';
 import { documentsApi } from '../../services/documentsApi';
+import { commercialApi } from '../../services/commercialApi';
 import {
   DocumentPreviewKind,
   UnifiedDocumentCategory,
@@ -32,6 +33,7 @@ import {
   Paperclip,
   Loader2,
   AlertTriangle,
+  CheckCircle2,
   ExternalLink,
   X,
 } from 'lucide-react';
@@ -692,6 +694,50 @@ export const AllDocumentsView: React.FC = () => {
           execute: async () => { await handleDeleteAttachment(doc); },
         });
       }
+    }
+
+    // Module 9: Document control
+    defs.push({
+      id: 'doc.view-versions',
+      label: 'View Version/Control History',
+      icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
+      group: 'view',
+      groupLabel: 'Controls',
+      requiredPermission: 'documents:control:read',
+      execute: async () => {
+        const entityType = doc.kind === 'attachment' ? 'attachment' : doc.kind;
+        const entityId = Number(doc.id || doc.fileInfo?.attachmentId || 0);
+        const versions = await commercialApi.listDocumentVersions(entityType, entityId);
+        triggerShortcutNotice(versions.length ? `${versions.length} version/control record(s) found` : 'No version/control records found');
+      },
+    });
+    if (doc.fileInfo?.attachmentId) {
+      defs.push({
+        id: 'doc.approve',
+        label: 'Approve Document',
+        icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />,
+        group: 'process',
+        groupLabel: 'Controls',
+        requiredPermission: 'documents:control:write',
+        execute: async () => {
+          await commercialApi.approveDocument(doc.fileInfo!.attachmentId, true, 'Approved from All Documents');
+          triggerShortcutNotice('Document approved');
+        },
+      });
+      defs.push({
+        id: 'doc.set-retention',
+        label: 'Set Retention Date',
+        icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />,
+        group: 'process',
+        groupLabel: 'Controls',
+        requiredPermission: 'documents:control:write',
+        execute: async () => {
+          const date = window.prompt('Retention until (YYYY-MM-DD), blank to clear', '');
+          if (date === null) return;
+          await commercialApi.setDocumentRetention(doc.fileInfo!.attachmentId, date || null);
+          triggerShortcutNotice('Document retention updated');
+        },
+      });
     }
     return defs;
   };

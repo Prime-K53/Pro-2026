@@ -1,5 +1,5 @@
 import type { Transaction } from '@electric-sql/pglite';
-import { AccountingError, postJournalEntry, type ActorContext } from './accountingEngine.ts';
+import { AccountingError, postJournalEntry, reverseJournalEntry, type ActorContext } from './accountingEngine.ts';
 import { formatDecimal4, parseDecimal4 } from '../lib/decimal.ts';
 import { writeAuditLog } from '../audit.ts';
 import { resolveCounterAccountId } from './inventoryService.ts';
@@ -181,6 +181,8 @@ export interface RecordDamageInput {
   counterAccountId?: number | null;
   unitCost?: string | number | null;
   idempotencyKey?: string | null;
+  jobReference?: string | null;
+  scrapType?: string | null;
 }
 
 /**
@@ -260,6 +262,32 @@ export async function recordStockDamage(
     [companyId, item.id, formatDecimal4(nextOnHand4)]
   );
 
+  const dmgLocation = normaliseLocation((item as any).location, DEFAULT_LOCATION);
+  const balRes = await tx.query<{ id: number; qty: string }>(
+    `SELECT id, qty::text AS qty FROM stock_balances
+      WHERE company_id = $1 AND item_id = $2 AND COALESCE(variant_id, 0) = 0 AND lower(location) = lower($3)
+      FOR UPDATE`,
+    [companyId, item.id, dmgLocation]
+  );
+  if (balRes.rows.length === 0) {
+    // Legacy: no balance row; create one reflecting remaining on-hand at default location
+    await tx.query(
+      `INSERT INTO stock_balances (company_id, item_id, variant_id, location, qty)
+       VALUES ($1, $2, NULL, $3, $4::NUMERIC(19,6))`,
+      [companyId, item.id, dmgLocation, formatDecimal4(nextOnHand4)]
+    );
+  } else {
+    const balQty4 = parseDecimal4(balRes.rows[0].qty);
+    const nextBal4 = balQty4 - qty4;
+    if (nextBal4 < 0n) {
+      throw new AccountingError(409, `Damage exceeds stock at ${dmgLocation} for "${item.name}"`, 'INSUFFICIENT_LOCATION_STOCK');
+    }
+    await tx.query(
+      `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW() WHERE company_id = $1 AND id = $2`,
+      [companyId, balRes.rows[0].id, formatDecimal4(nextBal4)]
+    );
+  }
+
   await tx.query(
     `INSERT INTO inventory_movements (
        company_id, item_id, movement_type, quantity_delta, unit_cost,
@@ -273,15 +301,15 @@ export async function recordStockDamage(
       formatDecimal4(nextOnHand4),
       formatDecimal4(unitCost4),
       posted.transaction.id,
-      item.location || DEFAULT_LOCATION,
+      dmgLocation,
     ]
   );
 
   const dmgIns = await tx.query<{ id: number }>(
     `INSERT INTO stock_damages (
        company_id, item_id, damage_date, quantity, unit_cost, reason_code, reason,
-       journal_txn_id, created_by
-     ) VALUES ($1, $2, $3::DATE, $4::NUMERIC(19,6), $5::NUMERIC(19,6), $6, $7, $8, $9)
+       journal_txn_id, created_by, job_reference, scrap_type
+     ) VALUES ($1, $2, $3::DATE, $4::NUMERIC(19,6), $5::NUMERIC(19,6), $6, $7, $8, $9, $10, $11)
      RETURNING id`,
     [
       companyId,
@@ -293,6 +321,8 @@ export async function recordStockDamage(
       reason,
       posted.transaction.id,
       actor.userId,
+      input.jobReference ? String(input.jobReference).trim() : null,
+      input.scrapType ? String(input.scrapType).trim() : 'scrap',
     ]
   );
 
@@ -315,6 +345,8 @@ export async function recordStockDamage(
       journalTransactionId: posted.transaction.id,
     },
   });
+
+  await assertLocationBalancesReconcile(tx, companyId, Number(item.id), nextOnHand4, String(item.sku));
 
   return {
     damageId: Number(dmgIns.rows[0].id),
@@ -342,7 +374,8 @@ export interface TransferStockInput {
   toLocation?: string | null;
   transferDate?: string | null;
   notes?: string | null;
-  lines: Array<{ itemId: number; quantity: string | number; variantId?: number | null }>;
+  transferMode?: 'direct' | 'two_step';
+  lines: Array<{ itemId: number; quantity: string | number; variantId?: number | null; lotId?: number | null }>;
 }
 
 /**
@@ -371,53 +404,55 @@ export async function transferStock(
 
   const today = new Date().toISOString().slice(0, 10);
   const transferDate = assertIsoDate(input.transferDate, today);
+  const transferMode = input.transferMode === 'two_step' ? 'two_step' : 'direct';
+  const transitLocation = `IN_TRANSIT::${toLocation}`;
 
-  const transferNumber = await generateDocNumber(
-    tx,
-    companyId,
-    'stock_transfers',
-    'transfer_number',
-    'TRF'
-  );
-
+  const transferNumber = await generateDocNumber(tx, companyId, 'stock_transfers', 'transfer_number', 'TRF');
   const transferIns = await tx.query<{ id: number }>(
     `INSERT INTO stock_transfers (
-       company_id, transfer_number, transfer_date, from_location, to_location, notes, created_by
-     ) VALUES ($1, $2, $3::DATE, $4, $5, $6, $7)
+       company_id, transfer_number, transfer_date, from_location, to_location, notes, created_by, transfer_mode, status, dispatched_at
+     ) VALUES ($1, $2, $3::DATE, $4, $5, $6, $7, $8, $9, CASE WHEN $8 = 'two_step' THEN NOW() ELSE NULL END)
      RETURNING id`,
-    [companyId, transferNumber, transferDate, fromLocation, toLocation, input.notes || null, actor.userId]
+    [companyId, transferNumber, transferDate, fromLocation, toLocation, input.notes || null, actor.userId, transferMode, transferMode === 'two_step' ? 'in_transit' : 'draft']
   );
   const transferId = Number(transferIns.rows[0].id);
 
+  let inTransitAccountId: number | null = null;
+  if (transferMode === 'two_step') {
+    const inTransitRes = await tx.query<{ id: number }>(
+      `SELECT id FROM accounts
+        WHERE company_id = $1 AND is_active = TRUE
+          AND (code = '1320' OR LOWER(COALESCE(name,'')) LIKE '%in transit%' OR LOWER(COALESCE(name,'')) LIKE '%in-transit%')
+        ORDER BY CASE WHEN code = '1320' THEN 0 ELSE 1 END, id ASC LIMIT 1`,
+      [companyId]
+    );
+    inTransitAccountId = inTransitRes.rows[0]?.id ?? null;
+    if (!inTransitAccountId) {
+      throw new AccountingError(400, 'Stock in-transit account not found (expected code 1320 or name containing "in transit")', 'MISSING_IN_TRANSIT_ACCOUNT');
+    }
+  }
+
   const applied: Array<Record<string, any>> = [];
+  let totalValue4 = 0n;
 
   for (const raw of input.lines) {
     const itemId = Number(raw.itemId);
     const variantId = raw.variantId != null ? Number(raw.variantId) : null;
     const qty4 = parseQty(raw.quantity, 'Transfer quantity');
-    if (qty4 === 0n) {
-      throw new AccountingError(400, 'Transfer quantity must be greater than zero', 'INVALID_TRANSFER_QTY');
-    }
+    if (qty4 === 0n) throw new AccountingError(400, 'Transfer quantity must be greater than zero', 'INVALID_TRANSFER_QTY');
 
     const item = await requireStockedItem(tx, companyId, itemId);
     const onHand4 = parseDecimal4(item.on_hand);
     const unitCost4 = parseDecimal4(item.avg_cost) || parseDecimal4(item.unit_cost);
+    const value4 = (qty4 * unitCost4) / 10000n;
+    totalValue4 += value4;
 
     await tx.query(
-      `INSERT INTO stock_transfer_lines (company_id, transfer_id, item_id, variant_id, quantity, unit_cost)
-       VALUES ($1, $2, $3, $4, $5::NUMERIC(19,6), $6::NUMERIC(19,6))`,
-      [
-        companyId,
-        transferId,
-        itemId,
-        variantId,
-        formatDecimal4(qty4),
-        formatDecimal4(unitCost4),
-      ]
+      `INSERT INTO stock_transfer_lines (company_id, transfer_id, item_id, variant_id, quantity, unit_cost, lot_id)
+       VALUES ($1, $2, $3, $4, $5::NUMERIC(19,6), $6::NUMERIC(19,6), $7)`,
+      [companyId, transferId, itemId, variantId, formatDecimal4(qty4), formatDecimal4(unitCost4), raw.lotId ? Number(raw.lotId) : null]
     );
 
-    // Per-location balances. Missing rows are seeded at the source location so
-    // that pre-0018 items still reconcile.
     const srcRes = await tx.query<{ id: number; qty: string }>(
       `SELECT id, qty::text AS qty FROM stock_balances
         WHERE company_id = $1 AND item_id = $2 AND COALESCE(variant_id, 0) = COALESCE($3, 0)
@@ -428,14 +463,8 @@ export async function transferStock(
 
     let srcQty4: bigint;
     if (srcRes.rows.length === 0) {
-      // Seed the source with the item's whole on_hand, then immediately move
-      // the requested amount out of it.
       if (qty4 > onHand4) {
-        throw new AccountingError(
-          409,
-          `"${item.name}" has only ${formatDecimal4(onHand4)} on hand; cannot transfer ${formatDecimal4(qty4)} from ${fromLocation}`,
-          'INSUFFICIENT_LOCATION_STOCK'
-        );
+        throw new AccountingError(409, `"${item.name}" has only ${formatDecimal4(onHand4)} on hand; cannot transfer ${formatDecimal4(qty4)} from ${fromLocation}`, 'INSUFFICIENT_LOCATION_STOCK');
       }
       srcQty4 = onHand4;
       await tx.query(
@@ -446,43 +475,35 @@ export async function transferStock(
     } else {
       srcQty4 = parseDecimal4(srcRes.rows[0].qty);
       if (qty4 > srcQty4) {
-        throw new AccountingError(
-          409,
-          `"${item.name}" has only ${formatDecimal4(srcQty4)} at ${fromLocation}; cannot transfer ${formatDecimal4(qty4)}`,
-          'INSUFFICIENT_LOCATION_STOCK'
-        );
+        throw new AccountingError(409, `"${item.name}" has only ${formatDecimal4(srcQty4)} at ${fromLocation}; cannot transfer ${formatDecimal4(qty4)}`, 'INSUFFICIENT_LOCATION_STOCK');
       }
       await tx.query(
-        `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW()
-          WHERE company_id = $1 AND id = $2`,
+        `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW() WHERE company_id = $1 AND id = $2`,
         [companyId, srcRes.rows[0].id, formatDecimal4(srcQty4 - qty4)]
       );
     }
 
+    const dstLocation = transferMode === 'two_step' ? transitLocation : toLocation;
     const dstRes = await tx.query<{ id: number; qty: string }>(
       `SELECT id, qty::text AS qty FROM stock_balances
         WHERE company_id = $1 AND item_id = $2 AND COALESCE(variant_id, 0) = COALESCE($3, 0)
           AND lower(location) = lower($4)`,
-      [companyId, itemId, variantId, toLocation]
+      [companyId, itemId, variantId, dstLocation]
     );
-
     if (dstRes.rows.length === 0) {
       await tx.query(
         `INSERT INTO stock_balances (company_id, item_id, variant_id, location, qty)
          VALUES ($1, $2, $3, $4, $5::NUMERIC(19,6))`,
-        [companyId, itemId, variantId, toLocation, formatDecimal4(qty4)]
+        [companyId, itemId, variantId, dstLocation, formatDecimal4(qty4)]
       );
     } else {
       const dstQty4 = parseDecimal4(dstRes.rows[0].qty);
       await tx.query(
-        `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW()
-          WHERE company_id = $1 AND id = $2`,
+        `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW() WHERE company_id = $1 AND id = $2`,
         [companyId, dstRes.rows[0].id, formatDecimal4(dstQty4 + qty4)]
       );
     }
 
-    // Two mirrored movements: out of the source, into the destination. on_hand
-    // and avg_cost are unchanged, so balance_qty stays the same for both.
     await tx.query(
       `INSERT INTO inventory_movements (
          company_id, item_id, movement_type, quantity_delta, unit_cost,
@@ -495,10 +516,9 @@ export async function transferStock(
          company_id, item_id, movement_type, quantity_delta, unit_cost,
          balance_qty, balance_avg_cost, source_type, source_id, location
        ) VALUES ($1, $2, 'transfer', $3::NUMERIC(19,6), $4::NUMERIC(19,6), $5::NUMERIC(19,6), $6::NUMERIC(19,6), 'stock_transfer', $7, $8)`,
-      [companyId, itemId, formatDecimal4(qty4), formatDecimal4(unitCost4), formatDecimal4(onHand4), formatDecimal4(unitCost4), transferId, toLocation]
+      [companyId, itemId, formatDecimal4(qty4), formatDecimal4(unitCost4), formatDecimal4(onHand4), formatDecimal4(unitCost4), transferId, dstLocation]
     );
 
-    // on_hand is unchanged by a transfer, so location balances must still sum to it.
     await assertLocationBalancesReconcile(tx, companyId, itemId, onHand4, String(item.sku));
 
     applied.push({
@@ -507,13 +527,46 @@ export async function transferStock(
       name: item.name,
       quantity: formatDecimal4(qty4),
       unitCost: formatDecimal4(unitCost4),
-      value: formatDecimal4((qty4 * unitCost4) / 10000n),
+      value: formatDecimal4(value4),
     });
   }
 
+  let journalTxnId: number | null = null;
+  if (transferMode === 'two_step' && totalValue4 > 0n) {
+    const assetTotals = new Map<number, bigint>();
+    for (const raw of input.lines) {
+      const item = await requireStockedItem(tx, companyId, Number(raw.itemId));
+      const qty4 = parseQty(raw.quantity, 'Transfer quantity');
+      const unitCost4 = parseDecimal4(item.avg_cost) || parseDecimal4(item.unit_cost);
+      const v4 = (qty4 * unitCost4) / 10000n;
+      assetTotals.set(Number(item.asset_account_id), (assetTotals.get(Number(item.asset_account_id)) ?? 0n) + v4);
+    }
+    const jeLines: any[] = [];
+    for (const [assetId, v4] of assetTotals.entries()) {
+      if (v4 <= 0n) continue;
+      jeLines.push({ accountId: inTransitAccountId, debit: formatDecimal4(v4), credit: '0.0000', description: `Stock in transit ${transferNumber}` });
+      jeLines.push({ accountId: assetId, debit: '0.0000', credit: formatDecimal4(v4), description: `Stock dispatched to transit ${transferNumber}` });
+    }
+    if (jeLines.length > 0) {
+      const posted = await postJournalEntry(tx, companyId, actor, {
+        txnDate: transferDate,
+        description: `Two-step stock transfer dispatch ${transferNumber}`,
+        sourceType: 'inventory_transfer',
+        sourceId: transferId,
+        idempotencyKey: `stock-transfer-dispatch:${transferId}`,
+        lines: jeLines,
+      });
+      journalTxnId = posted.transaction.id;
+    }
+  }
+
   await tx.query(
-    `UPDATE stock_transfers SET status = 'posted' WHERE company_id = $1 AND id = $2`,
-    [companyId, transferId]
+    `UPDATE stock_transfers
+        SET status = $3,
+            dispatched_at = CASE WHEN $4 = 'two_step' THEN COALESCE(dispatched_at, NOW()) ELSE dispatched_at END,
+            dispatch_journal_txn_id = COALESCE($5, dispatch_journal_txn_id)
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, transferId, transferMode === 'two_step' ? 'in_transit' : 'posted', transferMode, journalTxnId]
   );
 
   await writeAuditLog(tx, {
@@ -523,13 +576,7 @@ export async function transferStock(
     action: 'INVENTORY_TRANSFERRED',
     tableName: 'stock_transfers',
     recordId: transferId,
-    newValues: {
-      transferNumber,
-      fromLocation,
-      toLocation,
-      lines: applied,
-      notes: input.notes || null,
-    },
+    newValues: { transferNumber, fromLocation, toLocation, lines: applied, notes: input.notes || null, transferMode, journalTxnId },
   });
 
   return {
@@ -538,8 +585,13 @@ export async function transferStock(
     fromLocation,
     toLocation,
     lines: applied,
-    glImpact: 'none',
-    note: 'Transfers are stock-neutral and do not post a journal entry.',
+    transferMode,
+    status: transferMode === 'two_step' ? 'in_transit' : 'posted',
+    journalTxnId,
+    glImpact: transferMode === 'two_step' ? 'posted' : 'none',
+    note: transferMode === 'two_step'
+      ? 'Two-step transfer dispatched to in-transit; receive to complete destination move.'
+      : 'Transfers are stock-neutral and do not post a journal entry.',
   };
 }
 
@@ -929,4 +981,341 @@ export async function deactivateInventoryItem(
   });
 
   return { itemId: Number(item.id), sku: item.sku, name: item.name, isActive: false };
+}
+
+export async function receiveStockTransfer(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  transferId: number,
+  input: { lines?: Array<{ lineId?: number; itemId?: number; variantId?: number | null; lotId?: number | null; receivedQty: string | number }>; idempotencyKey?: string } = {}
+) {
+  const res = await tx.query<any>(
+    `SELECT id, transfer_number, status, transfer_mode, from_location, to_location,
+            transfer_date::text AS transfer_date, dispatch_journal_txn_id
+       FROM stock_transfers WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    [companyId, transferId]
+  );
+  if (res.rows.length === 0) throw new AccountingError(404, 'Transfer not found', 'TRANSFER_NOT_FOUND');
+  const tr = res.rows[0];
+  if (tr.status === 'posted') {
+    return { transferId: Number(tr.id), transferNumber: tr.transfer_number, status: 'posted', idempotent: true };
+  }
+  if (!['in_transit', 'partially_received'].includes(String(tr.status))) {
+    throw new AccountingError(409, `Transfer cannot be received from status ${tr.status}`, 'INVALID_TRANSFER_STATUS');
+  }
+
+  const toLocation = normaliseLocation(tr.to_location, 'Secondary');
+  const transitLocation = `IN_TRANSIT::${toLocation}`;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const linesRes = await tx.query<any>(
+    `SELECT l.id AS line_id, l.item_id, l.variant_id, l.quantity::text AS quantity,
+            COALESCE(l.received_qty, 0)::text AS received_qty, l.unit_cost::text AS unit_cost, l.lot_id,
+            i.name, i.sku, i.on_hand::text AS on_hand, i.avg_cost::text AS avg_cost, i.unit_cost::text AS item_unit_cost,
+            i.asset_account_id
+       FROM stock_transfer_lines l
+       JOIN inventory_items i ON i.company_id = l.company_id AND i.id = l.item_id
+      WHERE l.company_id = $1 AND l.transfer_id = $2
+      ORDER BY l.id ASC`,
+    [companyId, transferId]
+  );
+
+  const requested = Array.isArray(input.lines) && input.lines.length > 0 ? input.lines : null;
+  const receivePlan: Array<{ line: any; receiveQty4: bigint }> = [];
+  const priorAllZero = linesRes.rows.every((l: any) => parseQty(l.received_qty || 0, 'Received quantity') === 0n);
+
+  for (const line of linesRes.rows) {
+    const lineId = Number(line.line_id);
+    const qty4 = parseQty(line.quantity, 'Transfer quantity');
+    const already4 = parseQty(line.received_qty || 0, 'Received quantity');
+    const remaining4 = qty4 - already4;
+    if (remaining4 <= 0n) continue;
+
+    let receiveQty4 = remaining4;
+    if (requested) {
+      const reqLine = requested.find(r =>
+        (r.lineId != null && Number(r.lineId) === lineId) ||
+        (r.lineId == null && Number(r.itemId) === Number(line.item_id) && Number(r.variantId ?? 0) === Number(line.variant_id ?? 0) && Number(r.lotId ?? 0) === Number(line.lot_id ?? 0))
+      );
+      if (!reqLine) continue;
+      receiveQty4 = parseQty(reqLine.receivedQty, 'receivedQty');
+      if (receiveQty4 <= 0n) throw new AccountingError(400, `receivedQty must be > 0 for line ${lineId}`, 'INVALID_RECEIVED_QTY');
+      if (receiveQty4 > remaining4) {
+        throw new AccountingError(409, `Cannot receive ${formatDecimal4(receiveQty4)} for ${line.sku}; remaining is ${formatDecimal4(remaining4)}`, 'RECEIVE_EXCEEDS_REMAINING');
+      }
+    }
+    receivePlan.push({ line, receiveQty4 });
+  }
+
+  if (receivePlan.length === 0) {
+    const allReceived = linesRes.rows.every((l: any) => parseQty(l.received_qty || 0, 'Received quantity') >= parseQty(l.quantity, 'Transfer quantity'));
+    if (allReceived) {
+      await tx.query(`UPDATE stock_transfers SET status = 'posted', received_at = COALESCE(received_at, NOW()) WHERE company_id = $1 AND id = $2`, [companyId, transferId]);
+      return { transferId: Number(tr.id), transferNumber: tr.transfer_number, status: 'posted', idempotent: true };
+    }
+    throw new AccountingError(400, 'No receivable lines selected', 'NO_RECEIVABLE_LINES');
+  }
+
+  const applied: Array<Record<string, any>> = [];
+  const valueByAsset = new Map<number, bigint>();
+  let totalReceivedValue4 = 0n;
+
+  for (const { line, receiveQty4 } of receivePlan) {
+    const itemId = Number(line.item_id);
+    const variantId = line.variant_id == null ? null : Number(line.variant_id);
+    const onHand4 = parseDecimal4(line.on_hand);
+    const unitCost4 = parseDecimal4(line.avg_cost) || parseDecimal4(line.unit_cost) || parseDecimal4(line.item_unit_cost);
+    const value4 = (receiveQty4 * unitCost4) / 10000n;
+    totalReceivedValue4 += value4;
+    const assetAccountId = Number(line.asset_account_id);
+    valueByAsset.set(assetAccountId, (valueByAsset.get(assetAccountId) ?? 0n) + value4);
+
+    const srcRes = await tx.query<{ id: number; qty: string }>(
+      `SELECT id, qty::text AS qty FROM stock_balances
+        WHERE company_id = $1 AND item_id = $2 AND COALESCE(variant_id, 0) = COALESCE($3, 0)
+          AND lower(location) = lower($4)
+        FOR UPDATE`,
+      [companyId, itemId, variantId, transitLocation]
+    );
+    if (srcRes.rows.length === 0) {
+      throw new AccountingError(409, `In-transit stock not found for ${line.sku} at ${transitLocation}`, 'MISSING_IN_TRANSIT_STOCK');
+    }
+    const srcQty4 = parseDecimal4(srcRes.rows[0].qty);
+    if (receiveQty4 > srcQty4) {
+      throw new AccountingError(409, `In-transit quantity insufficient for ${line.sku}: have ${formatDecimal4(srcQty4)}, need ${formatDecimal4(receiveQty4)}`, 'INSUFFICIENT_IN_TRANSIT_STOCK');
+    }
+    await tx.query(
+      `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW() WHERE company_id = $1 AND id = $2`,
+      [companyId, srcRes.rows[0].id, formatDecimal4(srcQty4 - receiveQty4)]
+    );
+
+    const dstRes = await tx.query<{ id: number; qty: string }>(
+      `SELECT id, qty::text AS qty FROM stock_balances
+        WHERE company_id = $1 AND item_id = $2 AND COALESCE(variant_id, 0) = COALESCE($3, 0)
+          AND lower(location) = lower($4)
+        FOR UPDATE`,
+      [companyId, itemId, variantId, toLocation]
+    );
+    if (dstRes.rows.length === 0) {
+      await tx.query(
+        `INSERT INTO stock_balances (company_id, item_id, variant_id, location, qty)
+         VALUES ($1, $2, $3, $4, $5::NUMERIC(19,6))`,
+        [companyId, itemId, variantId, toLocation, formatDecimal4(receiveQty4)]
+      );
+    } else {
+      const dstQty4 = parseDecimal4(dstRes.rows[0].qty);
+      await tx.query(
+        `UPDATE stock_balances SET qty = $3::NUMERIC(19,6), updated_at = NOW() WHERE company_id = $1 AND id = $2`,
+        [companyId, dstRes.rows[0].id, formatDecimal4(dstQty4 + receiveQty4)]
+      );
+    }
+
+    await tx.query(
+      `INSERT INTO inventory_movements (
+         company_id, item_id, movement_type, quantity_delta, unit_cost,
+         balance_qty, balance_avg_cost, source_type, source_id, location
+       ) VALUES ($1, $2, 'transfer', $3::NUMERIC(19,6), $4::NUMERIC(19,6), $5::NUMERIC(19,6), $6::NUMERIC(19,6), 'stock_transfer_receipt', $7, $8)`,
+      [companyId, itemId, formatDecimal4(-receiveQty4), formatDecimal4(unitCost4), formatDecimal4(onHand4), formatDecimal4(unitCost4), transferId, transitLocation]
+    );
+    await tx.query(
+      `INSERT INTO inventory_movements (
+         company_id, item_id, movement_type, quantity_delta, unit_cost,
+         balance_qty, balance_avg_cost, source_type, source_id, location
+       ) VALUES ($1, $2, 'transfer', $3::NUMERIC(19,6), $4::NUMERIC(19,6), $5::NUMERIC(19,6), $6::NUMERIC(19,6), 'stock_transfer_receipt', $7, $8)`,
+      [companyId, itemId, formatDecimal4(receiveQty4), formatDecimal4(unitCost4), formatDecimal4(onHand4), formatDecimal4(unitCost4), transferId, toLocation]
+    );
+
+    await tx.query(
+      `UPDATE stock_transfer_lines SET received_qty = (COALESCE(received_qty,0) + $3::NUMERIC(19,6)) WHERE company_id = $1 AND id = $2`,
+      [companyId, Number(line.line_id), formatDecimal4(receiveQty4)]
+    );
+
+    await assertLocationBalancesReconcile(tx, companyId, itemId, onHand4, String(line.sku));
+    applied.push({ lineId: Number(line.line_id), itemId, sku: line.sku, name: line.name, quantity: formatDecimal4(receiveQty4), remainingAfter: formatDecimal4(parseQty(line.quantity, 'q') - parseQty(line.received_qty || 0, 'r') - receiveQty4) });
+  }
+
+  const allAfter = await tx.query<any>(
+    `SELECT quantity::text AS quantity, COALESCE(received_qty,0)::text AS received_qty FROM stock_transfer_lines WHERE company_id = $1 AND transfer_id = $2`,
+    [companyId, transferId]
+  );
+  const fullyReceived = allAfter.rows.length > 0 && allAfter.rows.every((r: any) => parseQty(r.received_qty, 'r') >= parseQty(r.quantity, 'q'));
+  const anyReceived = allAfter.rows.some((r: any) => parseQty(r.received_qty, 'r') > 0n);
+
+  let receiveJournalTxnId: number | null = null;
+  let dispatchJournalTxnId = tr.dispatch_journal_txn_id ? Number(tr.dispatch_journal_txn_id) : null;
+  if (!dispatchJournalTxnId) {
+    const jeRes = await tx.query<{ id: number }>(
+      `SELECT id FROM journal_transactions
+        WHERE company_id = $1 AND source_type = 'inventory_transfer' AND source_id = $2
+          AND reverses_transaction_id IS NULL AND is_posted = TRUE
+        ORDER BY id DESC LIMIT 1`,
+      [companyId, transferId]
+    );
+    dispatchJournalTxnId = jeRes.rows[0]?.id ?? null;
+  }
+
+  if (totalReceivedValue4 > 0n) {
+    // Determine in-transit account from dispatch JE or by lookup
+    let inTransitAccountId: number | null = null;
+    if (dispatchJournalTxnId) {
+      const itRes = await tx.query<{ account_id: number }>(
+        `SELECT account_id FROM journal_lines WHERE company_id = $1 AND transaction_id = $2 AND debit > 0 ORDER BY id ASC LIMIT 1`,
+        [companyId, dispatchJournalTxnId]
+      );
+      inTransitAccountId = itRes.rows[0]?.account_id ?? null;
+    }
+    if (!inTransitAccountId) {
+      const inTransitRes = await tx.query<{ id: number }>(
+        `SELECT id FROM accounts WHERE company_id = $1 AND is_active = TRUE AND (code = '1320' OR LOWER(COALESCE(name,'')) LIKE '%in transit%') ORDER BY CASE WHEN code='1320' THEN 0 ELSE 1 END, id ASC LIMIT 1`,
+        [companyId]
+      );
+      inTransitAccountId = inTransitRes.rows[0]?.id ?? null;
+    }
+    if (inTransitAccountId) {
+      const jeLines: any[] = [];
+      for (const [assetId, v4] of valueByAsset.entries()) {
+        if (v4 <= 0n) continue;
+        jeLines.push({ accountId: assetId, debit: formatDecimal4(v4), credit: '0.0000', description: `Stock received from transit ${tr.transfer_number}` });
+        jeLines.push({ accountId: inTransitAccountId, debit: '0.0000', credit: formatDecimal4(v4), description: `Clear in-transit for ${tr.transfer_number}` });
+      }
+      if (jeLines.length > 0) {
+        const receivingAllInOneShot = fullyReceived && priorAllZero && !requested;
+        const idem = input.idempotencyKey
+          ? `stock-transfer-receive:${transferId}:${input.idempotencyKey}`
+          : receivingAllInOneShot
+            ? `stock-transfer-receive:${transferId}`
+            : `stock-transfer-receive:${transferId}:${applied.map(a => `${a.lineId}:${a.quantity}:${a.remainingAfter}`).join('|')}`;
+        const posted = await postJournalEntry(tx, companyId, actor, {
+          txnDate: today,
+          description: `Stock transfer receipt ${tr.transfer_number}${fullyReceived ? '' : ' (partial)'}`,
+          sourceType: 'inventory_transfer',
+          sourceId: transferId,
+          idempotencyKey: idem,
+          lines: jeLines,
+        });
+        receiveJournalTxnId = posted.transaction.id;
+      }
+    }
+  }
+
+  const nextStatus = fullyReceived ? 'posted' : (anyReceived ? 'partially_received' : tr.status);
+  await tx.query(
+    `UPDATE stock_transfers
+        SET status = $3::text,
+            received_at = CASE WHEN $3::text = 'posted' THEN COALESCE(received_at, NOW()) ELSE received_at END,
+            received_by_user_id = $4::bigint,
+            receive_journal_txn_id = COALESCE($5::bigint, receive_journal_txn_id)
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, transferId, nextStatus, actor.userId, receiveJournalTxnId]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'STOCK_TRANSFER_RECEIVED',
+    tableName: 'stock_transfers',
+    recordId: transferId,
+    newValues: { status: nextStatus, dispatchJournalTxnId, receiveJournalTxnId, lines: applied, partial: !fullyReceived },
+  });
+
+  return {
+    transferId: Number(tr.id),
+    transferNumber: tr.transfer_number,
+    status: nextStatus,
+    fromLocation: normaliseLocation(tr.from_location, DEFAULT_LOCATION),
+    toLocation,
+    lines: applied,
+    dispatchJournalTxnId,
+    receiveJournalTxnId,
+    fullyReceived,
+    partial: !fullyReceived,
+  };
+}
+
+export async function recordScrapWriteOff(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { itemId: number; quantity: string | number; reasonCode?: string | null; reason?: string | null; jobReference?: string | null; damageDate?: string | null }
+) {
+  const damage = await recordStockDamage(tx, companyId, actor, Number(input.itemId), {
+    quantity: input.quantity,
+    reason: input.reason || 'Scrap write-off',
+    reasonCode: input.reasonCode || 'scrap',
+    damageDate: input.damageDate || null,
+    jobReference: input.jobReference || null,
+    scrapType: 'scrap',
+  });
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'INVENTORY_SCRAP_WRITTEN_OFF',
+    tableName: 'stock_damages',
+    recordId: damage.damageId,
+    newValues: { itemId: input.itemId, quantity: String(input.quantity), jobReference: input.jobReference || null },
+  });
+  return damage;
+}
+
+export async function listInventoryLots(tx: Transaction, companyId: number, itemId?: number) {
+  const params: any[] = [companyId];
+  let where = 'WHERE l.company_id = $1';
+  if (itemId) { params.push(itemId); where += ` AND l.item_id = $${params.length}`; }
+  const res = await tx.query<any>(
+    `SELECT l.id, l.item_id, l.lot_number, l.supplier_roll_id, l.paper_grain,
+            l.receipt_date::text AS receipt_date, l.expiry_date::text AS expiry_date,
+            l.quantity_on_hand::text AS quantity_on_hand, l.created_at,
+            i.sku, i.name AS item_name
+       FROM inventory_lots l
+       JOIN inventory_items i ON i.company_id = l.company_id AND i.id = l.item_id
+      ${where}
+      ORDER BY l.created_at DESC, l.id DESC
+      LIMIT 500`,
+    params
+  );
+  return res.rows.map(r => ({
+    id: Number(r.id),
+    itemId: Number(r.item_id),
+    sku: r.sku,
+    itemName: r.item_name,
+    lotNumber: r.lot_number,
+    supplierRollId: r.supplier_roll_id || '',
+    paperGrain: r.paper_grain || '',
+    receiptDate: r.receipt_date,
+    expiryDate: r.expiry_date,
+    quantityOnHand: r.quantity_on_hand,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function createInventoryLot(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { itemId: number; lotNumber: string; supplierRollId?: string | null; paperGrain?: string | null; receiptDate?: string | null; expiryDate?: string | null; quantityOnHand?: string | number | null }
+) {
+  const itemId = Number(input.itemId);
+  if (!Number.isInteger(itemId) || itemId <= 0) throw new AccountingError(400, 'Invalid itemId', 'INVALID_ITEM');
+  const item = await requireStockedItem(tx, companyId, itemId);
+  const lotNumber = String(input.lotNumber || '').trim();
+  if (!lotNumber) throw new AccountingError(400, 'lotNumber is required', 'MISSING_LOT_NUMBER');
+  const qty4 = parseQty(input.quantityOnHand ?? 0, 'quantityOnHand');
+  const ins = await tx.query<any>(
+    `INSERT INTO inventory_lots (company_id, item_id, lot_number, supplier_roll_id, paper_grain, receipt_date, expiry_date, quantity_on_hand)
+     VALUES ($1,$2,$3,$4,$5,$6::DATE,$7::DATE,$8::NUMERIC(19,6))
+     ON CONFLICT (company_id, item_id, lot_number) DO UPDATE
+       SET supplier_roll_id = COALESCE(EXCLUDED.supplier_roll_id, inventory_lots.supplier_roll_id),
+           paper_grain = COALESCE(EXCLUDED.paper_grain, inventory_lots.paper_grain),
+           receipt_date = COALESCE(EXCLUDED.receipt_date, inventory_lots.receipt_date),
+           expiry_date = COALESCE(EXCLUDED.expiry_date, inventory_lots.expiry_date),
+           quantity_on_hand = EXCLUDED.quantity_on_hand
+     RETURNING *`,
+    [companyId, item.id, lotNumber, input.supplierRollId || null, input.paperGrain || null, input.receiptDate || null, input.expiryDate || null, formatDecimal4(qty4)]
+  );
+  const r = ins.rows[0];
+  await writeAuditLog(tx, { companyId, actorUserId: actor.userId, actorUsername: actor.username, action: 'INVENTORY_LOT_UPSERTED', tableName: 'inventory_lots', recordId: Number(r.id), newValues: { itemId, lotNumber } });
+  return { id: Number(r.id), itemId, lotNumber, quantityOnHand: r.quantity_on_hand };
 }

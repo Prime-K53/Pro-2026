@@ -178,8 +178,8 @@ function normalizeRole(raw: string | undefined): CompanyRole | null {
 const VALID_JOURNAL_SOURCE_TYPES = new Set<string>([
   'manual', 'invoice', 'sales_receipt', 'payment', 'credit_memo',
   'bill', 'bill_payment', 'vendor_credit',
-  'deposit', 'transfer', 'check', 'expense', 'credit_card_charge', 'bank_import',
-  'payroll', 'reconciliation', 'inventory_adjustment', 'depreciation',
+  'deposit', 'transfer', 'check', 'expense', 'expense_claim', 'credit_card_charge', 'bank_import',
+  'payroll', 'reconciliation', 'inventory_adjustment', 'inventory_damage', 'inventory_transfer', 'stock_count', 'depreciation',
   'printing_contract', 'quick_print', 'exam_production', 'opening_balance',
   'reversal', 'closing_entry', 'fx_gain_loss',
 ]);

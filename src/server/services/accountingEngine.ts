@@ -171,12 +171,14 @@ export type JournalSourceType =
   | 'transfer'
   | 'check'
   | 'expense'
+  | 'expense_claim'
   | 'credit_card_charge'
   | 'bank_import'
   | 'payroll'
   | 'reconciliation'
   | 'inventory_adjustment'
   | 'inventory_damage'
+  | 'inventory_transfer'
   | 'stock_count'
   | 'depreciation'
   | 'printing_contract'
@@ -903,7 +905,7 @@ export async function softCloseFiscalPeriod(
   periodId: number
 ): Promise<FiscalPeriodRow> {
   const res = await tx.query<FiscalPeriodRow>(
-    `SELECT id, period_name, status FROM fiscal_periods WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    `SELECT id, period_name, status, closing_txn_id FROM fiscal_periods WHERE company_id = $1 AND id = $2 FOR UPDATE`,
     [companyId, periodId]
   );
   if (res.rows.length === 0) {
@@ -1070,7 +1072,7 @@ export async function closeFiscalPeriod(
         sourceType: 'closing_entry',
         sourceId: periodId,
         isAdjusting: true,
-        idempotencyKey: `period-close-${companyId}-${periodId}-${period.end_date}`,
+        idempotencyKey: `period-close-${companyId}-${periodId}-${period.end_date}-${period.reopened_at || 'initial'}`,
         lines: closingLines,
       });
       closingTxnId = postedClose.transaction.id;
@@ -1135,9 +1137,20 @@ export async function reopenFiscalPeriod(
     throw new AccountingError(409, 'Fiscal period is already open');
   }
 
+  // F4 fix: reverse the period-closing journal entry on reopen so P&L accounts retain their true activity
+  let reversalClosingTxnId: number | null = null;
+  if (res.rows[0].closing_txn_id) {
+    const rev = await reverseJournalEntry(tx, companyId, actor, Number(res.rows[0].closing_txn_id), {
+      reason: `Auto-reversal on reopen of ${res.rows[0].period_name}: ${cleanReason}`,
+      idempotencyKey: `reopen-close-rev-${companyId}-${periodId}-${res.rows[0].closing_txn_id}`,
+    });
+    reversalClosingTxnId = rev.reversal.id;
+  }
+
   const upd = await tx.query<FiscalPeriodRow>(
     `UPDATE fiscal_periods
         SET status = 'open',
+            closing_txn_id = NULL,
             reopened_by = $3,
             reopened_at = NOW(),
             notes = $4
@@ -1154,8 +1167,8 @@ export async function reopenFiscalPeriod(
     action: 'PERIOD_REOPENED',
     tableName: 'fiscal_periods',
     recordId: periodId,
-    oldValues: { status: res.rows[0].status },
-    newValues: { status: 'open', reason: cleanReason },
+    oldValues: { status: res.rows[0].status, closing_txn_id: res.rows[0].closing_txn_id },
+    newValues: { status: 'open', reason: cleanReason, reversalClosingTxnId },
   });
 
   return {
@@ -2079,6 +2092,43 @@ export async function postOpeningBalances(
     idempotencyKey: input.idempotencyKey,
     lines: journalLines,
   });
+
+  // F6 fix: If any Bank account received an opening balance, record a bank_transactions row
+  // so the bank register and bank reconciliation tie out to the general ledger.
+  for (const line of journalLines) {
+    const acctCheck = await tx.query<{ id: number; account_type: string; name: string }>(
+      `SELECT id, account_type, name FROM accounts WHERE company_id = $1 AND id = $2`,
+      [companyId, line.accountId]
+    );
+    if (acctCheck.rows.length > 0 && acctCheck.rows[0].account_type === 'Bank') {
+      const netAmt4 = parseDecimal4(line.debit) - parseDecimal4(line.credit);
+      if (netAmt4 !== 0n) {
+        const baRes = await tx.query<{ id: number }>(
+          `SELECT id FROM bank_accounts WHERE company_id = $1 AND gl_account_id = $2 LIMIT 1`,
+          [companyId, line.accountId]
+        );
+        await tx.query(
+          `INSERT INTO bank_transactions (
+             company_id, account_id, bank_account_id, txn_date, payee, txn_type,
+             ref_number, memo, amount, is_cleared, status, journal_txn_id, category
+           ) VALUES (
+             $1, $2, $3, $4::DATE, 'Opening Balance', 'Deposit',
+             $5, $6, $7::NUMERIC(19,4), TRUE, 'posted', $8, 'Opening Balance'
+           )`,
+          [
+            companyId,
+            line.accountId,
+            baRes.rows[0]?.id ? Number(baRes.rows[0].id) : null,
+            input.txnDate,
+            input.reference?.trim() || 'OPENING-BAL',
+            `Opening balance carry-forward for ${acctCheck.rows[0].name}`,
+            formatDecimal4(netAmt4),
+            posted.transaction.id,
+          ]
+        );
+      }
+    }
+  }
 
   return {
     transaction: posted.transaction,
