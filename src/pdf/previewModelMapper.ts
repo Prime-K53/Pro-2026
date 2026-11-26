@@ -17,7 +17,7 @@ export function mapKindToDocType(kind: DocumentPreviewKind): DocType | null {
     case 'credit_memo':
       return 'SALES_EXCHANGE';
     case 'payment_receipt':
-      return 'SUPPLIER_PAYMENT';
+      return 'RECEIPT';
     case 'bill':
     case 'purchase_order':
       return 'PO';
@@ -46,6 +46,32 @@ export function mapPreviewModelToPrimeDoc(doc: DocumentPreviewModel): {
 
   const currency = doc.currencyCode || doc.company.currency || 'K';
   const totals = doc.totals || ({} as DocumentPreviewModel['totals']);
+
+  // POS counter receipts render with the dedicated thermal POS_RECEIPT layout.
+  if (doc.posMeta) {
+    const pm = doc.posMeta;
+    const posData: Record<string, unknown> = {
+      number: doc.documentNumber,
+      receiptNumber: doc.documentNumber,
+      date: doc.documentDate,
+      customerName: doc.counterparty?.name || '',
+      cashierName: pm.cashierName || 'System User',
+      paymentMethod: pm.paymentMethod,
+      items: pm.items,
+      subtotal: totals.subtotal ?? 0,
+      discount: pm.discount ?? 0,
+      totalAmount: totals.total ?? 0,
+      total: totals.total ?? 0,
+      amount: totals.total ?? 0,
+      amountTendered: pm.amountTendered ?? 0,
+      changeGiven: pm.changeGiven ?? 0,
+      status: doc.status,
+      currency,
+      documentType: 'POS_RECEIPT',
+      securityQrCodeDataUrl: (doc as any).securityQrCodeDataUrl,
+    };
+    return { type: 'POS_RECEIPT', data: posData as unknown as PrimeDocData };
+  }
 
   const items = (doc.lines || []).map(l => ({
     desc: l.description,
@@ -112,12 +138,38 @@ export function mapPreviewModelToPrimeDoc(doc: DocumentPreviewModel): {
     base.prepaidAmount = cm.totalPrepaidAmount;
     base.remainingBalance = cm.remainingBalance;
     base.status = doc.status;
-    base.assessments = (cm.assessments || []).map(a => ({
-      description: a.label,
-      amount: a.agreedAmount,
-      status: a.status,
-    }));
-  }
+      base.assessments = (cm.assessments || []).map(a => ({
+        description: a.label,
+        amount: a.agreedAmount,
+        status: a.status,
+      }));
+    }
+
+    // Extended intake fields (spec / delivery / zone / pricing) rendered on the
+    // contract PDF when present.
+    if (type === 'PRINTING_CONTRACT' && doc.contractExtras) {
+      const ex = doc.contractExtras;
+      if (ex.schoolZone) base.schoolZone = ex.schoolZone;
+      if (ex.customerPhone) base.customerPhone = ex.customerPhone;
+      if (ex.totalCandidature != null) base.totalCandidature = ex.totalCandidature;
+      if (ex.sittings) base.assessmentSittings = ex.sittings;
+      if (ex.chargePerCandidate != null) base.chargePerCandidate = ex.chargePerCandidate;
+      if (ex.printSpecSummary) base.printSpecSummary = ex.printSpecSummary;
+      if (ex.printPaperSummary) base.printPaperSummary = ex.printPaperSummary;
+      if (ex.printColorSummary) base.printColorSummary = ex.printColorSummary;
+      if (ex.printTypeSummary) base.printTypeSummary = ex.printTypeSummary;
+      if (ex.printOrientation) base.printOrientation = ex.printOrientation;
+      if (ex.printFinishing) base.printFinishing = ex.printFinishing;
+      if (ex.printPackaging) base.printPackaging = ex.printPackaging;
+      if (ex.pricingRulesSummary) base.pricingRulesSummary = ex.pricingRulesSummary;
+      if (ex.deliveryTermsSummary) base.deliveryTermsSummary = ex.deliveryTermsSummary;
+      if (ex.deliveryMethod) base.deliveryMethod = ex.deliveryMethod;
+      if (ex.deliveryTimeline) base.deliveryTimeline = ex.deliveryTimeline;
+      if (ex.deliveryAddress) base.deliveryAddress = ex.deliveryAddress;
+      if (ex.deliveryNotes) base.deliveryNotes = ex.deliveryNotes;
+      if (ex.terms) base.terms = ex.terms;
+      if (ex.notes) base.notes = ex.notes;
+    }
 
   return { type, data: base as unknown as PrimeDocData };
 }

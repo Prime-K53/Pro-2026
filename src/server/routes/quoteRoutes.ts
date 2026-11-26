@@ -4,6 +4,7 @@ import { createAuthMiddleware } from '../middleware/auth.ts';
 import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
 import { Transaction } from '@electric-sql/pglite';
+import { checkRouteIdempotency, saveRouteIdempotency } from '../services/commercialHelpers.ts';
 import * as quoteService from '../services/quoteService.ts';
 
 function toActor(req: Request): ActorContext {
@@ -28,7 +29,24 @@ export function createQuoteRouter(db: ServerDatabase): Router {
   const { requireAuth, requirePermission } = createAuthMiddleware(db);
   router.use(requireAuth, csrfProtection);
 
-  router.get('/quotes', requirePermission('invoices:read'), async (req: Request, res: Response) => {
+  const runIdem = async <T>(
+    companyId: number,
+    route: string,
+    key: string | null | undefined,
+    payload: unknown,
+    actorUserId: number,
+    successStatus: number,
+    fn: (tx: Transaction) => Promise<T>
+  ): Promise<{ replay: boolean; status: number; body: T }> =>
+    db.withCompanyDb(companyId, async tx => {
+      const idem = await checkRouteIdempotency<T>(tx, companyId, route, key, payload);
+      if (idem.hit) return { replay: true, status: idem.statusCode, body: idem.response };
+      const body = await fn(tx);
+      await saveRouteIdempotency(tx, companyId, route, key, idem.payloadHash, successStatus, body, actorUserId);
+      return { replay: false, status: successStatus, body };
+    });
+
+  router.get('/quotes', requirePermission('estimates:read'), async (req: Request, res: Response) => {
     try {
       const quotes = await db.withCompanyDb(req.auth!.companyId, (tx: Transaction) =>
         quoteService.listQuotes(tx, req.auth!.companyId)
@@ -39,7 +57,7 @@ export function createQuoteRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.get('/quotes/:id', requirePermission('invoices:read'), async (req: Request, res: Response) => {
+  router.get('/quotes/:id', requirePermission('estimates:read'), async (req: Request, res: Response) => {
     try {
       const quote = await db.withCompanyDb(req.auth!.companyId, (tx: Transaction) =>
         quoteService.getQuote(tx, req.auth!.companyId, Number(req.params.id))
@@ -50,7 +68,7 @@ export function createQuoteRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.post('/quotes', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+  router.post('/quotes', requirePermission('estimates:write'), async (req: Request, res: Response) => {
     try {
       const quote = await db.withCompanyDb(req.auth!.companyId, (tx: Transaction) =>
         quoteService.createQuote(tx, req.auth!.companyId, toActor(req), req.body || {})
@@ -61,7 +79,7 @@ export function createQuoteRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.post('/quotes/:id/versions', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+  router.post('/quotes/:id/versions', requirePermission('estimates:write'), async (req: Request, res: Response) => {
     try {
       const quote = await db.withCompanyDb(req.auth!.companyId, (tx: Transaction) =>
         quoteService.addQuoteVersion(tx, req.auth!.companyId, toActor(req), Number(req.params.id), req.body || {})
@@ -72,12 +90,27 @@ export function createQuoteRouter(db: ServerDatabase): Router {
     }
   });
 
-  router.post('/quotes/:id/status', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+  router.post('/quotes/:id/status', requirePermission('estimates:write'), async (req: Request, res: Response) => {
     try {
       const quote = await db.withCompanyDb(req.auth!.companyId, (tx: Transaction) =>
         quoteService.setQuoteStatus(tx, req.auth!.companyId, toActor(req), Number(req.params.id), req.body?.status)
       );
       return res.json(quote);
+    } catch (err) {
+      return handleError(res, err);
+    }
+  });
+
+  router.post('/quotes/:id/convert', requirePermission('invoices:write'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdem(
+        req.auth!.companyId, 'quote_convert', key, { id },
+        toActor(req).userId, 200,
+        tx => quoteService.convertQuoteToInvoice(tx, req.auth!.companyId, toActor(req), id)
+      );
+      return res.status(r.status).json(r.body);
     } catch (err) {
       return handleError(res, err);
     }

@@ -63,6 +63,9 @@ export const InvoicesView: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
+  const [selectedEstimateId, setSelectedEstimateId] = useState<number | null>(null);
+  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; type: 'invoice' | 'estimate'; record: any } | null>(null);
 
   const [invoices, setInvoices] = useState<ApiInvoice[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
@@ -78,6 +81,7 @@ export const InvoicesView: React.FC = () => {
   const [customers, setCustomers] = useState<ApiCustomer[]>([]);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<ApiAccount[]>([]);
+  const [aging, setAging] = useState<any>(null);
 
   const handleOpenPreview = async (kind: DocumentPreviewKind, id: number) => {
     try {
@@ -140,7 +144,7 @@ export const InvoicesView: React.FC = () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [invList, pmtList, cmList, estResp, recList, commResp, custList, invItems, acctList] = await Promise.all([
+      const [invList, pmtList, cmList, estResp, recList, commResp, custList, invItems, acctList, arAging] = await Promise.all([
         commercialApi.listInvoices(),
         commercialApi.listPayments(),
         commercialApi.listCreditMemos(),
@@ -150,6 +154,7 @@ export const InvoicesView: React.FC = () => {
         commercialApi.listCustomers(),
         commercialApi.listInventory(),
         accountingApi.listAccounts(),
+        commercialApi.getArAging(),
       ]);
       setInvoices(invList);
       setPayments(pmtList);
@@ -157,6 +162,7 @@ export const InvoicesView: React.FC = () => {
       setEstimates(estResp.estimates || []);
       setCostDetailsIncluded(Boolean(estResp.costDetailsIncluded));
       setRecurringList(recList);
+      setAging(arAging);
       setComms({
         remindersSent: commResp.remindersSent || [],
         emailLog: commResp.emailLog || [],
@@ -854,19 +860,6 @@ export const InvoicesView: React.FC = () => {
         },
       },
       {
-        id: 'invoice.edit-draft',
-        label: 'Edit Draft Invoice',
-        icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
-        group: 'admin',
-        groupLabel: 'Document',
-        requiredPermission: 'invoices:write',
-        isVisible: () => inv.status === 'draft',
-        isEnabled: () => (inv.status === 'draft' ? true : { enabled: false, reason: 'Only draft invoices can be edited' }),
-        execute: async () => {
-          triggerShortcutNotice('Draft editing backend support is planned; use Duplicate for now', 'warning');
-        },
-      },
-      {
         id: 'invoice.related-sales-order',
         label: 'View Related Sales Order',
         icon: <FileText className="w-3.5 h-3.5 text-slate-600" />,
@@ -1146,6 +1139,24 @@ export const InvoicesView: React.FC = () => {
         </div>
       </div>
 
+      {aging?.totals && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            { label: 'Outstanding', value: aging.totals.total, tone: 'text-slate-900 dark:text-white' },
+            { label: 'Current', value: aging.totals.current, tone: 'text-emerald-600 dark:text-emerald-400' },
+            { label: '1–30 days', value: aging.totals.days1To30, tone: 'text-amber-600 dark:text-amber-400' },
+            { label: '31–60 days', value: aging.totals.days31To60, tone: 'text-orange-600 dark:text-orange-400' },
+            { label: '61–90 days', value: aging.totals.days61To90, tone: 'text-rose-600 dark:text-rose-400' },
+            { label: '90+ days', value: aging.totals.daysOver90, tone: 'text-rose-700 dark:text-rose-300' },
+          ].map(k => (
+            <div key={k.label} className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{k.label}</div>
+              <div className={`font-mono text-sm font-bold ${k.tone}`}>{formatCurrency(Number(k.value) || 0, currency)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {errorMsg && (
         <div role="alert" className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between">
           <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {errorMsg}</span>
@@ -1260,7 +1271,12 @@ export const InvoicesView: React.FC = () => {
                           const cellPad = tableDensity === 'compact' ? 'px-4 py-2' : 'px-4 py-3';
                           const margin = inv.subtotal > 0 ? (inv.grossProfit / inv.subtotal) * 100 : 0;
                           return (
-                            <tr key={inv.id} className={`hover:bg-slate-50 dark:hover:bg-slate-850/50 ${inv.status === 'voided' ? 'opacity-60' : ''}`}>
+                            <tr
+                              key={inv.id}
+                              onClick={() => setSelectedInvoiceId(inv.id)}
+                              onContextMenu={(e) => { e.preventDefault(); setSelectedInvoiceId(inv.id); setRowContextMenu({ x: e.clientX, y: e.clientY, type: 'invoice', record: inv }); }}
+                              className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-850/50 ${inv.status === 'voided' ? 'opacity-60' : ''} ${selectedInvoiceId === inv.id ? 'bg-blue-50/70 dark:bg-blue-900/20 ring-1 ring-inset ring-blue-200 dark:ring-blue-800' : ''}`}
+                            >
                               <td className={`${cellPad} font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap`}>
                                 {inv.invoiceNumber}
                                 {inv.currencyCode && inv.currencyCode !== baseCurrency && (
@@ -1503,7 +1519,12 @@ export const InvoicesView: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                       {estimates.map(est => (
-                        <tr key={est.id} className="hover:bg-slate-50 dark:hover:bg-slate-850/50">
+                        <tr
+                          key={est.id}
+                          onClick={() => setSelectedEstimateId(est.id)}
+                          onContextMenu={(e) => { e.preventDefault(); setSelectedEstimateId(est.id); setRowContextMenu({ x: e.clientX, y: e.clientY, type: 'estimate', record: est }); }}
+                          className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-850/50 ${selectedEstimateId === est.id ? 'bg-blue-50/70 dark:bg-blue-900/20 ring-1 ring-inset ring-blue-200 dark:ring-blue-800' : ''}`}
+                        >
                           <td className="px-4 py-3 font-bold text-blue-600 dark:text-blue-400">{est.estimateNumber}</td>
                           <td className="px-4 py-3 font-sans font-semibold">{est.customerName}</td>
                           <td className="px-4 py-3 text-slate-500">{est.estimateDate}</td>
@@ -2004,6 +2025,107 @@ export const InvoicesView: React.FC = () => {
           onSuccess={loadData}
         />
       )}
+
+      {rowContextMenu && (() => {
+        if (rowContextMenu.type === 'invoice') {
+          const inv = rowContextMenu.record as ApiInvoice;
+          const defs = buildInvoiceActionDefinitions(inv);
+          const ctx = buildInvoiceActionContext(inv, pendingActionId);
+          const resolved = resolveActions(defs, ctx);
+          return resolved.length > 0 ? (
+            <AdvancedActionsMenu<ApiInvoice>
+              label={`Actions for ${inv.invoiceNumber}`}
+              actions={resolved}
+              pendingActionId={pendingActionId}
+              executionContext={ctx}
+              idempotencyRecordKey={inv.id}
+              notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
+              hideTrigger
+              contextPoint={{ x: rowContextMenu.x, y: rowContextMenu.y }}
+              onContextClose={() => setRowContextMenu(null)}
+              onExecuteAction={async (action) => {
+                const actionKey = `invoice:${inv.id}:${action.definition.id}`;
+                setPendingActionId(actionKey);
+                try {
+                  const freshCtx = buildInvoiceActionContext(inv, null);
+                  const freshEval = resolveActions([action.definition], freshCtx)[0];
+                  if (!freshEval || !isActionExecutable(freshEval)) throw new Error(freshEval?.evaluation?.reason || 'Action is no longer available');
+                  const def = freshEval.definition;
+                  let reason: string | undefined;
+                  const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
+                  if (confirmation) {
+                    const defaultReason = confirmation.requireReason ? '' : '';
+                    const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}${confirmation.requireReason ? '\n\nReason required.' : (confirmation.reasonLabel ? '\n\nOptional reason:' : '')}`;
+                    if (confirmation.requireReason || confirmation.destructive) {
+                      const input = window.prompt(msg, defaultReason);
+                      if (input === null) return;
+                      reason = (input || '').trim();
+                      if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
+                    } else {
+                      const ok = window.confirm(msg);
+                      if (!ok) return;
+                    }
+                  }
+                  if (typeof def.execute === 'function') await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
+                } catch (err: any) {
+                  setErrorMsg(err?.message || 'Action failed');
+                  triggerShortcutNotice(err?.message || 'Action failed', 'error');
+                } finally {
+                  setPendingActionId(null);
+                }
+              }}
+            />
+          ) : null;
+        }
+        const est = rowContextMenu.record;
+        const defs = buildEstimateActionDefinitions(est);
+        const ctx = buildEstimateActionContext(est, pendingActionId);
+        const resolved = resolveActions(defs, ctx);
+        return resolved.length > 0 ? (
+          <AdvancedActionsMenu<any>
+            label={`Actions for ${est.estimateNumber}`}
+            actions={resolved}
+            pendingActionId={pendingActionId}
+            executionContext={ctx}
+            idempotencyRecordKey={est.id}
+            notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
+            hideTrigger
+            contextPoint={{ x: rowContextMenu.x, y: rowContextMenu.y }}
+            onContextClose={() => setRowContextMenu(null)}
+            onExecuteAction={async (action) => {
+              const actionKey = `estimate:${est.id}:${action.definition.id}`;
+              setPendingActionId(actionKey);
+              try {
+                const freshCtx = buildEstimateActionContext(est, null);
+                const freshEval = resolveActions([action.definition], freshCtx)[0];
+                if (!freshEval || !isActionExecutable(freshEval)) throw new Error(freshEval?.evaluation?.reason || 'Action is no longer available');
+                const def = freshEval.definition;
+                let reason: string | undefined;
+                const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
+                if (confirmation) {
+                  const defaultReason = confirmation.requireReason ? '' : '';
+                  const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}${confirmation.requireReason ? '\n\nReason required.' : (confirmation.reasonLabel ? '\n\nOptional reason:' : '')}`;
+                  if (confirmation.requireReason || confirmation.destructive) {
+                    const input = window.prompt(msg, defaultReason);
+                    if (input === null) return;
+                    reason = (input || '').trim();
+                    if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
+                  } else {
+                    const ok = window.confirm(msg);
+                    if (!ok) return;
+                  }
+                }
+                if (typeof def.execute === 'function') await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
+              } catch (err: any) {
+                setErrorMsg(err?.message || 'Action failed');
+                triggerShortcutNotice(err?.message || 'Action failed', 'error');
+              } finally {
+                setPendingActionId(null);
+              }
+            }}
+          />
+        ) : null;
+      })()}
 
     </div>
   );

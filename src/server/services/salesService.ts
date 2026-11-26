@@ -2428,17 +2428,27 @@ export async function voidCustomerPayment(
     [companyId, paymentId]
   );
   for (const a of allocs.rows) {
-    const invRes = await tx.query<{ total: string; amount_paid: string }>(
-      `SELECT total::text, amount_paid::text FROM invoices WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+    const invRes = await tx.query<{ total: string; amount_paid: string; status: string }>(
+      `SELECT total::text, amount_paid::text, status FROM invoices WHERE company_id = $1 AND id = $2 FOR UPDATE`,
       [companyId, Number(a.invoice_id)]
     );
     if (invRes.rows.length > 0) {
       const total4 = parseDecimal4(invRes.rows[0].total);
       const curPaid4 = parseDecimal4(invRes.rows[0].amount_paid);
       const alloc4 = parseDecimal4(a.amount);
+      const curStatus = invRes.rows[0].status;
       const nextPaid4 = curPaid4 >= alloc4 ? curPaid4 - alloc4 : 0n;
       const nextBal4 = total4 - nextPaid4;
-      const nextStatus = nextPaid4 === 0n ? 'sent' : nextBal4 === 0n ? 'paid' : 'partial';
+      // Never clear a dispute or a write-off when reversing a payment; otherwise
+      // derive the status from the restored balance.
+      const nextStatus =
+        curStatus === 'disputed' || curStatus === 'written_off'
+          ? curStatus
+          : nextPaid4 === 0n
+            ? 'sent'
+            : nextBal4 === 0n
+              ? 'paid'
+              : 'partial';
       await tx.query(
         `UPDATE invoices
             SET amount_paid = $3::NUMERIC(19,4),
@@ -2853,6 +2863,16 @@ export async function voidCreditMemo(
 // ============================================================================
 
 export async function listEstimates(tx: Transaction, companyId: number, includeCosts: boolean) {
+  // Lazily expire overdue estimates so the status is accurate without a scheduler.
+  await tx.query(
+    `UPDATE estimates
+        SET status = 'expired', updated_at = NOW()
+      WHERE company_id = $1
+        AND status IN ('pending', 'accepted')
+        AND expiry_date IS NOT NULL
+        AND expiry_date < CURRENT_DATE`,
+    [companyId]
+  );
   const hdrs = await tx.query<{
     id: number;
     estimate_number: string;
@@ -3163,6 +3183,9 @@ export async function convertEstimateToInvoice(
   const est = estRes.rows[0];
   if (est.status === 'invoiced') {
     throw new AccountingError(409, `Estimate ${est.estimate_number} has already been converted to an invoice`);
+  }
+  if (est.status !== 'accepted') {
+    throw new AccountingError(409, 'Only an accepted estimate can be converted', 'ESTIMATE_NOT_ACCEPTED');
   }
 
   const linesRes = await tx.query<{
@@ -3525,12 +3548,25 @@ export async function generateCustomerStatement(
       date: r.doc_date,
       type: r.doc_type,
       number: r.doc_number,
+      reference: r.doc_number,
       description: r.description,
       charge: amt4 > 0n ? toMoneyNumber(amt4) : 0,
+      debit: amt4 > 0n ? toMoneyNumber(amt4) : 0,
       credit: amt4 < 0n ? toMoneyNumber(-amt4) : 0,
       runningBalance: toMoneyNumber(running4),
     };
   });
+
+  // Period totals (for the compliance summary strip).
+  let totalInvoiced = 0;
+  let totalPaid = 0;
+  let totalCredits = 0;
+  for (const r of periodActivity.rows) {
+    const amt = Number(r.amount);
+    if (r.doc_type === 'Invoice') totalInvoiced += amt;
+    else if (r.doc_type === 'Payment') totalPaid += -amt;
+    else if (r.doc_type === 'Credit Memo') totalCredits += -amt;
+  }
 
   const aging = await getCustomerAgingBuckets(tx, companyId, customerId, periodEnd);
 
@@ -3546,6 +3582,9 @@ export async function generateCustomerStatement(
     periodEnd,
     openingBalance: toMoneyNumber(openingBal4),
     closingBalance: toMoneyNumber(running4),
+    totalInvoiced,
+    totalPaid,
+    totalCredits,
     lines,
     aging: {
       current: toMoneyNumber(aging.buckets.current4),
@@ -4127,6 +4166,23 @@ export async function applyDepositToInvoice(
       400,
       'No customer deposit/unearned revenue liability account found (expected 2300/2050 or named unearned/deposit/prepayment account)',
       'MISSING_DEPOSIT_LIABILITY_ACCOUNT'
+    );
+  }
+
+  // The deposit liability must actually be funded: it needs a positive credit
+  // balance before we can draw it down. This prevents "applying" a deposit that
+  // was never received (which would debit the liability into an overdraft).
+  const fundedRes = await tx.query<{ bal: string }>(
+    `SELECT COALESCE(SUM(credit - debit), 0)::text AS bal
+       FROM journal_lines
+      WHERE company_id = $1 AND account_id = $2`,
+    [companyId, depositAccountId]
+  );
+  if (parseDecimal4(fundedRes.rows[0]?.bal || '0') <= 0n) {
+    throw new AccountingError(
+      409,
+      'The customer deposit/unearned liability has no funded balance to apply',
+      'NO_FUNDED_DEPOSIT'
     );
   }
 

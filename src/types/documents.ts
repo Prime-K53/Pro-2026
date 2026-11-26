@@ -183,6 +183,28 @@ export interface DocumentPreviewModel {
       linkedInvoiceNumber?: string;
     }>;
   };
+  contractExtras?: {
+    schoolZone?: string;
+    customerPhone?: string;
+    totalCandidature?: number;
+    sittings?: string;
+    chargePerCandidate?: number;
+    printSpecSummary?: string;
+    printPaperSummary?: string;
+    printColorSummary?: string;
+    printTypeSummary?: string;
+    printFinishing?: string;
+    printPackaging?: string;
+    printOrientation?: string;
+    pricingRulesSummary?: string;
+    deliveryTermsSummary?: string;
+    deliveryMethod?: string;
+    deliveryTimeline?: string;
+    deliveryAddress?: string;
+    deliveryNotes?: string;
+    terms?: string;
+    notes?: string;
+  };
   examMeta?: {
     assessmentName: string;
     className: string;
@@ -215,6 +237,15 @@ export interface DocumentPreviewModel {
     extraCost: number;
     typingRevenue?: number;
     photocopyRevenue?: number;
+  };
+  /** Present on POS counter receipts — drives the thermal POS_RECEIPT layout. */
+  posMeta?: {
+    cashierName?: string;
+    paymentMethod: string;
+    amountTendered: number;
+    changeGiven: number;
+    discount: number;
+    items: Array<{ desc: string; qty: number; price: number; total: number }>;
   };
   fileMeta?: {
     attachmentId: number;
@@ -492,6 +523,64 @@ export function mapContractToPreviewModel(params: {
         linkedInvoiceId: a.linkedInvoiceId,
         linkedInvoiceNumber: a.linkedInvoiceNumber,
       })),
+    },
+    contractExtras: {
+      schoolZone: contract.schoolZone || undefined,
+      customerPhone: contract.customerPhone || undefined,
+      totalCandidature: contract.expectedCandidates || undefined,
+      sittings: contract.sittings || undefined,
+      chargePerCandidate: contract.chargePerCandidate || undefined,
+      printPaperSummary:
+        [contract.printSpec?.paperSize, contract.printSpec?.paperType, contract.printSpec?.paperWeight && `${contract.printSpec.paperWeight}gsm`]
+          .filter(Boolean)
+          .join(' · ') || undefined,
+      printColorSummary: contract.printSpec?.colour || undefined,
+      printTypeSummary:
+        [contract.printSpec?.sides, contract.printSpec?.orientation].filter(Boolean).join(' · ') || undefined,
+      printOrientation: contract.printSpec?.orientation || undefined,
+      printFinishing: contract.printSpec?.finishing || undefined,
+      printPackaging: contract.printSpec?.packaging || undefined,
+      printSpecSummary:
+        [
+          contract.printSpec?.paperSize,
+          contract.printSpec?.paperType,
+          contract.printSpec?.paperWeight && `${contract.printSpec.paperWeight}gsm`,
+          contract.printSpec?.colour,
+          contract.printSpec?.sides,
+          contract.printSpec?.orientation,
+          contract.printSpec?.pagesPerCopy ? `${contract.printSpec.pagesPerCopy} pages` : undefined,
+          contract.printSpec?.copies ? `${contract.printSpec.copies} copies` : undefined,
+          contract.printSpec?.finishing,
+          contract.printSpec?.packaging,
+          contract.printSpec?.notes,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined,
+      pricingRulesSummary:
+        [
+          contract.taxHandling && `Tax: ${contract.taxHandling}`,
+          contract.discount && `Discount: ${contract.discount}`,
+          contract.urgentFee && `Urgent: ${contract.urgentFee}`,
+          contract.pricingNotes,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined,
+      deliveryMethod: contract.delivery?.method || undefined,
+      deliveryTimeline: contract.delivery?.timeline || undefined,
+      deliveryAddress: contract.delivery?.address || undefined,
+      deliveryNotes: contract.delivery?.notes || undefined,
+      deliveryTermsSummary:
+        [
+          contract.delivery?.method,
+          contract.delivery?.timeline,
+          contract.delivery?.address,
+          contract.delivery?.packaging,
+          contract.delivery?.notes,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined,
+      terms: contract.generalTerms || undefined,
+      notes: contract.notes || undefined,
     },
     lines: contract.assessments.map(a => ({
       description: `#${a.assessmentNumber}: ${a.label} (Scheduled: ${a.scheduledDate})`,

@@ -89,4 +89,16 @@ describe('PrintingContractsView register', () => {
     expect(screen.getByText('PC-0002')).toBeInTheDocument();
     expect(screen.queryByText('PC-0001')).not.toBeInTheDocument();
   });
+
+  it('opens the new-contract modal with the sectioned form', async () => {
+    const user = userEvent.setup();
+    render(<PrintingContractsView />);
+    await user.click(screen.getByRole('button', { name: /New Prepaid School Contract/i }));
+    expect(screen.getByText(/Parties & Type/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pricing Rules/i)).toBeInTheDocument();
+    expect(screen.getByText(/Commercials & Period/i)).toBeInTheDocument();
+    expect(screen.getByText(/Printing Specification/i)).toBeInTheDocument();
+    expect(screen.getByText(/Delivery Terms/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/2026 Term 2 examination printing agreement/i)).toBeInTheDocument();
+  });
 });

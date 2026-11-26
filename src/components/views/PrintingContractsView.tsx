@@ -28,6 +28,7 @@ import {
   SignContractModal,
   ReconciliationView,
 } from '../modals/ContractActionModals';
+import { computeContractIntegrity } from '../../utils/contractIntegrity';
 import {
   FileSpreadsheet,
   Plus,
@@ -52,6 +53,8 @@ import {
   Trash2,
   ClipboardCheck,
   Undo2,
+  CalendarDays,
+  ReceiptText,
 } from 'lucide-react';
 import {
   buildPaperStockFromInventoryItem,
@@ -94,6 +97,7 @@ export const PrintingContractsView: React.FC = () => {
     generateAndSyncWorkflowInvoice,
     getInvoiceById,
     openDocumentPreview,
+    openPrimePreview,
     getRawUsageUnitCost,
     getAssessmentActualStats,
     setCurrentView,
@@ -191,6 +195,64 @@ export const PrintingContractsView: React.FC = () => {
     bankAccounts[0]?.id || companyProfile.defaultBankAccountId
   );
   const [contractNotes, setContractNotes] = useState('');
+
+  // Extended new-contract form (PrimeERP-style sections)
+  type ContractLineItem = {
+    id: string;
+    item: string;
+    grade: string;
+    subject: string;
+    qty: number;
+    unitPrice: number;
+  };
+  const newLine = (over: Partial<ContractLineItem> = {}): ContractLineItem => ({
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    item: '',
+    grade: '',
+    subject: '',
+    qty: 1,
+    unitPrice: 0,
+    ...over,
+  });
+  const [schoolZone, setSchoolZone] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [expectedCandidates, setExpectedCandidates] = useState<number>(0);
+  const [sittings, setSittings] = useState('Once Off');
+  const [pricingModel, setPricingModel] = useState<'' | 'per_candidate'>('');
+  const [chargePerCandidate, setChargePerCandidate] = useState<number>(0);
+  const [taxHandling, setTaxHandling] = useState('');
+  const [discount, setDiscount] = useState('');
+  const [urgentFee, setUrgentFee] = useState('');
+  const [pricingNotes, setPricingNotes] = useState('');
+  const [lineItems, setLineItems] = useState<ContractLineItem[]>([
+    newLine({ item: 'Term 2 Grade 7 Mathematics' }),
+    newLine({ item: 'Term 2 Grade 7 English' }),
+  ]);
+  const [paperSize, setPaperSize] = useState('');
+  const [paperType, setPaperType] = useState('');
+  const [paperWeight, setPaperWeight] = useState('');
+  const [colour, setColour] = useState('');
+  const [sides, setSides] = useState('');
+  const [orientation, setOrientation] = useState('');
+  const [pagesPerCopy, setPagesPerCopy] = useState<number>(0);
+  const [copies, setCopies] = useState<number>(0);
+  const [finishing, setFinishing] = useState('');
+  const [packaging, setPackaging] = useState('');
+  const [specNotes, setSpecNotes] = useState('');
+  const [deliveryMethod, setDeliveryMethod] = useState('');
+  const [deliveryTimeline, setDeliveryTimeline] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryPackaging, setDeliveryPackaging] = useState('');
+  const [deliveryNotes, setDeliveryNotes] = useState('');
+  const [generalTerms, setGeneralTerms] = useState('');
+
+  const lineAmount = (li: ContractLineItem) =>
+    Math.round((li.qty || 0) * (li.unitPrice || 0) * 100) / 100;
+  const contractTotal = lineItems.reduce((s, li) => s + lineAmount(li), 0);
+  const candidateTotal =
+    pricingModel === 'per_candidate' ? expectedCandidates * chargePerCandidate : 0;
+  const effectiveContractTotal = candidateTotal > 0 ? candidateTotal : contractTotal;
+  const lineItemsValid = lineItems.length >= 2 && lineItems.length <= 5;
 
   // Complete Assessment Deduction Modal State
   const [deductionTarget, setDeductionTarget] = useState<{
@@ -328,11 +390,87 @@ export const PrintingContractsView: React.FC = () => {
 
   const handleCreateContract = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!schoolCustomerId || totalPrepaidAmount <= 0 || customMismatch) return;
+    const candidateTotal =
+      pricingModel === 'per_candidate' ? expectedCandidates * chargePerCandidate : 0;
+    const effectiveTotal = candidateTotal > 0 ? candidateTotal : contractTotal;
+    if (!schoolCustomerId || effectiveTotal <= 0 || !lineItemsValid) {
+      triggerShortcutNotice('Add 2–5 priced line items (or per-candidate pricing) and a customer.', 'error');
+      return;
+    }
     if (endDate < startDate) {
       triggerShortcutNotice('End date cannot be before the start date.', 'error');
       return;
     }
+
+    const perAssessmentSheets = pagesPerCopy > 0 && copies > 0 ? pagesPerCopy * copies : 0;
+    // When per-candidate pricing drives the total, distribute it across the
+    // line items so the assessment amounts still sum to the contract total.
+    const baseWeights = lineItems.map(li => lineAmount(li));
+    const weightSum = baseWeights.reduce((s, w) => s + w, 0);
+    let allocated = 0;
+    const assessments: ContractAssessmentMilestone[] = lineItems.map((li, idx) => {
+      const isLast = idx === lineItems.length - 1;
+      let amount: number;
+      if (candidateTotal > 0) {
+        amount = isLast
+          ? Math.round((effectiveTotal - allocated) * 100) / 100
+          : Math.round((effectiveTotal * (weightSum > 0 ? baseWeights[idx] / weightSum : 1 / lineItems.length)) * 100) / 100;
+        allocated += amount;
+      } else {
+        amount = lineAmount(li);
+      }
+      return {
+        assessmentNumber: idx + 1,
+        label: [li.item, li.grade && `Grade ${li.grade}`, li.subject]
+          .filter(Boolean)
+          .join(' · ') || `Item ${idx + 1}`,
+        scheduledDate: startDate,
+        agreedAmount: amount,
+        rawPaperItemId: draftPaperItemId || undefined,
+        rawTonerItemId: draftTonerItemId || undefined,
+        estimatedSheets: perAssessmentSheets,
+        estimatedImpressions: 0,
+        paperCost: 0,
+        tonerCost: 0,
+        totalCost: 0,
+        profit: amount,
+        status: 'pending',
+      };
+    });
+
+    // Persist the extended sections that have no dedicated columns as a
+    // structured, readable block appended to the contract notes.
+    const detailLines = [
+      schoolZone && `School zone: ${schoolZone}`,
+      customerPhone && `Customer phone: ${customerPhone}`,
+      expectedCandidates > 0 && `Expected candidates: ${expectedCandidates}`,
+      `Sittings: ${sittings}`,
+      pricingModel === 'per_candidate' &&
+        `Pricing: ${formatCurrency(chargePerCandidate, currency)} per candidate`,
+      taxHandling && `Tax handling: ${taxHandling}`,
+      discount && `Discount: ${discount}`,
+      urgentFee && `Urgent fee: ${urgentFee}`,
+      pricingNotes && `Pricing notes: ${pricingNotes}`,
+      (paperSize || paperType || paperWeight) &&
+        `Paper: ${[paperSize, paperType, paperWeight && `${paperWeight}gsm`]
+          .filter(Boolean)
+          .join(' · ')}`,
+      (colour || sides || orientation) &&
+        `Print: ${[colour, sides, orientation].filter(Boolean).join(' · ')}`,
+      pagesPerCopy > 0 && `Pages per copy: ${pagesPerCopy}`,
+      copies > 0 && `Copies: ${copies}`,
+      finishing && `Finishing: ${finishing}`,
+      packaging && `Packaging: ${packaging}`,
+      specNotes && `Specification notes: ${specNotes}`,
+      deliveryMethod && `Delivery method: ${deliveryMethod}`,
+      deliveryTimeline && `Delivery timeline: ${deliveryTimeline}`,
+      deliveryAddress && `Delivery address: ${deliveryAddress}`,
+      deliveryPackaging && `Delivery packaging: ${deliveryPackaging}`,
+      deliveryNotes && `Delivery notes: ${deliveryNotes}`,
+      generalTerms && `General terms: ${generalTerms}`,
+      contractNotes && `Notes: ${contractNotes}`,
+    ].filter(Boolean);
+    const composedNotes = detailLines.join('\n');
 
     const created = await addPrintingContract({
       schoolCustomerId,
@@ -340,17 +478,48 @@ export const PrintingContractsView: React.FC = () => {
       academicYear,
       startDate,
       endDate,
-      totalPrepaidAmount,
-      totalAssessments,
+      totalPrepaidAmount: effectiveTotal,
+      totalAssessments: lineItems.length as 2 | 3 | 4 | 5,
       depositBankAccountId,
-      assessments: draftAssessmentsList,
-      notes: contractNotes,
+      assessments,
+      notes: composedNotes || contractNotes,
+      schoolZone,
+      customerPhone,
+      expectedCandidates,
+      sittings,
+      pricingModel,
+      chargePerCandidate,
+      taxHandling,
+      discount,
+      urgentFee,
+      pricingNotes,
+      printSpec: {
+        paperSize,
+        paperType,
+        paperWeight,
+        colour,
+        sides,
+        orientation,
+        pagesPerCopy,
+        copies,
+        finishing,
+        packaging,
+        notes: specNotes,
+      },
+      delivery: {
+        method: deliveryMethod,
+        timeline: deliveryTimeline,
+        address: deliveryAddress,
+        packaging: deliveryPackaging,
+        notes: deliveryNotes,
+      },
+      generalTerms,
     });
 
     setSelectedContractId(created.id);
     setIsNewContractOpen(false);
     triggerShortcutNotice(
-      `Created prepaid contract ${created.contractNumber} (${totalAssessments} dated assessments · ${formatCurrency(totalPrepaidAmount, currency)})`
+      `Created prepaid contract ${created.contractNumber} (${lineItems.length} items · ${formatCurrency(effectiveTotal, currency)})`
     );
   };
 
@@ -389,7 +558,7 @@ export const PrintingContractsView: React.FC = () => {
   };
 
   const openContractPreview = (contract: PrintingContract) => {
-    const school = customers.find(c => c.id === contract.schoolCustomerId);
+    const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
     openDocumentPreview(
       mapContractToPreviewModel({
         contract,
@@ -407,6 +576,93 @@ export const PrintingContractsView: React.FC = () => {
           }
         },
       })
+    );
+  };
+
+  const openSchedulePreview = async (contract: PrintingContract) => {
+    const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
+    const { hash } = await computeContractIntegrity(contract);
+    const schedule = contract.assessments.map((a, i) => ({
+      sequence: i + 1,
+      assessmentName: a.label,
+      assessmentDate: a.scheduledDate,
+      status: a.status,
+      unitPrice: a.agreedAmount,
+    }));
+    openPrimePreview(
+      'CONTRACT_SCHEDULE',
+      {
+        contractNumber: contract.contractNumber,
+        date: contract.startDate,
+        version: 1,
+        status: contract.status,
+        customerName: school?.companyName || school?.name || '',
+        schoolName: school?.companyName,
+        academicYear: contract.academicYear,
+        periodStart: contract.startDate,
+        periodEnd: contract.endDate,
+        schedule,
+        totalAssessments: contract.totalAssessments,
+        scheduleComplete: contract.assessments.every(a => a.scheduledDate),
+        missingDateSequences: contract.assessments
+          .map((a, i) => (a.scheduledDate ? 0 : i + 1))
+          .filter(n => n > 0),
+        scheduledCount: contract.assessments.filter(a => a.scheduledDate).length,
+        consumedCount: contract.completedAssessments,
+        releasedCount: 0,
+        contentHash: hash,
+        companyName: activeCompany?.name,
+      },
+      `Schedule · ${contract.contractNumber}`
+    );
+  };
+
+  const openReceiptPreview = async (
+    contract: PrintingContract,
+    milestone?: ContractAssessmentMilestone
+  ) => {
+    const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
+    const item =
+      milestone ||
+      contract.assessments.find(a => a.status === 'completed') ||
+      contract.assessments[0];
+    if (!item) {
+      triggerShortcutNotice('No assessment to build a completion receipt from.', 'error');
+      return;
+    }
+    const { hash } = await computeContractIntegrity(contract);
+    openPrimePreview(
+      'CONTRACT_COMPLETION_RECEIPT',
+      {
+        receiptNumber: `CR-${contract.contractNumber}-${item.assessmentNumber}`,
+        contractNumber: contract.contractNumber,
+        date: contract.startDate,
+        version: 1,
+        status: contract.status,
+        customerName: school?.companyName || school?.name || '',
+        schoolName: school?.companyName,
+        academicYear: contract.academicYear,
+        item: {
+          assessmentName: item.label,
+          consumedAt: item.completedDate,
+          unitPrice: item.agreedAmount,
+        },
+        sequence: item.assessmentNumber,
+        totalAssessments: contract.totalAssessments,
+        completedToDate: contract.completedAssessments,
+        remainingAssessments: contract.totalAssessments - contract.completedAssessments,
+        contractValue: contract.totalPrepaidAmount,
+        amountDebited: item.agreedAmount,
+        totalConsumedToDate: contract.allocatedAmount,
+        remainingReservedFunds: contract.remainingBalance,
+        unallocatedFunds: contract.unallocatedAmount,
+        walletBalanceAfter: 0,
+        walletTransactionId: '',
+        ledgerEntryId: '',
+        contentHash: hash,
+        companyName: activeCompany?.name,
+      },
+      `Completion Receipt · ${contract.contractNumber}`
     );
   };
 
@@ -444,7 +700,7 @@ export const PrintingContractsView: React.FC = () => {
 
   const handleGenerateRetainerInvoice = async (contract: PrintingContract) => {
     if (!canInvoice || contractActionBusy) return;
-    const school = customers.find(c => c.id === contract.schoolCustomerId);
+    const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
     const totalCost = contract.assessments.reduce((s, a) => s + (a.totalCost || 0), 0);
     setContractActionBusy(true);
     try {
@@ -508,7 +764,7 @@ export const PrintingContractsView: React.FC = () => {
     milestone: ContractAssessmentMilestone
   ) => {
     if (!canInvoice || contractActionBusy) return;
-    const school = customers.find(c => c.id === contract.schoolCustomerId);
+    const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
     setContractActionBusy(true);
     try {
       const { apiInvoice, localInvoice } = await generateAndSyncWorkflowInvoice(
@@ -646,6 +902,8 @@ export const PrintingContractsView: React.FC = () => {
   const renderContractActions = (contract: any, nextPending: any) => {
     const defs: AdvancedActionDefinition<any>[] = [
       { id: 'preview-contract', label: 'Preview & Print Contract', icon: <Eye className="w-3.5 h-3.5 text-slate-700" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => openContractPreview(contract) },
+      { id: 'preview-schedule', label: 'Preview Schedule', icon: <CalendarDays className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => openSchedulePreview(contract) },
+      { id: 'preview-receipt', label: 'Preview Completion Receipt', icon: <ReceiptText className="w-3.5 h-3.5 text-emerald-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => openReceiptPreview(contract) },
     ];
     if (!contract.depositInvoiceId && !contract.depositBackendInvoiceId && canInvoice) defs.push({ id: 'generate-retainer-inv', label: 'Generate Retainer Invoice', icon: <FileText className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Invoice', requiredPermission: 'invoices:write', execute: async () => handleGenerateRetainerInvoice(contract) });
     if (contract.depositInvoiceId || contract.depositBackendInvoiceId) defs.push({ id: 'preview-retainer-inv', label: `Preview Retainer Invoice${contract.depositInvoiceNumber ? ` (${contract.depositInvoiceNumber})` : ''}`, icon: <FileText className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Invoice', requiredPermission: 'invoices:read', execute: async () => openLinkedInvoiceByRef({ invoiceId: contract.depositInvoiceId, backendInvoiceId: contract.depositBackendInvoiceId, invoiceNumber: contract.depositInvoiceNumber }) });
@@ -714,6 +972,7 @@ export const PrintingContractsView: React.FC = () => {
     if (milestone.linkedInvoiceId || milestone.backendInvoiceId) defs.push({ id: 'preview-milestone-inv', label: `Preview Linked Invoice${milestone.linkedInvoiceNumber ? ` (${milestone.linkedInvoiceNumber})` : ''}`, icon: <FileText className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Invoice', requiredPermission: 'invoices:read', execute: async () => openLinkedInvoiceByRef({ invoiceId: milestone.linkedInvoiceId, backendInvoiceId: milestone.backendInvoiceId, invoiceNumber: milestone.linkedInvoiceNumber }) });
     defs.push({ id: 'edit-date-costing', label: 'Edit Date & Paper/Toner Calculation', icon: <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />, group: 'admin', groupLabel: 'Assessment', requiredPermission: 'printing:write', execute: async () => setEditTarget({ contractId: selectedContract.id, assessmentNumber: milestone.assessmentNumber, label: milestone.label, scheduledDate: milestone.scheduledDate, agreedAmount: milestone.agreedAmount, rawPaperItemId: milestone.rawPaperItemId || defaultPaperId, rawTonerItemId: milestone.rawTonerItemId || defaultTonerId, estimatedSheets: milestone.estimatedSheets || 0, estimatedImpressions: milestone.estimatedImpressions || 0 }) });
     if (milestone.status === 'pending') defs.push({ id: 'complete-deduct', label: `Mark Completed & Deduct ${formatCurrency(milestone.agreedAmount, currency)}`, icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Assessment', requiredPermission: 'printing:write', execute: async () => { setDeductionTarget({ contractId: selectedContract.id, milestone }); setExamBatchNote(''); } });
+    if (milestone.status === 'completed') defs.push({ id: 'preview-assessment-receipt', label: 'Preview Completion Receipt', icon: <ReceiptText className="w-3.5 h-3.5 text-emerald-600" />, group: 'view', groupLabel: 'Assessment', requiredPermission: 'printing:read', execute: async () => openReceiptPreview(selectedContract, milestone) });
     defs.push({ id: 'go-exam-jobs', label: 'Open Examination Jobs', icon: <BookOpen className="w-3.5 h-3.5 text-blue-600" />, group: 'view', groupLabel: 'Assessment', requiredPermission: 'printing:read', execute: async () => setCurrentView('examinations') });
     defs.push({ id: 'copy-milestone', label: 'Copy Milestone Summary', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'printing:read', execute: async () => { await navigator.clipboard?.writeText(`${selectedContract.contractNumber} - ${milestone.label} (${milestone.scheduledDate} · Amt ${formatCurrency(milestone.agreedAmount, currency)} · Profit ${formatCurrency(profit, currency)})`); triggerShortcutNotice('Copied assessment milestone details'); } });
     const ctx = buildContractActionContext(milestone, null);
@@ -888,7 +1147,7 @@ export const PrintingContractsView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
               {pagedContracts.map(contract => {
-                const school = customers.find(c => c.id === contract.schoolCustomerId);
+                const school = customers.find(c => String(c.id) === String(contract.schoolCustomerId));
                 const deducted = contract.totalPrepaidAmount - contract.remainingBalance;
                 const nextPending = contract.assessments.find(a => a.status === 'pending');
                 const isSelected = selectedContract?.id === contract.id;
@@ -1290,328 +1549,308 @@ export const PrintingContractsView: React.FC = () => {
         </div>
       )}
 
-      {/* New Prepaid School Contract Modal */}
+{/* New Prepaid School Contract Modal */}
       {isNewContractOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
+          <div className="w-full max-w-5xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[94vh]">
             <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-amber-400" />
-                <h2 className="font-bold text-base">
-                  New Prepaid School Printing Contract (Dated Assessments & Costing)
-                </h2>
+                <h2 className="font-bold text-base">New Printing Contract</h2>
               </div>
               <button
+                type="button"
                 onClick={() => setIsNewContractOpen(false)}
                 className="p-1 text-white/80 hover:text-white"
+                aria-label="Close"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateContract} className="p-5 space-y-4 text-xs overflow-y-auto">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">School Customer</label>
-                  <select
-                    value={schoolCustomerId}
-                    onChange={e => setSchoolCustomerId(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs text-slate-900 dark:text-slate-100 outline-none"
-                    required
-                  >
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.companyName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Deposit Bank Account</label>
-                  <select
-                    value={depositBankAccountId}
-                    onChange={e => setDepositBankAccountId(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs text-slate-900 dark:text-slate-100 outline-none"
-                    required
-                  >
-                    {bankAccounts.map(a => (
-                      <option key={a.id} value={a.id}>
-                        {a.code} - {a.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2 space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Agreement Title</label>
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Academic Year</label>
-                  <input
-                    type="text"
-                    value={academicYear}
-                    onChange={e => setAcademicYear(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">
-                    Total Prepaid Lump Sum ({currencySymbol})
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="1"
-                    value={totalPrepaidAmount}
-                    onChange={e => handleTotalPrepaidChange(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm font-mono font-bold outline-none"
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Contract Start Date</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={e => setStartDate(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Contract End Date</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={e => setEndDate(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Raw Paper & Toner selectors for Contract Costing */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">
-                    Contract Paper Raw Material ({currencySymbol}{paperUnitCost.toFixed(4)}/Sheet)
-                  </label>
-                  <select
-                    value={draftPaperItemId}
-                    onChange={e => setDraftPaperItemId(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
-                  >
-                    {rawMaterials.map(rm => (
-                      <option key={rm.id} value={rm.id}>
-                        {rm.sku} · {rm.name} ({currencySymbol}{getRawUsageUnitCost(rm.id).toFixed(4)}/{rm.usageUnit || 'Unit'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">
-                    Contract Toner Raw Material ({currencySymbol}{tonerUnitCost.toFixed(4)}/Imp)
-                  </label>
-                  <select
-                    value={draftTonerItemId}
-                    onChange={e => setDraftTonerItemId(e.target.value)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
-                  >
-                    {rawMaterials.map(rm => (
-                      <option key={rm.id} value={rm.id}>
-                        {rm.sku} · {rm.name} ({currencySymbol}{getRawUsageUnitCost(rm.id).toFixed(4)}/{rm.usageUnit || 'Unit'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Number of Assessments (2, 3, 4, or 5) */}
-              <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white">
-                      Agreed Number of Assessments (2 to 5) — Specific Date & Costing
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      Set each assessment&apos;s specific date, deduction amount, and paper/toner volume to view real profit per assessment.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 p-1 bg-slate-200 dark:bg-slate-800 rounded-lg">
-                    {([2, 3, 4, 5] as const).map(num => (
-                      <button
-                        key={num}
-                        type="button"
-                        onClick={() => handleAssessmentsCountChange(num)}
-                        className={`px-3 py-1 rounded-md text-xs font-bold transition-colors ${
-                          totalAssessments === num
-                            ? 'bg-blue-600 text-white'
-                            : 'text-slate-700 dark:text-slate-300 hover:bg-white/60'
-                        }`}
-                      >
-                        {num} Assessments
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300 font-medium">
-                  <input
-                    type="checkbox"
-                    checked={splitEvenly}
-                    onChange={e => setSplitEvenly(e.target.checked)}
-                    className="rounded border-slate-300 text-blue-600"
-                  />
-                  <span>
-                    Equal agreed deduction per assessment ({formatCurrency(totalPrepaidAmount / totalAssessments, currency)} each)
-                  </span>
-                </label>
-
-                <div className="grid grid-cols-12 gap-2 text-[10px] font-bold uppercase text-slate-500 px-1">
-                  <div className="col-span-3">ASSESSMENT LABEL</div>
-                  <div className="col-span-2">SPECIFIC DATE</div>
-                  <div className="col-span-2 text-right">AMOUNT ({currencySymbol})</div>
-                  <div className="col-span-1 text-right">SHEETS</div>
-                  <div className="col-span-2 text-right">IMPRESSIONS</div>
-                  <div className="col-span-2 text-right">EST. PROFIT</div>
-                </div>
-
-                <div className="space-y-2">
-                  {draftAssessmentsList.map((draft, idx) => (
-                    <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                      <div className="col-span-3">
-                        <input
-                          type="text"
-                          value={assessmentLabels[idx] || ''}
-                          onChange={e =>
-                            setAssessmentLabels(prev =>
-                              prev.map((lbl, i) => (i === idx ? e.target.value : lbl))
-                            )
-                          }
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-xs outline-none"
-                          required
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <input
-                          type="date"
-                          value={assessmentDates[idx] || startDate}
-                          onChange={e =>
-                            setAssessmentDates(prev =>
-                              prev.map((dt, i) => (i === idx ? e.target.value : dt))
-                            )
-                          }
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-xs font-mono outline-none"
-                          required
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          readOnly={splitEvenly}
-                          value={splitEvenly ? draft.agreedAmount : customAmounts[idx] || 0}
-                          onChange={e =>
-                            setCustomAmounts(prev =>
-                              prev.map((amt, i) =>
-                                i === idx ? parseFloat(e.target.value) || 0 : amt
-                              )
-                            )
-                          }
-                          className={`w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-right font-mono font-bold outline-none ${
-                            splitEvenly
-                              ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                              : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100'
-                          }`}
-                        />
-                      </div>
-                      <div className="col-span-1">
-                        <input
-                          type="number"
-                          min="0"
-                          value={assessmentSheets[idx] || 0}
-                          onChange={e =>
-                            setAssessmentSheets(prev =>
-                              prev.map((s, i) => (i === idx ? parseInt(e.target.value) || 0 : s))
-                            )
-                          }
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-1.5 text-xs text-right font-mono outline-none"
-                          title="Estimated paper sheets"
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <input
-                          type="number"
-                          min="0"
-                          value={assessmentImpressions[idx] || 0}
-                          onChange={e =>
-                            setAssessmentImpressions(prev =>
-                              prev.map((imp, i) =>
-                                i === idx ? parseInt(e.target.value) || 0 : imp
-                              )
-                            )
-                          }
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-right font-mono outline-none"
-                          title="Estimated toner impressions"
-                        />
-                      </div>
-                      <div className="col-span-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                        <div>{formatCurrency(draft.profit, currency)}</div>
-                        <div className="text-[10px] font-normal text-slate-500">
-                          Cost: {formatCurrency(draft.totalCost, currency)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {customMismatch && (
-                  <div className="text-[11px] font-semibold text-rose-600">
-                    Custom assessment amounts ({formatCurrency(draftSum, currency)}) must equal total prepaid sum ({formatCurrency(totalPrepaidAmount, currency)}).
-                  </div>
-                )}
-              </div>
-
+            <form onSubmit={handleCreateContract} className="p-5 space-y-6 text-xs overflow-y-auto">
+              {/* Title */}
               <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Agreement Notes</label>
+                <label className="font-semibold text-slate-700 dark:text-slate-300">
+                  Title <span className="text-rose-500">*</span>
+                </label>
                 <input
                   type="text"
-                  value={contractNotes}
-                  onChange={e => setContractNotes(e.target.value)}
-                  placeholder="Optional retainer conditions or paper specifications"
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="e.g. 2026 Term 2 examination printing agreement"
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm outline-none"
+                  required
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsNewContractOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                >
+              {/* Parties & Type */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Parties &amp; Type</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Customer <span className="text-rose-500">*</span></label>
+                    <select
+                      value={schoolCustomerId}
+                      onChange={e => setSchoolCustomerId(e.target.value)}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none"
+                      required
+                    >
+                      {customers.map(c => (
+                        <option key={c.id} value={c.id}>{c.companyName}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">School zone</label>
+                    <input type="text" value={schoolZone} onChange={e => setSchoolZone(e.target.value)} placeholder="e.g. Mankhamba ZONE" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Customer phone</label>
+                    <input type="text" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="e.g. 265899233626" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Academic year</label>
+                    <input type="text" value={academicYear} onChange={e => setAcademicYear(e.target.value)} placeholder="e.g. 2026/27 (blank = from period)" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none" />
+                  </div>
+                </div>
+              </section>
+
+              {/* Candidature */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Candidature</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Expected candidates</label>
+                    <input type="number" min="0" value={expectedCandidates} onChange={e => setExpectedCandidates(parseInt(e.target.value) || 0)} placeholder="e.g. 450" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Sittings</label>
+                    <input type="text" value={sittings} onChange={e => setSittings(e.target.value)} placeholder="e.g. Once Off / Morning + Afternoon" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                </div>
+              </section>
+
+              {/* Pricing Rules */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Pricing Rules</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Pricing model</label>
+                    <select value={pricingModel} onChange={e => setPricingModel(e.target.value as '' | 'per_candidate')} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      <option value="per_candidate">Charge per candidate</option>
+                    </select>
+                  </div>
+                  {pricingModel === 'per_candidate' && (
+                    <div className="space-y-1">
+                      <label className="font-semibold text-slate-700 dark:text-slate-300">Charge per candidate ({currencySymbol})</label>
+                      <input type="number" step="0.01" min="0" value={chargePerCandidate} onChange={e => setChargePerCandidate(parseFloat(e.target.value) || 0)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none" />
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Tax handling</label>
+                    <input type="text" value={taxHandling} onChange={e => setTaxHandling(e.target.value)} placeholder="e.g. VAT inclusive" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Discount</label>
+                    <input type="text" value={discount} onChange={e => setDiscount(e.target.value)} placeholder="e.g. 5% for 500+ candidates" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Urgent fee</label>
+                    <input type="text" value={urgentFee} onChange={e => setUrgentFee(e.target.value)} placeholder="e.g. 10% express surcharge" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Pricing notes</label>
+                  <input type="text" value={pricingNotes} onChange={e => setPricingNotes(e.target.value)} placeholder="Reprint, over-run rules…" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                </div>
+              </section>
+
+              {/* Commercials & Period */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Commercials &amp; Period</h3>
+                <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left text-[11px]">
+                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase font-bold">
+                      <tr>
+                        <th className="px-2 py-2">Assessment item</th>
+                        <th className="px-2 py-2">Grade</th>
+                        <th className="px-2 py-2">Subject</th>
+                        <th className="px-2 py-2 text-right">Qty</th>
+                        <th className="px-2 py-2 text-right">Unit price</th>
+                        <th className="px-2 py-2 text-right">Amount</th>
+                        <th className="px-2 py-2"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono">
+                      {lineItems.map(li => (
+                        <tr key={li.id} className="border-t border-slate-100 dark:border-slate-800">
+                          <td className="px-2 py-1.5"><input type="text" value={li.item} onChange={e => setLineItems(prev => prev.map(x => x.id === li.id ? { ...x, item: e.target.value } : x))} placeholder="e.g. Term 2 Grade 7 Mathematics" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 outline-none" /></td>
+                          <td className="px-2 py-1.5 w-20"><input type="text" value={li.grade} onChange={e => setLineItems(prev => prev.map(x => x.id === li.id ? { ...x, grade: e.target.value } : x))} placeholder="—" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 outline-none" /></td>
+                          <td className="px-2 py-1.5 w-28"><input type="text" value={li.subject} onChange={e => setLineItems(prev => prev.map(x => x.id === li.id ? { ...x, subject: e.target.value } : x))} placeholder="—" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 outline-none" /></td>
+                          <td className="px-2 py-1.5 w-16"><input type="number" min="0" value={li.qty} onChange={e => setLineItems(prev => prev.map(x => x.id === li.id ? { ...x, qty: parseInt(e.target.value) || 0 } : x))} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-right outline-none" /></td>
+                          <td className="px-2 py-1.5 w-24"><input type="number" step="0.01" min="0" value={li.unitPrice} onChange={e => setLineItems(prev => prev.map(x => x.id === li.id ? { ...x, unitPrice: parseFloat(e.target.value) || 0 } : x))} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-right outline-none" /></td>
+                          <td className="px-2 py-1.5 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(lineAmount(li), currency)}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            <button type="button" onClick={() => setLineItems(prev => prev.filter(x => x.id !== li.id))} disabled={lineItems.length <= 2} className="text-rose-600 disabled:opacity-30" aria-label="Remove item">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between">
+                  <button type="button" onClick={() => setLineItems(prev => [...prev, newLine()])} disabled={lineItems.length >= 5} className="inline-flex items-center gap-1 text-blue-600 font-semibold disabled:opacity-40">
+                    <Plus className="w-3.5 h-3.5" /> Add item
+                  </button>
+                  <div className="font-mono text-sm">
+                    Entitlement {lineItems.length} · Contract total{' '}
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(effectiveContractTotal, currency)}</span>
+                    {candidateTotal > 0 && (
+                      <span className="ml-1 text-[10px] font-normal text-slate-500">
+                        ({expectedCandidates} × {formatCurrency(chargePerCandidate, currency)})
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {!lineItemsValid && (
+                  <p className="text-[11px] font-semibold text-rose-600">A contract needs between 2 and 5 line items.</p>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Start date</label>
+                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" required />
+                  </div>
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">End date (may cross FY)</label>
+                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" required />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Deposit bank account</label>
+                  <select value={depositBankAccountId} onChange={e => setDepositBankAccountId(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" required>
+                    {bankAccounts.map(a => (
+                      <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </section>
+
+              {/* Printing Specification */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Printing Specification</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Paper size</label>
+                    <select value={paperSize} onChange={e => setPaperSize(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      {['A4', 'A3', 'A5', 'Legal', 'Letter'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Paper type</label>
+                    <input type="text" value={paperType} onChange={e => setPaperType(e.target.value)} placeholder="e.g. Bond, Art, Manilla" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Paper weight (gsm)</label>
+                    <input type="text" value={paperWeight} onChange={e => setPaperWeight(e.target.value)} placeholder="e.g. 80" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Colour</label>
+                    <select value={colour} onChange={e => setColour(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      {['Black & White', 'Full Colour', 'Two Colour'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Sides</label>
+                    <select value={sides} onChange={e => setSides(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      {['Single-Sided', 'Duplex'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Orientation</label>
+                    <select value={orientation} onChange={e => setOrientation(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      {['Portrait', 'Landscape'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Pages per copy</label>
+                    <input type="number" min="0" value={pagesPerCopy} onChange={e => setPagesPerCopy(parseInt(e.target.value) || 0)} placeholder="e.g. 8" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Copies</label>
+                    <input type="number" min="0" value={copies} onChange={e => setCopies(parseInt(e.target.value) || 0)} placeholder="e.g. 500" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs font-mono outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Finishing</label>
+                    <input type="text" value={finishing} onChange={e => setFinishing(e.target.value)} placeholder="e.g. Stapling, Binding, Lamination" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Packaging (print)</label>
+                    <input type="text" value={packaging} onChange={e => setPackaging(e.target.value)} placeholder="e.g. Boxed per class" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Specification notes</label>
+                  <input type="text" value={specNotes} onChange={e => setSpecNotes(e.target.value)} placeholder="Artwork, proofing, quality…" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                </div>
+              </section>
+
+              {/* Delivery Terms */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Delivery Terms</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Delivery method</label>
+                    <select value={deliveryMethod} onChange={e => setDeliveryMethod(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none">
+                      <option value="">Select…</option>
+                      {['School pickup', 'Delivered to school', 'Courier'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Delivery timeline</label>
+                    <input type="text" value={deliveryTimeline} onChange={e => setDeliveryTimeline(e.target.value)} placeholder="e.g. 3 days before exam date" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Delivery address</label>
+                    <input type="text" value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} placeholder="School / collection point address" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Delivery packaging</label>
+                    <input type="text" value={deliveryPackaging} onChange={e => setDeliveryPackaging(e.target.value)} placeholder="e.g. Sealed per subject" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Delivery notes</label>
+                    <input type="text" value={deliveryNotes} onChange={e => setDeliveryNotes(e.target.value)} placeholder="Contact person, proof of delivery…" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs outline-none" />
+                  </div>
+                </div>
+              </section>
+
+              {/* Terms & Notes */}
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Terms &amp; Notes</h3>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">General terms</label>
+                  <textarea value={generalTerms} onChange={e => setGeneralTerms(e.target.value)} rows={2} placeholder="General contract terms — specifics live in the sections above" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs resize-none outline-none" />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Notes</label>
+                  <textarea value={contractNotes} onChange={e => setContractNotes(e.target.value)} rows={2} placeholder="Any additional notes" className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-xs resize-none outline-none" />
+                </div>
+              </section>
+
+              <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-3">
+                <button type="button" onClick={() => setIsNewContractOpen(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300">
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={customMismatch}
-                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold shadow-sm"
-                >
-                  Save & Deposit Prepaid Retainer
+                <button type="submit" disabled={!lineItemsValid || effectiveContractTotal <= 0} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold shadow-sm">
+                  Save Contract
                 </button>
               </div>
             </form>

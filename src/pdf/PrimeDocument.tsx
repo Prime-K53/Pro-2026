@@ -7997,7 +7997,11 @@ export const PrimeDocument = ({
           {/* Canonical linkage: the two references that tie this printed
               receipt to the wallet movement and ledger entry that recognised
               the debit. Printed verbatim so a printed copy reconciles against
-              the books without the database. */}
+              the books without the database. Omitted entirely when neither
+              reference is available (e.g. a client-side preview), rather than
+              printing "Not recorded". */}
+          {(cr.walletTransactionId || cr.ledgerEntryId) && (
+            <>
           {crSectionHeading("Canonical Linkage")}
           <View
             style={{
@@ -8040,6 +8044,8 @@ export const PrimeDocument = ({
               ledger entry that recognised the debit.
             </Text>
           </View>
+            </>
+          )}
 
           {/* Formal notes section — the stored contract notes, else a neutral
               statement. Nothing the blocks above already print is repeated. */}

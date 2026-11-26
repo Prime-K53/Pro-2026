@@ -284,6 +284,39 @@ export interface PrintingContract {
   depositBackendInvoiceId?: number;
   depositInvoiceNumber?: string;
   notes?: string;
+  /** Extended intake fields (PrimeERP-style). Optional; not all are persisted
+   *  as columns — they are carried for document rendering. */
+  schoolZone?: string;
+  customerPhone?: string;
+  expectedCandidates?: number;
+  sittings?: string;
+  pricingModel?: string;
+  chargePerCandidate?: number;
+  taxHandling?: string;
+  discount?: string;
+  urgentFee?: string;
+  pricingNotes?: string;
+  printSpec?: {
+    paperSize?: string;
+    paperType?: string;
+    paperWeight?: string;
+    colour?: string;
+    sides?: string;
+    orientation?: string;
+    pagesPerCopy?: number;
+    copies?: number;
+    finishing?: string;
+    packaging?: string;
+    notes?: string;
+  };
+  delivery?: {
+    method?: string;
+    timeline?: string;
+    address?: string;
+    packaging?: string;
+    notes?: string;
+  };
+  generalTerms?: string;
 }
 
 export interface InvoiceLine {

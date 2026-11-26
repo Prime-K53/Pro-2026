@@ -446,8 +446,10 @@ export async function generateNextDocNumber(
   prefix: string
 ): Promise<string> {
   await tx.query(`SELECT id FROM companies WHERE id = $1 FOR UPDATE`, [companyId]);
+  // Use MAX(id) (monotonic) rather than COUNT(*) so deleting rows can never
+  // lower the sequence and cause a document number to be reused.
   const res = await tx.query<{ cnt: string }>(
-    `SELECT (COUNT(*) + 1)::text AS cnt FROM ${tableName} WHERE company_id = $1`,
+    `SELECT (MAX(id) + 1)::text AS cnt FROM ${tableName} WHERE company_id = $1`,
     [companyId]
   );
   let seq = Number(res.rows[0].cnt) + 1000;
@@ -542,7 +544,7 @@ export async function getCustomerCreditExposure(
        FROM invoices
       WHERE company_id = $1 AND customer_id = $2
         AND is_sales_receipt = FALSE
-        AND status <> 'voided'`,
+        AND status NOT IN ('voided', 'draft')`,
     [companyId, customerId]
   );
   const openCm = await tx.query<{ total_credit: string }>(

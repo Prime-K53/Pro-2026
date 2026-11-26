@@ -5,8 +5,9 @@ import { createAuthMiddleware } from '../middleware/auth.ts';
 import { csrfProtection } from '../middleware/csrf.ts';
 import { hasPermission } from '../permissions.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
-import { computeTax4, parseDecimal6 } from '../services/commercialHelpers.ts';
+import { computeTax4, parseDecimal6, checkRouteIdempotency, saveRouteIdempotency } from '../services/commercialHelpers.ts';
 import { parseDecimal4 } from '../lib/decimal.ts';
+import type { Transaction } from '@electric-sql/pglite';
 import {
   consumeApprovalRequest,
   evaluateApprovalGate,
@@ -79,6 +80,26 @@ export function createSalesRouter(db: ServerDatabase): Router {
   const { requireAuth, rejectCrossCompanyParams, requirePermission } = createAuthMiddleware(db);
 
   router.use(requireAuth, csrfProtection, rejectCrossCompanyParams);
+
+  // Runs a mutation under the company DB, enforcing an Idempotency-Key so a
+  // retried request replays the original response instead of repeating the
+  // (non-idempotent) side effect. Used by void/convert endpoints.
+  const runIdempotent = async <T>(
+    companyId: number,
+    route: string,
+    key: string | null | undefined,
+    payload: unknown,
+    actorUserId: number,
+    fn: (tx: Transaction) => Promise<T>,
+    successStatus = 200
+  ): Promise<{ replay: boolean; status: number; body: T }> =>
+    db.withCompanyDb(companyId, async tx => {
+      const idem = await checkRouteIdempotency<T>(tx, companyId, route, key, payload);
+      if (idem.hit) return { replay: true, status: idem.statusCode, body: idem.response };
+      const body = await fn(tx);
+      await saveRouteIdempotency(tx, companyId, route, key, idem.payloadHash, successStatus, body, actorUserId);
+      return { replay: false, status: successStatus, body };
+    });
 
   // Payment Terms
   router.get('/payment-terms', requirePermission('customers:read'), async (req: Request, res: Response) => {
@@ -443,10 +464,13 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid invoice id' });
-      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        voidInvoice(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'invoice_void', key,
+        { id, reason: req.body?.reason ?? null }, toActor(req).userId,
+        tx => voidInvoice(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
       );
-      return res.json(result);
+      return res.status(r.status).json(r.body);
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -591,10 +615,13 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid payment id' });
-      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        voidCustomerPayment(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'payment_void', key,
+        { id, reason: req.body?.reason ?? null }, toActor(req).userId,
+        tx => voidCustomerPayment(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
       );
-      return res.json(result);
+      return res.status(r.status).json(r.body);
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -678,10 +705,13 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid credit memo id' });
-      const result = await db.withCompanyDb(req.auth!.companyId, tx =>
-        voidCreditMemo(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'credit_memo_void', key,
+        { id, reason: req.body?.reason ?? null }, toActor(req).userId,
+        tx => voidCreditMemo(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
       );
-      return res.json(result);
+      return res.status(r.status).json(r.body);
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -706,10 +736,14 @@ export function createSalesRouter(db: ServerDatabase): Router {
 
   router.post('/estimates', requirePermission('estimates:write'), async (req: Request, res: Response) => {
     try {
-      const estimate = await db.withCompanyDb(req.auth!.companyId, tx =>
-        createEstimate(tx, req.auth!.companyId, toActor(req), req.body || {})
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'estimate_create', key, req.body || {},
+        toActor(req).userId,
+        tx => createEstimate(tx, req.auth!.companyId, toActor(req), req.body || {}),
+        201
       );
-      return res.status(201).json({ estimate });
+      return res.status(r.status).json({ estimate: r.body });
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -719,10 +753,13 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid estimate id' });
-      const estimate = await db.withCompanyDb(req.auth!.companyId, tx =>
-        approveEstimate(tx, req.auth!.companyId, toActor(req), id, req.body?.note)
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'estimate_approve', key, { id, note: req.body?.note ?? null },
+        toActor(req).userId,
+        tx => approveEstimate(tx, req.auth!.companyId, toActor(req), id, req.body?.note)
       );
-      return res.json({ estimate });
+      return res.status(r.status).json({ estimate: r.body });
     } catch (err) {
       return handleSalesError(res, err);
     }
@@ -732,10 +769,13 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid estimate id' });
-      const estimate = await db.withCompanyDb(req.auth!.companyId, tx =>
-        rejectEstimate(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+      const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const r = await runIdempotent(
+        req.auth!.companyId, 'estimate_reject', key, { id, reason: req.body?.reason ?? null },
+        toActor(req).userId,
+        tx => rejectEstimate(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
       );
-      return res.json({ estimate });
+      return res.status(r.status).json({ estimate: r.body });
     } catch (err) {
       return handleSalesError(res, err);
     }
