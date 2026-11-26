@@ -570,6 +570,22 @@ interface AccountingContextType {
     payload: GenerateWorkflowInvoicePayload,
     options?: { localCustomerId?: string }
   ) => Promise<{ apiInvoice: ApiInvoice; localInvoice: Invoice }>;
+  listExamGroups: (params?: { schoolCustomerId?: number | null; assessmentName?: string | null }) => Promise<any[]>;
+  getExamGroupForBatch: (batchId: number) => Promise<any>;
+  getExamGroupSummary: (groupId: number) => Promise<any>;
+  runExamGroupWorkflow: (
+    groupId: number,
+    options?: {
+      goodCopiesByPaper?: Record<string, number>;
+      spoiledCopiesByPaper?: Record<string, number>;
+      dispatchDate?: string | null;
+      recipientName?: string | null;
+      includeTax?: boolean;
+      taxRate?: number;
+      notes?: string | null;
+      onProgress?: (step: string, summary: any) => void;
+    }
+  ) => Promise<any>;
 
   invoices: Invoice[];
   addInvoice: (
@@ -2454,6 +2470,59 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       `Added ${created.length} class/subject examination print jobs`
     );
     return created;
+  };
+
+  // ---- Examination batch group: one-click production & invoicing ----
+  // Drives the durable server-side checkpoints in order. Each checkpoint is
+  // independently idempotent on the server, so a retry never duplicates jobs,
+  // delivery notes, inventory movement, accounting entries or the invoice.
+  const listExamGroups = (params?: { schoolCustomerId?: number | null; assessmentName?: string | null }): Promise<any[]> =>
+    printingApi.listExamGroups(params);
+
+  const getExamGroupForBatch = (batchId: number): Promise<any> => printingApi.getExamGroupForBatch(batchId);
+
+  const getExamGroupSummary = (groupId: number): Promise<any> =>
+    printingApi.getExamGroupSummary(groupId);
+
+  const runExamGroupWorkflow = async (
+    groupId: number,
+    options?: {
+      goodCopiesByPaper?: Record<string, number>;
+      spoiledCopiesByPaper?: Record<string, number>;
+      dispatchDate?: string | null;
+      recipientName?: string | null;
+      includeTax?: boolean;
+      taxRate?: number;
+      notes?: string | null;
+      onProgress?: (step: string, summary: any) => void;
+    }
+  ): Promise<any> => {
+    const key = (suffix: string) => `exam-group-${groupId}-${suffix}`;
+    let summary = await printingApi.generateExamGroupProduction(groupId, key('generate'));
+    options?.onProgress?.('production', summary);
+    summary = await printingApi.completeExamGroupProduction(groupId, {
+      idempotencyKey: key('production'),
+      goodCopiesByPaper: options?.goodCopiesByPaper,
+      spoiledCopiesByPaper: options?.spoiledCopiesByPaper,
+    });
+    options?.onProgress?.('qc', summary);
+    summary = await printingApi.approveExamGroupQc(groupId, { idempotencyKey: key('qc') });
+    options?.onProgress?.('delivery', summary);
+    summary = await printingApi.deliverExamGroupChildren(groupId, {
+      idempotencyKey: key('deliver'),
+      dispatchDate: options?.dispatchDate ?? null,
+      recipientName: options?.recipientName ?? null,
+    });
+    options?.onProgress?.('invoice', summary);
+    summary = await printingApi.postExamGroupInvoice(groupId, {
+      idempotencyKey: key('invoice'),
+      includeTax: options?.includeTax,
+      taxRate: options?.taxRate,
+      notes: options?.notes,
+    });
+    await refreshExamPapersFromBackend();
+    options?.onProgress?.('completed', summary);
+    return summary;
   };
 
   const updateExamPaper = (paperId: string, updates: Partial<ExamPaper>) => {
@@ -4406,6 +4475,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         examPapers,
         addExamPaper,
         addExamPapersBatch,
+        listExamGroups,
+        getExamGroupForBatch,
+        getExamGroupSummary,
+        runExamGroupWorkflow,
         updateExamPaper,
         editExamPaper,
         updateExamPaperStatus,

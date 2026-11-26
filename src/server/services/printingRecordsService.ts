@@ -21,6 +21,7 @@ import {
   reserveJobMaterials,
 } from './productionService.ts';
 import { divRoundBigInt, resolveWorkflowAccounts } from './commercialHelpers.ts';
+import { createInvoiceOrSalesReceipt } from './salesService.ts';
 import { hasPermission } from '../permissions.ts';
 import {
   assertTransition,
@@ -1679,6 +1680,19 @@ export async function createExamBatch(
   const priority = ['low', 'normal', 'high', 'urgent'].includes(String(input.priority))
     ? String(input.priority)
     : 'normal';
+
+  // Decision 1 / Correction 2: establish the immutable parent group identity
+  // once, at initial batch creation. The reference is persisted and reused by
+  // every subsequent checkpoint; retries never re-derive it from the payload.
+  const groupReference = crypto.randomUUID();
+  const groupIns = await tx.query<{ id: number }>(
+    `INSERT INTO exam_batch_groups (
+       company_id, school_customer_id, assessment_name, group_reference, status, created_by
+     ) VALUES ($1, $2, $3, $4, 'draft', $5)
+     RETURNING id`,
+    [companyId, schoolCustomerId, assessmentName, groupReference, actor.userId]
+  );
+  const examBatchGroupId = Number(groupIns.rows[0].id);
   const today = new Date().toISOString().slice(0, 10);
   const dueDate = input.dueDate ? assertIsoDate(input.dueDate, 'dueDate') : null;
   if (dueDate && dueDate < today) {
@@ -1727,6 +1741,11 @@ export async function createExamBatch(
       ]
     );
     const batchId = Number(batchIns.rows[0].id);
+    await tx.query(
+      `UPDATE exam_assessment_batches SET exam_batch_group_id = $3
+        WHERE company_id = $1 AND id = $2`,
+      [companyId, batchId, examBatchGroupId]
+    );
     createdBatches.push({
       batchId,
       className,
@@ -1963,6 +1982,8 @@ paper: { ...p, rawPaperItemId, rawTonerItemId },
     className: createdBatches[0]?.className,
     learnersCount: createdBatches[0]?.learnersCount,
     papers: createdPapers,
+    examBatchGroupId,
+    groupReference,
   };
 
   await writeAuditLog(tx, {
@@ -1987,6 +2008,720 @@ paper: { ...p, rawPaperItemId, rawTonerItemId },
 
   await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 201, { batch: out });
   return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Examination batch group — one-click production & consolidated
+ * invoicing (Decisions 1-6, delivery-integrity correction).
+ *
+ * The workflow is a sequence of durable, independently recoverable
+ * checkpoints, each in its own transaction and each idempotent:
+ *   generateExamGroupProduction  (A: prepare parent job + child links)
+ *   completeExamGroupProduction  (B: production completion, exams:qc)
+ *   approveExamGroupQc           (C: QC approval / verification, exams:qc)
+ *   deliverExamGroupChildren     (D: real attested delivery, exams:deliver)
+ *   postExamGroupInvoice         (E: one consolidated invoice, exams:invoice)
+ * getExamGroupSummary reports the consolidated batch state.
+ * ------------------------------------------------------------------ */
+
+export interface ExamGroupSummary {
+  examBatchGroupId: number;
+  groupReference: string;
+  schoolCustomerId: number;
+  assessmentName: string;
+  status: string;
+  parentJobId: number | null;
+  parentJobNumber: string | null;
+  invoiceId: number | null;
+  invoiceNumber: string | null;
+  classCount: number;
+  subjectCount: number;
+  learnerCount: number;
+  totalQuantity: number;
+  totalCost: number;
+  productionCompleted: boolean;
+  qcApproved: boolean;
+  delivered: boolean;
+  invoiced: boolean;
+  classes: Array<{
+    batchId: number;
+    className: string;
+    learnersCount: number;
+    pricePerLearner: number;
+    subjects: Array<{
+      paperId: number;
+      jobNumber: string;
+      productionJobId: number | null;
+      subjectName: string;
+      copies: number;
+      goodCopies: number;
+      materialCost: number;
+      status: string;
+      qcStatus: string;
+    }>;
+  }>;
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function loadExamGroupForUpdate(tx: Transaction, companyId: number, groupId: number) {
+  const g = await tx.query<any>(
+    `SELECT id, company_id, school_customer_id, assessment_name, group_reference, status, invoice_id
+       FROM exam_batch_groups
+      WHERE company_id = $1 AND id = $2
+      FOR UPDATE`,
+    [companyId, groupId]
+  );
+  if (g.rows.length === 0) {
+    throw new AccountingError(404, 'Examination batch group not found in active company', 'EXAM_GROUP_NOT_FOUND');
+  }
+  return g.rows[0];
+}
+
+async function loadGroupPapers(tx: Transaction, companyId: number, groupId: number) {
+  return tx.query<any>(
+    `SELECT p.id, p.batch_id, p.job_number, p.subject_name, p.pages, p.copies,
+            p.good_copies, p.production_job_id, p.status, p.qc_status,
+            p.paper_cost::text AS paper_cost, p.toner_cost::text AS toner_cost,
+            b.class_name, b.learners_count, b.price_per_learner::text AS price_per_learner
+       FROM exam_papers p
+       JOIN exam_assessment_batches b
+         ON b.company_id = p.company_id AND b.id = p.batch_id
+      WHERE p.company_id = $1 AND b.exam_batch_group_id = $2
+      ORDER BY b.class_name ASC, p.id ASC
+      FOR UPDATE OF p`,
+    [companyId, groupId]
+  );
+}
+
+async function createExamParentJob(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  params: { schoolCustomerId: number; customerName: string; assessmentName: string; groupReference: string }
+): Promise<{ id: number; jobNumber: string }> {
+  const jobNumber = await nextPrintingNumber(tx, companyId, 'exam_paper', 'JOB-', 4);
+  const ins = await tx.query<{ id: number }>(
+    `INSERT INTO printing_jobs (
+       company_id, job_number, job_type, customer_id, customer_name, title,
+       pages, copies, print_side, sheets_used, impressions_used,
+       paper_cost, toner_cost, extra_cost, manual_selling_price, job_date, status,
+       created_by, notes
+     ) VALUES (
+       $1, $2, 'exam_batch', $3, $4, $5,
+       0, 0, 'Duplex', 0, 0,
+       0, 0, 0, 0, $6::DATE, 'queued',
+       $7, $8
+     ) RETURNING id`,
+    [
+      companyId,
+      jobNumber,
+      params.schoolCustomerId,
+      params.customerName,
+      `${params.assessmentName} — parent production job`,
+      todayIso(),
+      actor.userId,
+      `Examination group ${params.groupReference}`,
+    ]
+  );
+  const id = Number(ins.rows[0].id);
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'EXAM_GROUP_PARENT_JOB_CREATED',
+    tableName: 'printing_jobs',
+    recordId: id,
+    newValues: { jobNumber, groupReference: params.groupReference, assessmentName: params.assessmentName },
+  });
+  return { id, jobNumber };
+}
+
+async function buildExamGroupSummary(
+  tx: Transaction,
+  companyId: number,
+  group: any,
+  papers: any[]
+): Promise<ExamGroupSummary> {
+  let parentJobId: number | null = null;
+  let parentJobNumber: string | null = null;
+  let invoiceNumber: string | null = null;
+
+  const run = await tx.query<any>(
+    `SELECT parent_job_id, invoice_id FROM exam_batch_group_runs
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id]
+  );
+  if (run.rows[0]?.parent_job_id) {
+    parentJobId = Number(run.rows[0].parent_job_id);
+    const pj = await tx.query<{ job_number: string }>(
+      `SELECT job_number FROM printing_jobs WHERE company_id = $1 AND id = $2`,
+      [companyId, parentJobId]
+    );
+    parentJobNumber = pj.rows[0]?.job_number ?? null;
+  }
+  if (group.invoice_id) {
+    const inv = await tx.query<{ invoice_number: string }>(
+      `SELECT invoice_number FROM invoices WHERE company_id = $1 AND id = $2`,
+      [companyId, Number(group.invoice_id)]
+    );
+    invoiceNumber = inv.rows[0]?.invoice_number ?? null;
+  }
+
+  const classMap = new Map<number, any>();
+  let learnerCount = 0;
+  let totalQuantity = 0;
+  let totalCost = 0;
+  for (const p of papers) {
+    const cost = Number(p.paper_cost || 0) + Number(p.toner_cost || 0);
+    totalCost += cost;
+    totalQuantity += Number(p.copies || 0);
+    let cls = classMap.get(p.batch_id);
+    if (!cls) {
+      cls = {
+        batchId: Number(p.batch_id),
+        className: p.class_name,
+        learnersCount: Number(p.learners_count || 0),
+        pricePerLearner: Number(p.price_per_learner || 0),
+        subjects: [],
+      };
+      classMap.set(p.batch_id, cls);
+      learnerCount += Number(p.learners_count || 0);
+    }
+    cls.subjects.push({
+      paperId: Number(p.id),
+      jobNumber: p.job_number,
+      productionJobId: p.production_job_id != null ? Number(p.production_job_id) : null,
+      subjectName: p.subject_name,
+      copies: Number(p.copies || 0),
+      goodCopies: Number(p.good_copies || 0),
+      materialCost: cost,
+      status: p.status,
+      qcStatus: p.qc_status,
+    });
+  }
+
+  const classes = Array.from(classMap.values());
+  const subjectCount = papers.length;
+  const productionCompleted = papers.every(p => ['completed', 'qc_passed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(p.status));
+  const qcApproved = papers.every(p => p.qc_status === 'passed' || ['completed', 'qc_passed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(p.status));
+  const delivered = papers.every(p => ['delivered', 'invoiced'].includes(p.status));
+  const invoiced = papers.length > 0 && papers.every(p => p.status === 'invoiced');
+
+  return {
+    examBatchGroupId: Number(group.id),
+    groupReference: group.group_reference,
+    schoolCustomerId: Number(group.school_customer_id),
+    assessmentName: group.assessment_name,
+    status: group.status,
+    parentJobId,
+    parentJobNumber,
+    invoiceId: group.invoice_id != null ? Number(group.invoice_id) : null,
+    invoiceNumber,
+    classCount: classes.length,
+    subjectCount,
+    learnerCount,
+    totalQuantity,
+    totalCost,
+    productionCompleted,
+    qcApproved,
+    delivered,
+    invoiced,
+    classes,
+  };
+}
+
+/**
+ * Phase A — Generate/Prepare. Creates (once) the parent production job and links
+ * every subject child job to it, then records a 'prepared' run. Idempotent.
+ */
+export async function generateExamGroupProduction(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { groupId: number; idempotencyKey?: string | null }
+) {
+  const route = 'exam_group_generate';
+  const claim = await claimPrintingIdempotency(tx, companyId, route, input.idempotencyKey, actor.userId, {
+    groupId: input.groupId,
+  });
+  if (claim.replay) return claim.replay.body.summary as ExamGroupSummary;
+
+  if (!hasPermission(actor.role, 'exams:produce')) {
+    throw new AccountingError(403, 'Generating examination production requires the exams:produce permission', 'EXAMS_PRODUCE_PERMISSION_REQUIRED');
+  }
+
+  const group = await loadExamGroupForUpdate(tx, companyId, input.groupId);
+  const cust = await tx.query<{ company_name: string }>(
+    `SELECT company_name FROM customers WHERE company_id = $1 AND id = $2`,
+    [companyId, Number(group.school_customer_id)]
+  );
+  const customerName = cust.rows[0]?.company_name || 'School';
+
+  let run = await tx.query<any>(
+    `SELECT id, parent_job_id FROM exam_batch_group_runs WHERE company_id = $1 AND exam_batch_group_id = $2 FOR UPDATE`,
+    [companyId, group.id]
+  );
+  let parentJobId: number | null = run.rows[0]?.parent_job_id != null ? Number(run.rows[0].parent_job_id) : null;
+
+  if (parentJobId == null) {
+    const parent = await createExamParentJob(tx, companyId, actor, {
+      schoolCustomerId: Number(group.school_customer_id),
+      customerName,
+      assessmentName: group.assessment_name,
+      groupReference: group.group_reference,
+    });
+    parentJobId = parent.id;
+
+    // Link every subject child job to the parent (idempotent: only NULL links).
+    await tx.query(
+      `UPDATE printing_jobs j
+          SET parent_job_id = $3
+         FROM exam_papers p
+         JOIN exam_assessment_batches b
+           ON b.company_id = p.company_id AND b.id = p.batch_id
+        WHERE j.company_id = $1
+          AND j.id = p.production_job_id
+          AND p.company_id = $1
+          AND b.company_id = $1
+          AND b.exam_batch_group_id = $2
+          AND j.parent_job_id IS NULL`,
+      [companyId, group.id, parentJobId]
+    );
+
+    if (run.rows[0]) {
+      await tx.query(
+        `UPDATE exam_batch_group_runs SET parent_job_id = $3, last_checkpoint = 'prepared'
+          WHERE company_id = $1 AND exam_batch_group_id = $2`,
+        [companyId, group.id, parentJobId]
+      );
+    } else {
+      await tx.query(
+        `INSERT INTO exam_batch_group_runs (company_id, exam_batch_group_id, idempotency_key, last_checkpoint, parent_job_id)
+         VALUES ($1, $2, $3, 'prepared', $4)`,
+        [companyId, group.id, input.idempotencyKey ?? null, parentJobId]
+      );
+    }
+    await tx.query(
+      `UPDATE exam_batch_groups SET status = 'prepared' WHERE company_id = $1 AND id = $2 AND status = 'draft'`,
+      [companyId, group.id]
+    );
+  }
+
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+  const summary = await buildExamGroupSummary(tx, companyId, group, papers.rows);
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 201, { summary });
+  return summary;
+}
+
+/**
+ * Checkpoint B — Production completion. Drives every eligible child to
+ * 'completed' through the authoritative lifecycle (queued/reserved -> printing
+ * -> completed). Never reverses an advanced child; blocks held/cancelled states.
+ */
+export async function completeExamGroupProduction(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { groupId: number; idempotencyKey?: string | null; goodCopiesByPaper?: Record<string, number>; spoiledCopiesByPaper?: Record<string, number> }
+) {
+  const route = 'exam_group_production';
+  const claim = await claimPrintingIdempotency(tx, companyId, route, input.idempotencyKey, actor.userId, { groupId: input.groupId });
+  if (claim.replay) return claim.replay.body.summary as ExamGroupSummary;
+
+  if (!hasPermission(actor.role, 'exams:produce') || !hasPermission(actor.role, 'exams:qc')) {
+    throw new AccountingError(403, 'Production completion requires both exams:produce and exams:qc permissions', 'EXAMS_PRODUCTION_PERMISSION_REQUIRED');
+  }
+
+  const group = await loadExamGroupForUpdate(tx, companyId, input.groupId);
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+
+  for (const p of papers.rows) {
+    const status = p.status;
+    if (['completed', 'qc_passed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(status)) continue; // already produced
+    if (status === 'cancelled' || status === 'reprinted') continue; // excluded from invoicing
+    if (status === 'qc_hold') {
+      throw new AccountingError(409, `Examination paper ${p.job_number} is on QC hold and must be resolved before batch completion`, 'QC_HOLD_UNRESOLVED');
+    }
+    const opts = {
+      goodCopies: input.goodCopiesByPaper?.[String(p.id)],
+      spoiledCopies: input.spoiledCopiesByPaper?.[String(p.id)],
+    };
+    if (status === 'queued' || status === 'reserved') {
+      await updateExamPaperStatus(tx, companyId, actor, Number(p.id), 'printing', {});
+    }
+    if (status === 'queued' || status === 'reserved' || status === 'printing') {
+      await updateExamPaperStatus(tx, companyId, actor, Number(p.id), 'completed', opts);
+    }
+  }
+
+  await tx.query(
+    `UPDATE exam_batch_group_runs
+        SET production_completed_at = COALESCE(production_completed_at, NOW()),
+            last_checkpoint = 'production_completed'
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id]
+  );
+  await tx.query(
+    `UPDATE exam_batch_groups SET status = 'production_completed'
+      WHERE company_id = $1 AND id = $2 AND status IN ('draft', 'prepared')`,
+    [companyId, group.id]
+  );
+
+  const fresh = await loadExamGroupForUpdate(tx, companyId, group.id);
+  const summary = await buildExamGroupSummary(tx, companyId, fresh, (await loadGroupPapers(tx, companyId, group.id)).rows);
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 200, { summary });
+  return summary;
+}
+
+/**
+ * Checkpoint C — QC approval / verification. Children already at/past
+ * completed/qc_passed are verified (qc_status='passed'); the only real
+ * transition is qc_hold -> qc_passed for a reworked child. Never skips
+ * production and never reverses an advanced child.
+ */
+export async function approveExamGroupQc(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { groupId: number; idempotencyKey?: string | null; qcNotesByPaper?: Record<string, string> }
+) {
+  const route = 'exam_group_qc';
+  const claim = await claimPrintingIdempotency(tx, companyId, route, input.idempotencyKey, actor.userId, { groupId: input.groupId });
+  if (claim.replay) return claim.replay.body.summary as ExamGroupSummary;
+
+  if (!hasPermission(actor.role, 'exams:qc')) {
+    throw new AccountingError(403, 'QC approval requires the exams:qc permission', 'EXAMS_QC_PERMISSION_REQUIRED');
+  }
+
+  const group = await loadExamGroupForUpdate(tx, companyId, input.groupId);
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+
+  for (const p of papers.rows) {
+    const status = p.status;
+    if (['completed', 'qc_passed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(status)) continue; // already QC-passed
+    if (status === 'cancelled' || status === 'reprinted') continue;
+    if (status === 'qc_hold') {
+      await updateExamPaperStatus(tx, companyId, actor, Number(p.id), 'qc_passed', {
+        qcNotes: input.qcNotesByPaper?.[String(p.id)] ?? 'QC approved after rework',
+      });
+      continue;
+    }
+    // queued/reserved/printing must have been completed by checkpoint B.
+    throw new AccountingError(409, `Examination paper ${p.job_number} has not completed production (status: ${status})`, 'QC_BEFORE_PRODUCTION');
+  }
+
+  await tx.query(
+    `UPDATE exam_batch_group_runs
+        SET qc_approved_at = COALESCE(qc_approved_at, NOW()), last_checkpoint = 'qc_approved'
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id]
+  );
+  await tx.query(
+    `UPDATE exam_batch_groups SET status = 'qc_approved'
+      WHERE company_id = $1 AND id = $2 AND status IN ('draft', 'prepared', 'production_completed')`,
+    [companyId, group.id]
+  );
+
+  const fresh = await loadExamGroupForUpdate(tx, companyId, group.id);
+  const summary = await buildExamGroupSummary(tx, companyId, fresh, (await loadGroupPapers(tx, companyId, group.id)).rows);
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 200, { summary });
+  return summary;
+}
+
+/**
+ * Checkpoint D — Physical delivery (real, attested). Each eligible child is
+ * delivered through deliverExamPaper with reuseExisting, so a retry reuses the
+ * original delivery note and never creates a duplicate or loses a real delivery.
+ */
+export async function deliverExamGroupChildren(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: {
+    groupId: number;
+    idempotencyKey?: string | null;
+    dispatchDate?: string | null;
+    recipientName?: string | null;
+    driverName?: string | null;
+    vehicleReg?: string | null;
+    notes?: string | null;
+  }
+) {
+  const route = 'exam_group_deliver';
+  const claim = await claimPrintingIdempotency(tx, companyId, route, input.idempotencyKey, actor.userId, { groupId: input.groupId });
+  if (claim.replay) return claim.replay.body.summary as ExamGroupSummary;
+
+  if (!hasPermission(actor.role, 'exams:deliver')) {
+    throw new AccountingError(403, 'Batch delivery requires the exams:deliver permission', 'EXAMS_DELIVER_PERMISSION_REQUIRED');
+  }
+
+  const group = await loadExamGroupForUpdate(tx, companyId, input.groupId);
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+
+  for (const p of papers.rows) {
+    const status = p.status;
+    if (status === 'delivered' || status === 'invoiced') continue; // already delivered
+    if (status === 'cancelled' || status === 'reprinted') continue;
+    if (!['completed', 'qc_passed', 'packed', 'dispatched'].includes(status)) {
+      throw new AccountingError(409, `Examination paper ${p.job_number} is not ready for delivery (status: ${status})`, 'EXAM_PAPER_NOT_READY_FOR_DELIVERY');
+    }
+    await deliverExamPaper(tx, companyId, actor, Number(p.id), {
+      dispatchDate: input.dispatchDate ?? null,
+      recipientName: input.recipientName ?? null,
+      driverName: input.driverName ?? null,
+      vehicleReg: input.vehicleReg ?? null,
+      notes: input.notes ?? null,
+      reuseExisting: true,
+    });
+  }
+
+  await tx.query(
+    `UPDATE exam_batch_group_runs
+        SET delivered_at = COALESCE(delivered_at, NOW()), last_checkpoint = 'delivered'
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id]
+  );
+  await tx.query(
+    `UPDATE exam_batch_groups SET status = 'delivered'
+      WHERE company_id = $1 AND id = $2 AND status IN ('draft', 'prepared', 'production_completed', 'qc_approved')`,
+    [companyId, group.id]
+  );
+
+  const fresh = await loadExamGroupForUpdate(tx, companyId, group.id);
+  const summary = await buildExamGroupSummary(tx, companyId, fresh, (await loadGroupPapers(tx, companyId, group.id)).rows);
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 200, { summary });
+  return summary;
+}
+
+/**
+ * Checkpoint E — Invoice posting. One consolidated school invoice per group,
+ * per-learner/per-class lines (Decision 3), posted through the existing sales
+ * service and linked to the delivered papers (single WIP->COGS relief each).
+ */
+export async function postExamGroupInvoice(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  input: { groupId: number; idempotencyKey?: string | null; includeTax?: boolean; taxRate?: number; notes?: string | null }
+) {
+  const route = 'exam_group_invoice';
+  const claim = await claimPrintingIdempotency(tx, companyId, route, input.idempotencyKey, actor.userId, { groupId: input.groupId });
+  if (claim.replay) return claim.replay.body.summary as ExamGroupSummary;
+
+  if (!hasPermission(actor.role, 'exams:invoice')) {
+    throw new AccountingError(403, 'Batch invoicing requires the exams:invoice permission', 'EXAMS_INVOICE_PERMISSION_REQUIRED');
+  }
+
+  const group = await loadExamGroupForUpdate(tx, companyId, input.groupId);
+  if (group.invoice_id) {
+    // Already invoiced: idempotent replay of the completed checkpoint.
+    const summary = await buildExamGroupSummary(tx, companyId, group, (await loadGroupPapers(tx, companyId, group.id)).rows);
+    await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 200, { summary });
+    return summary;
+  }
+
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+  const deliveredPapers = papers.rows.filter((p: any) => p.status === 'delivered' && p.invoice_id == null);
+  const notDelivered = papers.rows.filter((p: any) => !['delivered', 'invoiced', 'cancelled', 'reprinted'].includes(p.status));
+  if (notDelivered.length > 0) {
+    throw new AccountingError(409, `${notDelivered.length} examination paper(s) are not delivered and cannot be invoiced`, 'EXAM_GROUP_NOT_DELIVERED');
+  }
+  if (deliveredPapers.length === 0) {
+    throw new AccountingError(409, 'No delivered examination papers are available to invoice', 'EXAM_GROUP_NO_DELIVERED');
+  }
+
+  // Per-learner, per-class lines (no duplicate subject charges).
+  const classMap = new Map<number, { className: string; learners: number; rate: number; subjects: string[] }>();
+  for (const p of deliveredPapers) {
+    let cls = classMap.get(p.batch_id);
+    if (!cls) {
+      cls = { className: p.class_name, learners: Number(p.learners_count || p.copies), rate: Number(p.price_per_learner || 0), subjects: [] };
+      classMap.set(p.batch_id, cls);
+    }
+    cls.subjects.push(`${p.subject_name} (${p.pages}pp)`);
+  }
+  const lines = Array.from(classMap.values()).map((c, idx) => ({
+    id: `exg-${Date.now()}-${idx}`,
+    description: `${c.className} — ${c.learners} learners · Subjects: ${c.subjects.join(', ')}`,
+    quantity: c.learners,
+    rate: c.rate,
+    amount: Math.round(c.learners * c.rate * 10000) / 10000,
+    taxable: Boolean(input.includeTax),
+  }));
+
+  const today = todayIso();
+  const due = new Date();
+  due.setDate(due.getDate() + 30);
+  const taxRate = input.includeTax ? (input.taxRate ?? 0) : 0;
+
+  const created = await createInvoiceOrSalesReceipt(tx, companyId, actor, {
+    customerId: Number(group.school_customer_id),
+    invoiceDate: today,
+    dueDate: due.toISOString().slice(0, 10),
+    terms: 'Net 30',
+    taxRate,
+    notes:
+      input.notes ||
+      `Consolidated school examination invoice for ${group.assessment_name} (group ${group.group_reference}).`,
+    idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}:invoice` : null,
+    lines: lines.map(l => ({ description: l.description, quantity: l.quantity, rate: l.rate, taxable: l.taxable })),
+  });
+  const invoiceId = Number(created.invoice.id);
+  const invoiceNumber = created.invoice.invoiceNumber;
+
+  // Authoritative exam linkage + single WIP->COGS relief per delivered paper.
+  await linkExamPapersToInvoice(tx, companyId, actor, {
+    invoiceId,
+    customerId: Number(group.school_customer_id),
+    paperIds: deliveredPapers.map((p: any) => Number(p.id)),
+  });
+
+  await tx.query(
+    `UPDATE exam_batch_groups SET invoice_id = $3, status = 'invoiced' WHERE company_id = $1 AND id = $2`,
+    [companyId, group.id, invoiceId]
+  );
+  await tx.query(
+    `UPDATE exam_assessment_batches SET invoice_id = $3
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id, invoiceId]
+  );
+  await tx.query(
+    `UPDATE exam_batch_group_runs
+        SET invoice_id = $3, invoiced_at = NOW(), last_checkpoint = 'invoiced', completed_at = NOW()
+      WHERE company_id = $1 AND exam_batch_group_id = $2`,
+    [companyId, group.id, invoiceId]
+  );
+
+  const fresh = await loadExamGroupForUpdate(tx, companyId, group.id);
+  const summary = await buildExamGroupSummary(tx, companyId, fresh, (await loadGroupPapers(tx, companyId, group.id)).rows);
+  await completePrintingIdempotency(tx, companyId, route, input.idempotencyKey, 201, { summary });
+  return summary;
+}
+
+/** Consolidated batch summary (read-only). */
+export async function getExamGroupSummary(tx: Transaction, companyId: number, groupId: number): Promise<ExamGroupSummary> {
+  const group = await loadExamGroupForUpdate(tx, companyId, groupId);
+  const papers = await loadGroupPapers(tx, companyId, group.id);
+  return buildExamGroupSummary(tx, companyId, group, papers.rows);
+}
+
+export interface ExamGroupListItem {
+  examBatchGroupId: number;
+  groupReference: string;
+  schoolCustomerId: number;
+  assessmentName: string;
+  status: string;
+  invoiceId: number | null;
+  invoiceNumber: string | null;
+  parentJobNumber: string | null;
+  classCount: number;
+  subjectCount: number;
+  batchIds: number[];
+}
+
+/**
+ * Server-backed group resolution. The persisted group relationship (not a
+ * session-global "most recent" id) is the authoritative source, so the UI can
+ * resolve the group that belongs to the currently selected examination and
+ * reopen existing groups after refresh or restart. RLS scopes every row to the
+ * caller's company.
+ */
+export async function listExamGroups(
+  tx: Transaction,
+  companyId: number,
+  filters: { schoolCustomerId?: number | null; assessmentName?: string | null } = {}
+): Promise<ExamGroupListItem[]> {
+  const params: any[] = [companyId];
+  let where = 'g.company_id = $1';
+  if (filters.schoolCustomerId != null && Number.isInteger(Number(filters.schoolCustomerId))) {
+    params.push(Number(filters.schoolCustomerId));
+    where += ` AND g.school_customer_id = $${params.length}`;
+  }
+  if (filters.assessmentName != null && String(filters.assessmentName).trim()) {
+    params.push(String(filters.assessmentName).trim());
+    where += ` AND g.assessment_name = $${params.length}`;
+  }
+  const res = await tx.query<any>(
+    `SELECT g.id, g.group_reference, g.school_customer_id, g.assessment_name, g.status, g.invoice_id,
+            (SELECT COUNT(*)::int FROM exam_assessment_batches b
+              WHERE b.company_id = g.company_id AND b.exam_batch_group_id = g.id) AS class_count,
+            (SELECT COUNT(*)::int FROM exam_papers p
+              JOIN exam_assessment_batches b ON b.company_id = p.company_id AND b.id = p.batch_id
+              WHERE p.company_id = g.company_id AND b.exam_batch_group_id = g.id) AS subject_count,
+            (SELECT array_agg(b.id ORDER BY b.id) FROM exam_assessment_batches b
+              WHERE b.company_id = g.company_id AND b.exam_batch_group_id = g.id) AS batch_ids,
+            (SELECT j.job_number FROM printing_jobs j
+              JOIN exam_batch_group_runs r ON r.company_id = j.company_id AND r.parent_job_id = j.id
+              WHERE r.company_id = g.company_id AND r.exam_batch_group_id = g.id LIMIT 1) AS parent_job_number,
+            (SELECT i.invoice_number FROM invoices i
+              WHERE i.company_id = g.company_id AND i.id = g.invoice_id) AS invoice_number
+       FROM exam_batch_groups g
+      WHERE ${where}
+      ORDER BY g.created_at DESC, g.id DESC`,
+    params
+  );
+  return res.rows.map((r: any) => ({
+    examBatchGroupId: Number(r.id),
+    groupReference: r.group_reference,
+    schoolCustomerId: Number(r.school_customer_id),
+    assessmentName: r.assessment_name,
+    status: r.status,
+    invoiceId: r.invoice_id != null ? Number(r.invoice_id) : null,
+    invoiceNumber: r.invoice_number ?? null,
+    parentJobNumber: r.parent_job_number ?? null,
+    classCount: Number(r.class_count ?? 0),
+    subjectCount: Number(r.subject_count ?? 0),
+    batchIds: Array.isArray(r.batch_ids) ? r.batch_ids.map(Number) : [],
+  }));
+}
+
+/**
+ * Authoritative batch -> group resolution. The selected examination batch's
+ * persisted `exam_batch_group_id` is the only source of group identity. Fails
+ * closed (no fallback, no guessing) when the relationship is missing,
+ * inconsistent, or belongs to another school.
+ */
+export async function getExamGroupForBatch(tx: Transaction, companyId: number, batchId: number) {
+  const res = await tx.query<any>(
+    `SELECT b.id AS batch_id, b.school_customer_id, b.exam_batch_group_id,
+            g.id AS group_id, g.group_reference, g.school_customer_id AS group_school,
+            g.assessment_name, g.status
+       FROM exam_assessment_batches b
+       LEFT JOIN exam_batch_groups g
+         ON g.company_id = b.company_id AND g.id = b.exam_batch_group_id
+      WHERE b.company_id = $1 AND b.id = $2`,
+    [companyId, batchId]
+  );
+  if (res.rows.length === 0) {
+    throw new AccountingError(404, 'Examination batch not found in active company', 'EXAM_BATCH_NOT_FOUND');
+  }
+  const r = res.rows[0];
+  if (r.exam_batch_group_id == null) {
+    throw new AccountingError(
+      409,
+      'The selected examination batch has not been prepared into a production group',
+      'EXAM_BATCH_GROUP_MISSING'
+    );
+  }
+  if (r.group_id == null) {
+    // exam_batch_group_id is set but the group row is inaccessible/inconsistent.
+    throw new AccountingError(409, 'The examination batch group relationship is inconsistent', 'EXAM_GROUP_INCONSISTENT');
+  }
+  if (Number(r.group_school) !== Number(r.school_customer_id)) {
+    // Fail closed: the group belongs to a different school than the batch.
+    throw new AccountingError(409, 'The examination batch group belongs to a different school', 'EXAM_GROUP_SCHOOL_MISMATCH');
+  }
+  return {
+    batchId: Number(r.batch_id),
+    examBatchGroupId: Number(r.group_id),
+    groupReference: r.group_reference,
+    schoolCustomerId: Number(r.school_customer_id),
+    assessmentName: r.assessment_name,
+    status: r.status,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -4731,7 +5466,7 @@ export async function listExamBatches(
             b.due_date::text AS due_date, b.priority,
             b.total_paper_cost::text, b.total_toner_cost::text, b.invoice_id,
             b.spec_frozen, b.spec_version, b.spec_hash, b.spec_approved_at::text,
-            b.school_customer_id, c.company_name,
+            b.school_customer_id, b.exam_batch_group_id, c.company_name,
             COUNT(p.id)::int AS paper_count,
             COUNT(p.id) FILTER (WHERE p.status = 'invoiced')::int AS invoiced_papers,
             COUNT(p.id) FILTER (WHERE p.status = 'delivered')::int AS delivered_papers,
@@ -4763,6 +5498,7 @@ export async function listExamBatches(
     totalPaperCost: toNum(r.total_paper_cost),
     totalTonerCost: toNum(r.total_toner_cost),
     invoiceId: r.invoice_id != null ? Number(r.invoice_id) : undefined,
+    examBatchGroupId: r.exam_batch_group_id != null ? Number(r.exam_batch_group_id) : null,
     specFrozen: Boolean(r.spec_frozen),
     specVersion: Number(r.spec_version),
     specHash: r.spec_hash ?? undefined,
@@ -5033,6 +5769,13 @@ export async function deliverExamPaper(
     driverName?: string | null;
     vehicleReg?: string | null;
     notes?: string | null;
+    /**
+     * When true, a paper that is already delivered returns its existing delivery
+     * note instead of throwing. This makes batch-level delivery idempotent across
+     * retries and crash recovery: a re-run reuses the original note and never
+     * creates a duplicate (Decision 6 / delivery-integrity correction).
+     */
+    reuseExisting?: boolean;
   } = {}
 ) {
   const res = await tx.query<{
@@ -5063,6 +5806,39 @@ export async function deliverExamPaper(
   }
   const paper = res.rows[0];
   if (paper.delivery_note_id != null || paper.status === 'delivered' || paper.status === 'invoiced') {
+    if (input.reuseExisting && paper.delivery_note_id != null) {
+      // Idempotent replay: reuse the original delivery note. The note and its
+      // exam-paper linkage were committed atomically in the original request,
+      // so there is nothing to recreate and never a duplicate note.
+      const existing = await tx.query<{
+        id: number;
+        delivery_number: string;
+        customer_id: number;
+        dispatch_date: string;
+        status: string;
+      }>(
+        `SELECT id, delivery_number, customer_id, dispatch_date::text AS dispatch_date, status
+           FROM delivery_notes
+          WHERE company_id = $1 AND id = $2`,
+        [companyId, Number(paper.delivery_note_id)]
+      );
+      const note = existing.rows[0];
+      return {
+        paperId,
+        status: 'delivered',
+        deliveryNote: note
+          ? {
+              id: Number(note.id),
+              deliveryNumber: note.delivery_number,
+              customerId: Number(note.customer_id),
+              dispatchDate: note.dispatch_date,
+              status: note.status,
+              lines: [],
+            }
+          : null,
+        reused: true,
+      } as any;
+    }
     throw new AccountingError(409, 'Examination paper has already been delivered', 'EXAM_PAPER_ALREADY_DELIVERED');
   }
   if (!['completed', 'qc_passed', 'packed', 'dispatched'].includes(paper.status)) {

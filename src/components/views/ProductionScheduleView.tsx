@@ -46,6 +46,7 @@ export const ProductionScheduleView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<ApiPrintingJob | null>(null);
+  const [expandedParent, setExpandedParent] = useState<number | null>(null);
   const [profit, setProfit] = useState<any | null>(null);
   const [profitLoading, setProfitLoading] = useState(false);
   const [profitError, setProfitError] = useState<string | null>(null);
@@ -83,8 +84,14 @@ export const ProductionScheduleView: React.FC = () => {
   };
 
   const columns = useMemo(() => {
+    // Examination parent jobs and their children are shown as one expandable
+    // group above the board; they are excluded from the status columns.
+    const parentIds = new Set(jobs.filter(j => j.jobType === 'exam_batch').map(j => j.id));
+    const standalone = jobs.filter(
+      j => j.jobType !== 'exam_batch' && !(j.parentJobId != null && parentIds.has(j.parentJobId))
+    );
     const groups = new Map<string, ApiPrintingJob[]>();
-    for (const job of jobs) {
+    for (const job of standalone) {
       const key = job.status || 'draft';
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(job);
@@ -94,6 +101,19 @@ export const ProductionScheduleView: React.FC = () => {
       .filter(s => !STATUS_ORDER.includes(s))
       .sort();
     return [...known, ...extra].map(status => ({ status, jobs: groups.get(status)! }));
+  }, [jobs]);
+
+  const examParents = useMemo(() => {
+    const parents = jobs.filter(j => j.jobType === 'exam_batch');
+    const childrenByParent = new Map<number, ApiPrintingJob[]>();
+    for (const j of jobs) {
+      if (j.parentJobId != null) {
+        const list = childrenByParent.get(j.parentJobId) || [];
+        list.push(j);
+        childrenByParent.set(j.parentJobId, list);
+      }
+    }
+    return parents.map(p => ({ parent: p, children: childrenByParent.get(p.id) || [] }));
   }, [jobs]);
 
   return (
@@ -123,6 +143,65 @@ export const ProductionScheduleView: React.FC = () => {
       {error && (
         <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs">
           {error}
+        </div>
+      )}
+
+      {examParents.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-3 space-y-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+            <Printer className="w-3.5 h-3.5" /> Examination Production
+          </div>
+          {examParents.map(({ parent, children }) => {
+            const done = children.filter(c => ['completed', 'qc_passed', 'packed', 'dispatched', 'delivered', 'invoiced'].includes(c.status)).length;
+            const pct = children.length > 0 ? Math.round((done / children.length) * 100) : 0;
+            const open = expandedParent === parent.id;
+            return (
+              <div key={parent.id} className="rounded-lg border border-slate-200 dark:border-slate-800">
+                <button
+                  onClick={() => setExpandedParent(open ? null : parent.id)}
+                  className="w-full text-left p-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] font-bold text-slate-500">{parent.jobNumber}</span>
+                    <span className="text-[10px] text-slate-400">{STATUS_LABEL[parent.status] || parent.status}</span>
+                  </div>
+                  <div className="mt-1 text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {parent.title || '(untitled)'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">{parent.customerName || '—'}</div>
+                  <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+                    <span>{children.length} subject item(s)</span>
+                    <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{pct}% complete</span>
+                  </div>
+                  <div className="mt-1 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  </div>
+                </button>
+                {open && (
+                  <div className="border-t border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+                    {children.length === 0 ? (
+                      <div className="p-3 text-[11px] text-slate-400">No subject items linked yet.</div>
+                    ) : (
+                      children.map(c => (
+                        <div key={c.id} className="flex items-center justify-between gap-2 p-2.5 text-[11px]">
+                          <div className="min-w-0">
+                            <div className="font-mono text-[10px] text-slate-400">{c.jobNumber}</div>
+                            <div className="truncate text-slate-700 dark:text-slate-200">{c.title || '(untitled)'}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-slate-500">
+                              {c.copies} copies · {formatCurrency(Number(c.totalCost) || 0, currency)}
+                            </div>
+                            <div className="text-slate-400">{STATUS_LABEL[c.status] || c.status}</div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
+import { printingApi } from '../../services/printingApi';
 import { useAuth } from '../../context/AuthContext';
 import { ExamPaper } from '../../types/accounting';
 import { documentsApi } from '../../services/documentsApi';
@@ -10,6 +11,8 @@ import {
 } from '../../types/documents';
 import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
+import { ExamGroupWorkflowModal } from './ExamGroupWorkflowModal';
+import { useExamGroupSelection } from '../../hooks/useExamGroupSelection';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
 import {
@@ -168,6 +171,35 @@ export const ExaminationView: React.FC = () => {
   // Consolidated Invoice Confirmation Modal
   const [isInvoiceReviewOpen, setIsInvoiceReviewOpen] = useState(false);
   const [invoiceIncludeTax, setInvoiceIncludeTax] = useState(false);
+  // One-click batch production & invoicing: the group is resolved from the
+  // *selected examination batch's* persisted exam_batch_group_id (server
+  // authority), never from the school or a global "most recent" id.
+  const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
+  const [examBatches, setExamBatches] = useState<any[]>([]);
+  const { group: resolvedGroup, status: groupStatus, error: groupError } = useExamGroupSelection(selectedBatchId);
+  const [workflowGroupId, setWorkflowGroupId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedBatchId(null);
+    setExamBatches([]);
+    const sid =
+      selectedSchoolFilter !== 'all' && /^\d+$/.test(selectedSchoolFilter)
+        ? Number(selectedSchoolFilter)
+        : null;
+    if (sid == null) return;
+    (async () => {
+      try {
+        const list = await printingApi.listExamBatches({ schoolCustomerId: sid });
+        if (!cancelled) setExamBatches(Array.isArray(list) ? list : []);
+      } catch {
+        if (!cancelled) setExamBatches([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSchoolFilter]);
   const [selectedContractId, setSelectedContractId] = useState('');
   const [selectedAssessmentNumber, setSelectedAssessmentNumber] = useState<number | ''>('');
   const [invoiceNotes, setInvoiceNotes] = useState('');
@@ -904,6 +936,38 @@ export const ExaminationView: React.FC = () => {
             <ShieldCheck className="w-4 h-4" />
             <span>Reconciliation</span>
           </button>
+          <select
+            value={selectedBatchId ?? ''}
+            onChange={e => setSelectedBatchId(e.target.value ? Number(e.target.value) : null)}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs max-w-[220px]"
+            aria-label="Select examination batch"
+          >
+            <option value="">Select examination batch…</option>
+            {examBatches.map(b => (
+              <option key={b.backendId} value={b.backendId}>
+                {b.className} · {b.assessmentName}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => {
+              if (resolvedGroup) setWorkflowGroupId(resolvedGroup.examBatchGroupId);
+            }}
+            disabled={!resolvedGroup}
+            title={
+              groupError
+                ? groupError
+                : groupStatus === 'empty'
+                ? selectedBatchId == null
+                  ? 'Select an examination batch first.'
+                  : 'The selected examination batch has not been prepared into a production group.'
+                : undefined
+            }
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Generate Production &amp; Invoice</span>
+          </button>
           <button
             onClick={() => {
               setBatchSubmissionId(`exam-sub-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -916,6 +980,17 @@ export const ExaminationView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {groupError && (
+        <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-[11px] text-rose-800 dark:text-rose-200">
+          {groupError}
+        </div>
+      )}
+      {groupStatus === 'empty' && selectedBatchId != null && !groupError && (
+        <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-500">
+          The selected examination batch has not been prepared into a production group. Schedule it to enable one-click production &amp; invoicing.
+        </div>
+      )}
 
       {/* Warning if multiple schools selected */}
       {hasMultipleSchoolsSelected && (
@@ -2044,6 +2119,9 @@ export const ExaminationView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      {workflowGroupId != null && (
+        <ExamGroupWorkflowModal groupId={workflowGroupId} onClose={() => setWorkflowGroupId(null)} />
       )}
     </div>
   );

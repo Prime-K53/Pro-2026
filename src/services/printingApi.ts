@@ -46,6 +46,7 @@ export interface ApiPrintingJob {
   manualSellingPrice: number;
   jobDate: string;
   invoiceId: number | null;
+  parentJobId: number | null;
   notes: string;
   rawPaperItemId?: string;
   rawTonerItemId?: string;
@@ -76,6 +77,12 @@ export const printingApi = {
       manualSellingPrice: Number(j.manualSellingPrice ?? j.manual_selling_price ?? 0),
       jobDate: j.jobDate || j.job_date || '',
       invoiceId: j.invoiceId != null ? Number(j.invoiceId) : null,
+      parentJobId:
+        j.parentJobId != null
+          ? Number(j.parentJobId)
+          : j.parent_job_id != null
+          ? Number(j.parent_job_id)
+          : null,
       notes: j.notes || '',
       rawPaperItemId: String(j.rawPaperItemId ?? j.raw_paper_item_id ?? ''),
       rawTonerItemId: String(j.rawTonerItemId ?? j.raw_toner_item_id ?? ''),
@@ -339,6 +346,89 @@ export const printingApi = {
       body: JSON.stringify(payload),
     });
     return d.batch;
+  },
+
+  // ---- Examination batch group: one-click production & invoicing ----
+
+  async listExamGroups(params: { schoolCustomerId?: number | null; assessmentName?: string | null } = {}): Promise<any[]> {
+    const d = await requestJson<{ groups: any[] }>(`/api/printing/exam-groups${buildQuery(params as any)}`);
+    return d.groups || [];
+  },
+
+  /** Authoritative group for a selected examination batch (persisted relationship). */
+  async getExamGroupForBatch(batchId: number): Promise<any> {
+    const d = await requestJson<{ group: any }>(`/api/printing/exam-batches/${batchId}/group`);
+    return d.group;
+  },
+
+  async generateExamGroupProduction(groupId: number, idempotencyKey?: string | null): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/generate-production`, {
+      method: 'POST',
+      headers: idempotencyHeaders(idempotencyKey),
+      body: JSON.stringify({ idempotencyKey }),
+    });
+    return d.summary;
+  },
+
+  async completeExamGroupProduction(
+    groupId: number,
+    payload: { idempotencyKey?: string | null; goodCopiesByPaper?: Record<string, number>; spoiledCopiesByPaper?: Record<string, number> } = {}
+  ): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/complete-production`, {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    return d.summary;
+  },
+
+  async approveExamGroupQc(
+    groupId: number,
+    payload: { idempotencyKey?: string | null; qcNotesByPaper?: Record<string, string> } = {}
+  ): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/approve-qc`, {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    return d.summary;
+  },
+
+  async deliverExamGroupChildren(
+    groupId: number,
+    payload: {
+      idempotencyKey?: string | null;
+      dispatchDate?: string | null;
+      recipientName?: string | null;
+      driverName?: string | null;
+      vehicleReg?: string | null;
+      notes?: string | null;
+    } = {}
+  ): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/deliver`, {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    return d.summary;
+  },
+
+  async postExamGroupInvoice(
+    groupId: number,
+    payload: { idempotencyKey?: string | null; includeTax?: boolean; taxRate?: number; notes?: string | null } = {}
+  ): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/invoice`, {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d.summary;
+  },
+
+  async getExamGroupSummary(groupId: number): Promise<any> {
+    const d = await requestJson<{ summary: any }>(`/api/printing/exam-groups/${groupId}/summary`);
+    return d.summary;
   },
 
   // ---- Printing Contracts: read + lifecycle (advanced options) ----

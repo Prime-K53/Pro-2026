@@ -71,6 +71,14 @@ import {
   updateExamPaperDetails,
   updateExamPaperStatus,
   voidPrintingContract,
+  generateExamGroupProduction,
+  completeExamGroupProduction,
+  approveExamGroupQc,
+  deliverExamGroupChildren,
+  postExamGroupInvoice,
+  getExamGroupSummary,
+  listExamGroups,
+  getExamGroupForBatch,
 } from '../services/printingRecordsService.ts';
 
 function toActor(req: Request): ActorContext {
@@ -1136,6 +1144,21 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
+  // Authoritative group identity for a selected examination batch. The group is
+  // derived from the batch's persisted exam_batch_group_id (never a client guess).
+  router.get('/printing/exam-batches/:id/group', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam batch id' });
+      const group = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getExamGroupForBatch(tx, req.auth!.companyId, id)
+      );
+      return res.json({ group });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
   // Append-only production timeline for a paper.
   router.get('/printing/exam-papers/:id/events', requirePermission('exams:view'), async (req: Request, res: Response) => {
     try {
@@ -1315,6 +1338,138 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         deleteExamPaper(tx, req.auth!.companyId, toActor(req), id)
       );
       return res.json(result);
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  // ---- Examination batch group: one-click production & invoicing ----
+  // Each checkpoint is a durable, independently idempotent transaction. The
+  // idempotency key is taken from the header (or body) and scoped per route.
+
+  router.get('/printing/exam-groups', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const schoolParam = req.query.schoolCustomerId;
+      const schoolCustomerId =
+        schoolParam != null && String(schoolParam).trim() && Number.isInteger(Number(schoolParam))
+          ? Number(schoolParam)
+          : null;
+      const assessmentName = req.query.assessmentName != null ? String(req.query.assessmentName) : null;
+      const groups = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listExamGroups(tx, req.auth!.companyId, { schoolCustomerId, assessmentName })
+      );
+      return res.json({ groups });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-groups/:id/generate-production', requirePermission('exams:produce'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        generateExamGroupProduction(tx, req.auth!.companyId, toActor(req), { groupId: id, idempotencyKey })
+      );
+      return res.status(201).json({ summary });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-groups/:id/complete-production', requirePermission('exams:qc'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        completeExamGroupProduction(tx, req.auth!.companyId, toActor(req), {
+          groupId: id,
+          idempotencyKey,
+          goodCopiesByPaper: req.body?.goodCopiesByPaper ?? undefined,
+          spoiledCopiesByPaper: req.body?.spoiledCopiesByPaper ?? undefined,
+        })
+      );
+      return res.json({ summary });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-groups/:id/approve-qc', requirePermission('exams:qc'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        approveExamGroupQc(tx, req.auth!.companyId, toActor(req), {
+          groupId: id,
+          idempotencyKey,
+          qcNotesByPaper: req.body?.qcNotesByPaper ?? undefined,
+        })
+      );
+      return res.json({ summary });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-groups/:id/deliver', requirePermission('exams:deliver'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        deliverExamGroupChildren(tx, req.auth!.companyId, toActor(req), {
+          groupId: id,
+          idempotencyKey,
+          dispatchDate: req.body?.dispatchDate ?? null,
+          recipientName: req.body?.recipientName ?? null,
+          driverName: req.body?.driverName ?? null,
+          vehicleReg: req.body?.vehicleReg ?? null,
+          notes: req.body?.notes ?? null,
+        })
+      );
+      return res.json({ summary });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/exam-groups/:id/invoice', requirePermission('exams:invoice'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        postExamGroupInvoice(tx, req.auth!.companyId, toActor(req), {
+          groupId: id,
+          idempotencyKey,
+          includeTax: Boolean(req.body?.includeTax),
+          taxRate: req.body?.taxRate != null ? Number(req.body.taxRate) : undefined,
+          notes: req.body?.notes ?? null,
+        })
+      );
+      return res.status(201).json({ summary });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.get('/printing/exam-groups/:id/summary', requirePermission('exams:view'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid exam group id' });
+      const summary = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getExamGroupSummary(tx, req.auth!.companyId, id)
+      );
+      return res.json({ summary });
     } catch (err) {
       return handlePrintingError(res, err);
     }

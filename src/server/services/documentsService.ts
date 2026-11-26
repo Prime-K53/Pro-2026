@@ -73,6 +73,8 @@ export interface ListDocumentsOptions {
   search?: string;
   includeCosts?: boolean;
   canReadBills?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
 export async function listAttachments(
@@ -760,9 +762,21 @@ export async function listCompanyDocuments(
     );
   }
 
+  const total = filtered.length;
+  const limit = Number.isFinite(options.limit) && (options.limit as number) > 0
+    ? Math.min(500, Math.floor(options.limit as number))
+    : undefined;
+  const offset = Number.isFinite(options.offset) && (options.offset as number) > 0
+    ? Math.floor(options.offset as number)
+    : 0;
+  const paged = limit !== undefined ? filtered.slice(offset, offset + limit) : filtered.slice(offset);
+
   return {
-    documents: filtered,
+    documents: paged,
     countsByCategory,
+    total,
+    limit: limit ?? null,
+    offset,
   };
 }
 
@@ -1378,6 +1392,17 @@ export async function getDocumentPreviewPayload(
       linkedInvoiceId: pj.invoice_id ? Number(pj.invoice_id) : undefined,
       linkedInvoiceNumber: pj.invoice_number || undefined,
       notes: pj.notes || '',
+      quickPrintMeta: {
+        jobType: pj.job_type || 'photocopy',
+        pages: Number(pj.pages) || 0,
+        copies: Number(pj.copies) || 0,
+        printSide: pj.print_side || 'single',
+        sheetsUsed: Number(pj.sheets_used) || 0,
+        impressionsUsed: Number(pj.impressions_used) || 0,
+        paperCost: toMoneyNumber(parseDecimal4(pj.paper_cost)),
+        tonerCost: toMoneyNumber(parseDecimal4(pj.toner_cost)),
+        extraCost: toMoneyNumber(parseDecimal4(pj.extra_cost)),
+      },
       attachments: await fetchAttachmentsFor(['printing_job'], id),
     };
   }
@@ -1459,6 +1484,7 @@ export interface WorkflowInvoiceGenerationInput {
   postgresContractId?: number | null;
   postgresMilestoneNumber?: number | null;
   postgresExamBatchId?: number | null;
+  postgresExamBatchGroupId?: number | null;
   postgresExamPaperIds?: number[] | null;
   postgresPrintingJobId?: number | null;
 }
@@ -1553,6 +1579,38 @@ export async function generateInvoiceFromWorkflow(
     );
     examPaperIds = batchPapers.rows.map(r => Number(r.id));
   }
+  if (examPaperIds.length === 0 && input.postgresExamBatchGroupId) {
+    // Group-level eligibility: every paper in the group must be delivered (or
+    // cancelled/invoiced) before the consolidated school invoice is posted.
+    const undelivered = await tx.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM exam_papers p
+         JOIN exam_assessment_batches b
+           ON b.company_id = p.company_id AND b.id = p.batch_id
+        WHERE p.company_id = $1 AND b.exam_batch_group_id = $2
+          AND p.status NOT IN ('delivered', 'invoiced', 'cancelled')`,
+      [companyId, Number(input.postgresExamBatchGroupId)]
+    );
+    if (Number(undelivered.rows[0]?.count ?? 0) > 0) {
+      throw new AccountingError(
+        409,
+        'Examination papers must be produced, QC-approved and delivered before this group can be invoiced',
+        'EXAM_GROUP_NOT_DELIVERED'
+      );
+    }
+    const groupPapers = await tx.query<{ id: number }>(
+      `SELECT p.id
+         FROM exam_papers p
+         JOIN exam_assessment_batches b
+           ON b.company_id = p.company_id AND b.id = p.batch_id
+        WHERE p.company_id = $1 AND b.exam_batch_group_id = $2
+          AND p.status = 'delivered' AND p.invoice_id IS NULL
+          AND p.production_job_id IS NOT NULL
+        ORDER BY p.id ASC`,
+      [companyId, Number(input.postgresExamBatchGroupId)]
+    );
+    examPaperIds = groupPapers.rows.map(r => Number(r.id));
+  }
 
   const created = await createInvoiceOrSalesReceipt(tx, companyId, actor, {
     customerId: resolvedCustomerId,
@@ -1596,6 +1654,20 @@ export async function generateInvoiceFromWorkflow(
           SET invoice_id = $3
         WHERE company_id = $1 AND id = $2`,
       [companyId, Number(input.postgresExamBatchId), invoiceId]
+    );
+  }
+  if (input.postgresExamBatchGroupId) {
+    await tx.query(
+      `UPDATE exam_batch_groups
+          SET invoice_id = $3, status = 'invoiced'
+        WHERE company_id = $1 AND id = $2`,
+      [companyId, Number(input.postgresExamBatchGroupId), invoiceId]
+    );
+    await tx.query(
+      `UPDATE exam_assessment_batches
+          SET invoice_id = $3
+        WHERE company_id = $1 AND exam_batch_group_id = $2`,
+      [companyId, Number(input.postgresExamBatchGroupId), invoiceId]
     );
   }
   if (input.postgresPrintingJobId) {
