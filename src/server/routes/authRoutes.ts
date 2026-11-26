@@ -22,6 +22,9 @@ function isHttpsRequest(req: Request): boolean {
   return req.secure || proto.includes('https');
 }
 
+/** In-memory failed-login tracker for a lightweight per-account lockout. */
+const failedLogins = new Map<string, { count: number; first: number }>();
+
 function setCookie(
   req: Request,
   res: Response,
@@ -285,6 +288,15 @@ export function createAuthRouter(db: ServerDatabase): Router {
       return res.status(400).json({ error: 'Username/email and password are required' });
     }
 
+    // Lightweight per-account lockout (single-process deployments): 5 failed
+    // attempts within 15 minutes locks the account for 15 minutes.
+    const lockKey = `${identifier.toLowerCase()}|${ip}`;
+    const now = Date.now();
+    const entry = failedLogins.get(lockKey);
+    if (entry && entry.count >= 5 && now - entry.first < 15 * 60 * 1000) {
+      return res.status(429).json({ error: 'Too many failed login attempts. Try again in 15 minutes.' });
+    }
+
     type UserRow = {
       id: number;
       username: string;
@@ -520,10 +532,15 @@ export function createAuthRouter(db: ServerDatabase): Router {
     });
 
     if (!result.ok) {
+      const e = failedLogins.get(lockKey);
+      if (e && now - e.first < 15 * 60 * 1000) e.count += 1;
+      else failedLogins.set(lockKey, { count: 1, first: now });
       const body: Record<string, unknown> = { error: result.error };
       if ((result as any).twoFactorRequired) body.twoFactorRequired = true;
       return res.status(result.status).json(body);
     }
+
+    failedLogins.delete(lockKey);
 
     return res.json({
       authenticated: true,

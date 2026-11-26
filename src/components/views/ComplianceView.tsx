@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { complianceApi, ComplianceCustomerStatement, ComplianceVendor1099Row } from '../../services/complianceApi';
+import { commercialApi, ApiCustomer } from '../../services/commercialApi';
 import { Loader2, FileText, Printer, AlertTriangle } from 'lucide-react';
 
 /**
@@ -10,19 +11,32 @@ import { Loader2, FileText, Printer, AlertTriangle } from 'lucide-react';
  * Read-only working papers; nothing here mutates the ledger.
  */
 export const ComplianceView: React.FC = () => {
-  const { companyProfile, customers, triggerShortcutNotice } = useAccounting();
+  const { companyProfile, triggerShortcutNotice, openPrimePreview } = useAccounting();
   const currency = companyProfile.currency || 'K';
 
+  const [apiCustomers, setApiCustomers] = useState<ApiCustomer[]>([]);
   const [statementLoading, setStatementLoading] = useState(false);
   const [vendor1099Loading, setVendor1099Loading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [custId, setCustId] = useState(() => (customers[0] ? String(customers[0].id) : ''));
+  const [custId, setCustId] = useState('');
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [year, setYear] = useState(() => new Date().getFullYear());
 
-  const customer = useMemo(() => customers.find(c => String(c.id) === custId), [customers, custId]);
+  const customer = useMemo(() => apiCustomers.find(c => String(c.id) === custId), [apiCustomers, custId]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await commercialApi.listCustomers();
+        setApiCustomers(list);
+        setCustId(prev => prev || (list[0] ? String(list[0].id) : ''));
+      } catch {
+        // Non-fatal: statement simply has no customers to choose.
+      }
+    })();
+  }, []);
 
   const loadStatement = useCallback(async () => {
     if (!custId || !customer) return;
@@ -62,7 +76,41 @@ export const ComplianceView: React.FC = () => {
 
   useEffect(() => { loadVendor1099(); }, [loadVendor1099]);
 
-  const handlePrintStatement = () => window.print();
+  const handlePrintStatement = () => {
+    if (!detail) {
+      triggerShortcutNotice('Load a customer statement first', 'warning');
+      return;
+    }
+    openPrimePreview(
+      'ACCOUNT_STATEMENT',
+      {
+        number: `STMT-${detail.customerId}`,
+        statementNumber: `STMT-${detail.customerId}`,
+        date: detail.endDate,
+        clientName: detail.customerName,
+        customerName: detail.customerName,
+        address: companyProfile.address || '',
+        phone: companyProfile.phone || '',
+        openingBalance: Number(detail.openingBalance) || 0,
+        closingBalance: Number(detail.closingBalance) || 0,
+        finalBalance: Number(detail.closingBalance) || 0,
+        startDate: (detail as any).periodStart || (detail as any).startDate || startDate,
+        endDate: (detail as any).periodEnd || (detail as any).endDate || endDate,
+        totalDebit: Number(detail.totalInvoiced) || 0,
+        totalCredit: (Number(detail.totalPaid) || 0) + (Number(detail.totalCredits) || 0),
+        currency: currency,
+        transactions: detail.lines.map(l => ({
+          date: l.date,
+          reference: l.reference,
+          description: l.description || l.type,
+          debit: Number(l.debit) || 0,
+          credit: Number(l.credit) || 0,
+          balance: Number(l.runningBalance) || 0,
+        })),
+      },
+      `Statement — ${detail.customerName}`
+    );
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -72,7 +120,7 @@ export const ComplianceView: React.FC = () => {
           <p className="text-xs text-slate-500 mt-0.5">Customer statements (AR) and vendor 1099-style disbursement summaries.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => window.print()} className="btn btn-secondary text-xs">
+          <button onClick={handlePrintStatement} className="btn btn-secondary text-xs">
             <Printer className="w-4 h-4" /> Print
           </button>
         </div>
@@ -94,7 +142,7 @@ export const ComplianceView: React.FC = () => {
             <label className="space-y-1">
               <span className="font-semibold text-slate-600 dark:text-slate-300">Customer</span>
               <select value={custId} onChange={e => setCustId(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5">
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {apiCustomers.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name}</option>)}
               </select>
             </label>
             <label className="space-y-1">

@@ -22,7 +22,7 @@ interface CustomerStatementModalProps {
 }
 
 export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (props) => {
-  const { isStatementOpen, setIsStatementOpen, customers, invoices, companyProfile, setCurrentView, triggerShortcutNotice } = useAccounting();
+  const { isStatementOpen, setIsStatementOpen, customers, invoices, companyProfile, setCurrentView, triggerShortcutNotice, openPrimePreview } = useAccounting();
   const currency = companyProfile.currency || 'K';
   const currencySymbol = getCurrencySymbol(currency);
   const isOpen = props.isOpen !== undefined ? props.isOpen : isStatementOpen;
@@ -92,7 +92,39 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
+              onClick={() => {
+                const totalDebit = customerInvoices.reduce((s, i) => s + (i.total || 0), 0);
+                const totalCredit = customerInvoices.reduce((s, i) => s + (i.amountPaid || 0), 0);
+                openPrimePreview(
+                  'ACCOUNT_STATEMENT',
+                  {
+                    number: `STMT-${customer?.id || '0'}`,
+                    statementNumber: `STMT-${customer?.id || '0'}`,
+                    date: statementDate,
+                    clientName: customer?.companyName || '',
+                    customerName: customer?.companyName || '',
+                    address: customer?.billingAddress || companyProfile.address || '',
+                    phone: customer?.phone || companyProfile.phone || '',
+                    openingBalance: 0,
+                    closingBalance: totalBalance,
+                    finalBalance: totalBalance,
+                    startDate: (customerInvoices.map(i => i.date).filter(Boolean).sort()[0]) || statementDate,
+                    endDate: statementDate,
+                    totalDebit,
+                    totalCredit,
+                    currency: currency,
+                    transactions: customerInvoices.map(inv => ({
+                      date: inv.date,
+                      reference: inv.invoiceNumber,
+                      description: inv.notes || 'Invoice',
+                      debit: inv.total || 0,
+                      credit: inv.amountPaid || 0,
+                      balance: inv.balanceDue || 0,
+                    })),
+                  },
+                  `Statement — ${customer?.companyName || ''}`
+                );
+              }}
               className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 text-white font-semibold text-xs shadow-xs"
             >
               <Printer className="w-3.5 h-3.5" />

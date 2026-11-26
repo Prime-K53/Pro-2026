@@ -27,13 +27,23 @@ export async function writeAuditLog(db: SqlExecutor, entry: AuditEntryInput): Pr
     changedFields: entry.changedFields ?? [],
     ts: new Date().toISOString(),
   });
-  const sha256Hash = crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
+
+  // Chain to the previous row (per company) so tampering is detectable.
+  const prevRes = await db.query<{ sha256_hash: string }>(
+    `SELECT sha256_hash FROM audit_log WHERE company_id = $1 ORDER BY id DESC LIMIT 1`,
+    [entry.companyId]
+  );
+  const prevHash = prevRes.rows[0]?.sha256_hash || null;
+  const sha256Hash = crypto
+    .createHash('sha256')
+    .update(`${prevHash || ''}${payload}`, 'utf8')
+    .digest('hex');
 
   await db.query(
     `INSERT INTO audit_log (
        company_id, actor_user_id, actor_username, action, table_name, record_id,
-       old_values, new_values, changed_fields, sha256_hash, source
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::text[], $10, $11)`,
+       old_values, new_values, changed_fields, sha256_hash, prev_hash, source
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::text[], $10, $11, $12)`,
     [
       entry.companyId,
       entry.actorUserId ?? null,
@@ -45,6 +55,7 @@ export async function writeAuditLog(db: SqlExecutor, entry: AuditEntryInput): Pr
       entry.newValues ? JSON.stringify(entry.newValues) : null,
       entry.changedFields ?? [],
       sha256Hash,
+      prevHash,
       entry.source ?? 'api',
     ]
   );

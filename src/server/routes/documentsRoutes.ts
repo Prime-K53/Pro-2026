@@ -69,6 +69,8 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
           search: req.query.search ? String(req.query.search) : undefined,
           includeCosts,
           canReadBills,
+          limit: req.query.limit ? Number(req.query.limit) : undefined,
+          offset: req.query.offset ? Number(req.query.offset) : undefined,
         })
       );
       return res.json({ companyId: auth.companyId, ...data });
@@ -132,26 +134,44 @@ export function createDocumentsRouter(db: ServerDatabase): Router {
             attachmentsDir: db.config.attachmentsDir,
           })
         );
-        const company = preview.companyMeta || {};
+        const company = preview.company || {};
         const esc = (v: unknown) =>
           String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+        const total = preview.totals?.total;
         const rows: Array<[string, unknown]> = [
           ['Document', kind.replace(/_/g, ' ')],
-          ['Number', preview.invoiceNumber || preview.quoteNumber || preview.contractNumber || preview.jobNumber || preview.statementNumber],
-          ['Date', preview.invoiceDate || preview.quoteDate || preview.contractDate || preview.jobDate],
+          ['Number', preview.documentNumber],
+          ['Date', preview.documentDate],
           ['Status', preview.status],
-          ['Customer', preview.customerName],
-          ['Total', preview.total != null ? `${company.currency || ''}${preview.total}` : undefined],
+          ['Customer', preview.counterparty?.name],
+          ['Total', total != null ? `${company.currency || preview.currencyCode || ''}${total}` : undefined],
         ].filter(([, v]) => v !== undefined && v !== null && v !== '') as Array<[string, unknown]>;
 
         let qrSection = '';
         const wantQr = String(req.query.qr || '') === '1';
         if (wantQr && hasPermission(auth.role, 'documents:qr:manage')) {
           try {
+            // Derive a stable content hash + version from the preview so the QR
+            // records tamper-evidence instead of always version 1 / null hash.
+            const crypto = await import('node:crypto');
+            const contentHash = crypto
+              .createHash('sha256')
+              .update(
+                JSON.stringify({
+                  number: preview.documentNumber,
+                  status: preview.status,
+                  total: preview.totals?.total ?? null,
+                  date: preview.documentDate,
+                })
+              )
+              .digest('hex');
+            const version = Array.isArray(preview.attachments) && preview.attachments.length > 0
+              ? preview.attachments.length
+              : 1;
             const qr = await db.withCompanyDb(auth.companyId, tx =>
               documentQrService.generateQrToken(tx, auth.companyId, kind, id, {
-                version: (preview as any).version,
-                contentHash: (preview as any).contentHash,
+                version,
+                contentHash,
                 baseUrl: `${req.protocol}://${req.get('host') || ''}`,
               })
             );

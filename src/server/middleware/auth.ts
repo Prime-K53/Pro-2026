@@ -35,9 +35,13 @@ declare global {
 }
 
 export function getClientIp(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) {
-    return fwd.split(',')[0].trim();
+  // Only trust X-Forwarded-For when explicitly behind a proxy (TRUST_PROXY).
+  // Otherwise a client could spoof its IP to evade per-IP rate limiting.
+  if (process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1') {
+    const fwd = req.headers['x-forwarded-for'];
+    if (typeof fwd === 'string' && fwd.length > 0) {
+      return fwd.split(',')[0].trim();
+    }
   }
   return req.socket?.remoteAddress || '127.0.0.1';
 }

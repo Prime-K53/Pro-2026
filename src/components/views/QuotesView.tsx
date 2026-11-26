@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { quoteApi, ApiQuote, ApiQuoteDetail } from '../../services/quoteApi';
+import { commercialApi, ApiCustomer } from '../../services/commercialApi';
 import { Loader2, Plus, FileText, X, AlertTriangle } from 'lucide-react';
 
 type LineDraft = { description: string; quantity: string; rate: string };
@@ -20,16 +21,17 @@ const STATUS_TONE: Record<string, string> = {
  * is an immutable version), and move it through sent -> accepted -> converted.
  */
 export const QuotesView: React.FC = () => {
-  const { customers, companyProfile, triggerShortcutNotice } = useAccounting();
+  const { companyProfile, triggerShortcutNotice, openPrimePreview } = useAccounting();
   const currency = companyProfile.currency || 'K';
 
+  const [apiCustomers, setApiCustomers] = useState<ApiCustomer[]>([]);
   const [quotes, setQuotes] = useState<ApiQuote[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
-  const [customerId, setCustomerId] = useState(() => (customers[0] ? String(customers[0].id) : ''));
+  const [customerId, setCustomerId] = useState('');
   const [title, setTitle] = useState('');
   const [validUntil, setValidUntil] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([{ description: '', quantity: '1', rate: '0' }]);
@@ -37,6 +39,9 @@ export const QuotesView: React.FC = () => {
   const [detail, setDetail] = useState<ApiQuoteDetail | null>(null);
   const [newVersionLines, setNewVersionLines] = useState<LineDraft[]>([]);
   const [showVersionForm, setShowVersionForm] = useState(false);
+  const [search, setSearch] = useState('');
+  const [taxRate, setTaxRate] = useState('0');
+  const [notes, setNotes] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,6 +56,18 @@ export const QuotesView: React.FC = () => {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await commercialApi.listCustomers();
+        setApiCustomers(list);
+        setCustomerId(prev => prev || (list[0] ? String(list[0].id) : ''));
+      } catch {
+        // Non-fatal: the create form simply has no customers to choose.
+      }
+    })();
+  }, []);
 
   const openQuote = async (id: number) => {
     setError(null);
@@ -72,11 +89,15 @@ export const QuotesView: React.FC = () => {
         customerId: Number(customerId),
         title,
         validUntil: validUntil || null,
+        notes: notes || null,
+        taxRate: Number(taxRate) || 0,
         lines: lines.map(l => ({ description: l.description, quantity: l.quantity, rate: l.rate })),
       });
       triggerShortcutNotice(`Quote ${created.quote.quote_number} created`);
       setTitle('');
       setValidUntil('');
+      setNotes('');
+      setTaxRate('0');
       setLines([{ description: '', quantity: '1', rate: '0' }]);
       setShowForm(false);
       setDetail(created);
@@ -125,6 +146,62 @@ export const QuotesView: React.FC = () => {
     }
   };
 
+  const handleConvert = async () => {
+    if (!detail) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await quoteApi.convert(detail.quote.id);
+      triggerShortcutNotice(`Quote ${detail.quote.quote_number} converted to invoice`);
+      const refreshed = await quoteApi.get(detail.quote.id);
+      setDetail(refreshed);
+      await load();
+      if (res?.invoice?.id) {
+        openPrimePreview('INVOICE', { ...(res.invoice as any), documentType: 'INVOICE' }, `Invoice ${(res.invoice as any)?.invoiceNumber || ''}`);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to convert quote');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePreviewPdf = () => {
+    if (!detail) return;
+    const q = detail.quote;
+    const v = detail.versions.find(x => x.version_no === q.current_version) || detail.versions[detail.versions.length - 1];
+    const items = (v?.lines || []).map(l => ({
+      desc: l.description,
+      qty: Number(l.quantity) || 1,
+      price: Number(l.rate) || 0,
+      total: Number(l.amount) || 0,
+    }));
+    const subtotal = items.reduce((s, i) => s + i.total, 0);
+    const taxAmount = Number(v?.tax_amount) || 0;
+    openPrimePreview(
+      'QUOTATION',
+      {
+        number: q.quote_number,
+        quotationNumber: q.quote_number,
+        date: (q.created_at || '').slice(0, 10),
+        validUntil: q.valid_until,
+        clientName: q.customer_name || '',
+        customerName: q.customer_name || '',
+        address: companyProfile.address || '',
+        phone: companyProfile.phone || '',
+        title: q.title,
+        notes: v?.notes || q.notes || '',
+        currency,
+        items,
+        subtotal,
+        taxAmount,
+        totalAmount: Number(q.total) || subtotal + taxAmount,
+        status: q.status,
+      },
+      `Quote ${q.quote_number}`
+    );
+  };
+
   const updateLine = (idx: number, patch: Partial<LineDraft>) =>
     setLines(prev => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   const updateVersionLine = (idx: number, patch: Partial<LineDraft>) =>
@@ -132,6 +209,17 @@ export const QuotesView: React.FC = () => {
 
   const total = (ls: LineDraft[]) =>
     ls.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0);
+
+  const filteredQuotes = quotes.filter(q => {
+    const term = search.trim().toLowerCase();
+    if (!term) return true;
+    return (
+      q.quote_number.toLowerCase().includes(term) ||
+      (q.title || '').toLowerCase().includes(term) ||
+      (q.customer_name || '').toLowerCase().includes(term) ||
+      q.status.toLowerCase().includes(term)
+    );
+  });
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -145,6 +233,13 @@ export const QuotesView: React.FC = () => {
         </button>
       </div>
 
+      <input
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Search by number, title or customer…"
+        className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-3 py-1.5 text-xs"
+      />
+
       {error && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs">
           <AlertTriangle className="w-4 h-4 shrink-0" /><span>{error}</span>
@@ -157,7 +252,7 @@ export const QuotesView: React.FC = () => {
             <label className="space-y-1">
               <span className="font-semibold text-slate-600 dark:text-slate-300">Customer</span>
               <select value={customerId} onChange={e => setCustomerId(e.target.value)} required className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5">
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {apiCustomers.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name}</option>)}
               </select>
             </label>
             <label className="space-y-1">
@@ -167,6 +262,16 @@ export const QuotesView: React.FC = () => {
             <label className="space-y-1">
               <span className="font-semibold text-slate-600 dark:text-slate-300">Valid until</span>
               <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5" />
+            </label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="space-y-1">
+              <span className="font-semibold text-slate-600 dark:text-slate-300">Tax Rate (%)</span>
+              <input type="number" min="0" max="100" step="0.01" value={taxRate} onChange={e => setTaxRate(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5" />
+            </label>
+            <label className="space-y-1 sm:col-span-2">
+              <span className="font-semibold text-slate-600 dark:text-slate-300">Notes</span>
+              <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional notes shown on the quote" className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5" />
             </label>
           </div>
           <LineEditor lines={lines} onChange={updateLine} onAdd={() => setLines(p => [...p, { description: '', quantity: '1', rate: '0' }])} onRemove={i => setLines(p => p.filter((_, j) => j !== i))} />
@@ -200,7 +305,7 @@ export const QuotesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {quotes.map(q => (
+              {filteredQuotes.map(q => (
                 <tr key={q.id} onClick={() => openQuote(q.id)} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40">
                   <td className="px-4 py-2 font-mono font-bold">{q.quote_number}</td>
                   <td className="px-4 py-2">{q.title}</td>
@@ -273,9 +378,12 @@ export const QuotesView: React.FC = () => {
 
               {/* Status actions */}
               <div className="flex flex-wrap gap-2 border-t border-slate-200 dark:border-slate-800 pt-3">
+                <button onClick={handlePreviewPdf} disabled={busy} className="btn btn-secondary">
+                  <FileText className="w-4 h-4" /> Preview / PDF
+                </button>
                 {detail.quote.status === 'draft' && <button onClick={() => handleStatus('sent')} disabled={busy} className="btn btn-secondary">Mark Sent</button>}
                 {detail.quote.status === 'sent' && <><button onClick={() => handleStatus('accepted')} disabled={busy} className="btn btn-primary">Accept</button><button onClick={() => handleStatus('declined')} disabled={busy} className="btn btn-danger">Decline</button></>}
-                {detail.quote.status === 'accepted' && <button onClick={() => handleStatus('converted')} disabled={busy} className="btn btn-primary">Mark Converted</button>}
+                {detail.quote.status === 'accepted' && <button onClick={handleConvert} disabled={busy} className="btn btn-primary">Convert to Invoice</button>}
               </div>
             </div>
           </div>

@@ -12,7 +12,8 @@ async function startServer() {
   const config = loadServerConfig();
   const db = await createServerDatabase(config, {
     inMemory: false,
-    seedDemo: true,
+    // Demo/seed data must never be created in production.
+    seedDemo: !config.isProduction,
   });
 
   const app = createApiExpressApp(db);
@@ -52,6 +53,16 @@ async function startServer() {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // Surface fatal runtime errors instead of dying silently.
+  process.on('unhandledRejection', reason => {
+    console.error('[Fatal] Unhandled promise rejection:', reason);
+    process.exit(1);
+  });
+  process.on('uncaughtException', err => {
+    console.error('[Fatal] Uncaught exception:', err);
+    process.exit(1);
+  });
 }
 
 startServer().catch(err => {

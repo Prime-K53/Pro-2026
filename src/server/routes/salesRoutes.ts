@@ -615,11 +615,18 @@ export function createSalesRouter(db: ServerDatabase): Router {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid payment id' });
+      // Server-side mandatory reason (never rely on the frontend). Reject
+      // missing/null/empty/whitespace-only reasons before any financial mutation.
+      const rawReason = req.body?.reason;
+      const reason = typeof rawReason === 'string' ? rawReason.trim() : '';
+      if (!reason) {
+        return res.status(400).json({ error: 'A non-empty reversal reason is required' });
+      }
       const key = (req.headers['idempotency-key'] as string | undefined) || req.body?.idempotencyKey || null;
       const r = await runIdempotent(
         req.auth!.companyId, 'payment_void', key,
-        { id, reason: req.body?.reason ?? null }, toActor(req).userId,
-        tx => voidCustomerPayment(tx, req.auth!.companyId, toActor(req), id, req.body?.reason)
+        { id, reason }, toActor(req).userId,
+        tx => voidCustomerPayment(tx, req.auth!.companyId, toActor(req), id, reason)
       );
       return res.status(r.status).json(r.body);
     } catch (err) {

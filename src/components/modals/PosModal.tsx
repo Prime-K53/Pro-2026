@@ -480,6 +480,9 @@ export const PosModal: React.FC = () => {
   };
 
   const handlePrintOrderReceipt = (order: ApiPosCatalog['recentOrders'][number]) => {
+    const tenderSummary = order.tenders
+      .map(t => `${t.tenderMethod} ${formatCurrency(t.amount, currency)}`)
+      .join(', ');
     openDocumentPreview({
       kind: 'sales_receipt',
       id: order.invoiceId,
@@ -507,9 +510,7 @@ export const PosModal: React.FC = () => {
       },
       lines: [
         {
-          description: `POS Counter Sale (${order.invoiceNumber}) — Tenders: ${order.tenders
-            .map(t => `${t.tenderMethod} ${formatCurrency(t.amount, currency)}`)
-            .join(', ')}${order.totalDiscount > 0 ? ` · Discounts: -${formatCurrency(order.totalDiscount, currency)}` : ''}`,
+          description: `POS Counter Sale (${order.invoiceNumber})${tenderSummary ? ` — Tenders: ${tenderSummary}` : ''}${order.totalDiscount > 0 ? ` · Discounts: -${formatCurrency(order.totalDiscount, currency)}` : ''}`,
           quantity: 1,
           rate: order.netSubtotal,
           amount: order.netSubtotal,
@@ -526,6 +527,22 @@ export const PosModal: React.FC = () => {
       },
       journalEntryNumber: order.journalTxnId ? `JE-${order.journalTxnId}` : null,
       notes: order.notes || undefined,
+      posMeta: {
+        paymentMethod: order.tenderMode === 'split'
+          ? 'Split Tender'
+          : (order.tenders[0]?.tenderMethod || order.tenderMode || 'Cash'),
+        amountTendered: order.amountTendered ?? order.total,
+        changeGiven: order.changeDue ?? 0,
+        discount: order.totalDiscount ?? 0,
+        items: [
+          {
+            desc: `POS Counter Sale (${order.invoiceNumber})`,
+            qty: 1,
+            price: order.netSubtotal,
+            total: order.netSubtotal,
+          },
+        ],
+      },
     });
   };
 

@@ -106,10 +106,5 @@ export function createDocumentQrRoutes(db: ServerDatabase): Router {
     }
   });
 
-  // Simple test route
-  router.get('/test', (req, res) => {
-    res.json({ ok: true });
-  });
-
   return router;
 }

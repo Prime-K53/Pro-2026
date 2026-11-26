@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { ACCOUNTING_UPDATED_EVENT, accountingApi, ApiAccount } from '../../services/accountingApi';
@@ -9,7 +9,22 @@ import { Pagination, pageSlice } from '../common/Pagination';
 import { formatCurrency } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
-import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import type {
+  ActionEligibilityContext,
+  AdvancedActionDefinition,
+  ResolvedAdvancedAction,
+} from '../../actions/types';
+import {
+  TransactionDetailDrawer,
+  TransactionActionMenu,
+  TransactionContextMenu,
+  TransactionSelectionProvider,
+  useTransactionSelection,
+  TransactionAuditTimeline,
+  useTransactionAudit,
+  createTransactionRef,
+  type DetailSection,
+} from '../../transaction-interaction';
 import { ThreeWayMatchInspectionModal } from '../modals/ThreeWayMatchInspectionModal';
 import { BatchPaymentRunModal } from '../modals/BatchPaymentRunModal';
 import {
@@ -33,6 +48,10 @@ import {
   CheckCircle2,
   FileText,
   Trash2,
+  Download,
+  Eye,
+  BookOpen,
+  Layers,
 } from 'lucide-react';
 
 type PurchasingTab =
@@ -43,11 +62,196 @@ type PurchasingTab =
   | 'payments'
   | 'vendorCredits';
 
+interface BillsTableProps<TRow extends { id: number }> {
+  rows: TRow[];
+  colSpan: number;
+  emptyMessage: string;
+  renderHeader: () => React.ReactNode;
+  renderCells: (row: TRow) => React.ReactNode;
+  onRowClick: (row: TRow) => void;
+  onRowContextMenu: (row: TRow, point: { x: number; y: number }) => void;
+  selectedId: number | null;
+  footer?: React.ReactNode;
+  notify: (message: string, tone?: 'success' | 'error' | 'warning' | 'info') => void;
+  exportName: string;
+  exportRows: (rows: TRow[]) => any[][];
+  exportHeader: string[];
+}
+
+function BillsTableInner<TRow extends { id: number }>({
+  rows,
+  colSpan,
+  emptyMessage,
+  renderHeader,
+  renderCells,
+  onRowClick,
+  onRowContextMenu,
+  selectedId,
+  footer,
+  notify,
+  exportName,
+  exportRows,
+  exportHeader,
+}: BillsTableProps<TRow>) {
+  const selection = useTransactionSelection();
+  useEffect(() => {
+    selection.setOrderedIds(rows.map((r) => r.id));
+  }, [rows, selection]);
+  const selectedRows = rows.filter((r) => selection.isSelected(r.id));
+  const allSelected = rows.length > 0 && rows.every((r) => selection.isSelected(r.id));
+
+  const exportSelected = () => {
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = exportRows(selectedRows).map((r) => r.map(cell).join(','));
+    const blob = new Blob([[exportHeader.join(','), ...lines].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportName;
+    a.click();
+    URL.revokeObjectURL(url);
+    notify(`Exported ${selectedRows.length} record(s)`);
+  };
+
+  return (
+    <>
+      {selectedRows.length > 0 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={exportSelected}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <Download className="w-3.5 h-3.5" /> Export selected ({selectedRows.length})
+          </button>
+        </div>
+      )}
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="px-3 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all rows"
+                    checked={allSelected}
+                    onChange={() => (allSelected ? selection.clear() : selection.selectAll(rows.map((r) => r.id)))}
+                  />
+                </th>
+                {renderHeader()}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={colSpan + 1} className="px-4 py-10 text-center text-slate-500 font-sans">
+                    {emptyMessage}
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => {
+                  const isSelected = selection.isSelected(row.id);
+                  return (
+                    <tr
+                      key={row.id}
+                      onClick={() => onRowClick(row)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        onRowContextMenu(row, { x: e.clientX, y: e.clientY });
+                      }}
+                      className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-850/50 ${
+                        isSelected ? 'bg-blue-50/70 dark:bg-blue-900/20' : selectedId === row.id ? 'bg-blue-50/70 dark:bg-blue-900/20 ring-1 ring-inset ring-blue-200 dark:ring-blue-800' : ''
+                      }`}
+                    >
+                      <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select row ${row.id}`}
+                          checked={isSelected}
+                          onChange={(e) => selection.toggle(row.id, { shiftKey: (e.nativeEvent as MouseEvent).shiftKey })}
+                        />
+                      </td>
+                      {renderCells(row)}
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+        {footer}
+      </div>
+    </>
+  );
+}
+
+export const BillsTable: React.FC<BillsTableProps<any>> = (props) => (
+  <TransactionSelectionProvider>
+    <BillsTableInner {...props} />
+  </TransactionSelectionProvider>
+);
+
+function buildBillSections(bill: ApiBill, currency: string): DetailSection[] {
+  return [
+    {
+      key: 'bill',
+      title: 'Bill',
+      fields: [
+        { label: 'Bill #', value: bill.billNumber, mono: true },
+        { label: 'Vendor', value: bill.vendorName },
+        { label: 'Bill date', value: bill.billDate, mono: true },
+        { label: 'Due date', value: bill.dueDate, mono: true },
+        { label: 'Status', value: bill.status },
+        { label: 'Match', value: bill.matchStatus || '—' },
+        { label: 'Payment hold', value: bill.paymentHold ? 'Yes' : 'No' },
+        { label: 'Currency', value: bill.currencyCode || currency },
+      ],
+    },
+    {
+      key: 'amounts',
+      title: 'Amounts',
+      fields: [
+        { label: 'Total', value: formatCurrency(bill.total, currency), mono: true },
+        { label: 'Paid', value: formatCurrency(bill.amountPaid, currency), mono: true, tone: 'emerald' },
+        { label: 'Balance due', value: formatCurrency(bill.balanceDue, currency), mono: true, tone: 'rose' },
+      ],
+    },
+  ];
+}
+
+function buildBillPaymentSections(bp: any, currency: string): DetailSection[] {
+  return [
+    {
+      key: 'bp',
+      title: 'Supplier payment',
+      fields: [
+        { label: 'Payment #', value: bp.paymentNumber, mono: true },
+        { label: 'Vendor', value: bp.vendorName },
+        { label: 'Date', value: bp.paymentDate, mono: true },
+        { label: 'Check / ref', value: bp.checkNumber || 'EFT', mono: true },
+        { label: 'Bank account', value: bp.bankAccountName },
+        { label: 'Amount', value: formatCurrency(bp.amount, currency), mono: true, tone: 'emerald' },
+        { label: 'Status', value: bp.isVoided ? 'Voided' : 'Posted' },
+      ],
+    },
+  ];
+}
+
 export const BillsView: React.FC = () => {
   const { companyProfile, triggerShortcutNotice } = useAccounting();
   const { activeCompany, hasPermission, authenticated, permissions } = useAuth();
   const currency = companyProfile.currency || 'K';
   const canWrite = hasPermission('bills:write');
+  const [detailBill, setDetailBill] = useState<ApiBill | null>(null);
+  const [detailBillPayment, setDetailBillPayment] = useState<any | null>(null);
+  const [billContextMenu, setBillContextMenu] = useState<{
+    point: { x: number; y: number };
+    kind: 'bill' | 'billPayment';
+    record: any;
+    resolved: ResolvedAdvancedAction<any>[];
+    ctx: ActionEligibilityContext<any>;
+  } | null>(null);
   const { options: fxOptions, baseCurrency, rateFor: fxRateFor } = useFxRates();
 
   const [activeTab, setActiveTab] = useState<PurchasingTab>('bills');
@@ -364,13 +568,121 @@ export const BillsView: React.FC = () => {
     ];
   };
 
+  const buildBillPaymentContext = (bp: any): ActionEligibilityContext<any> => ({
+    authenticated,
+    permissions,
+    role: activeCompany?.role || null,
+    companyId: activeCompany?.id ?? null,
+    moduleKey: 'bills',
+    entityType: 'bill_payment',
+    record: bp,
+    recordStatus: bp.isVoided ? 'voided' : 'posted',
+  });
+
+  const buildBillPaymentActions = (bp: any): AdvancedActionDefinition<any>[] => {
+    const defs: AdvancedActionDefinition<any>[] = [
+      {
+        id: 'bp.view',
+        label: 'View Payment',
+        icon: <Eye className="w-3.5 h-3.5" />,
+        group: 'view',
+        groupLabel: 'Payment',
+        requiredPermission: 'bills:read',
+        execute: async () => setDetailBillPayment(bp),
+      },
+      {
+        id: 'bp.copy',
+        label: 'Copy Payment #',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        group: 'admin',
+        groupLabel: 'Other',
+        requiredPermission: 'bills:read',
+        execute: async () => {
+          await navigator.clipboard?.writeText(bp.paymentNumber);
+          triggerShortcutNotice(`Copied ${bp.paymentNumber}`);
+        },
+      },
+    ];
+    if (canWrite && !bp.isVoided) {
+      defs.push({
+        id: 'bp.void',
+        label: 'Void Payment (Reverse GL)',
+        icon: <Ban className="w-3.5 h-3.5 text-rose-600" />,
+        group: 'danger',
+        groupLabel: 'Sensitive operations',
+        destructive: true,
+        risk: 'destructive',
+        requiredPermission: 'bills:write',
+        confirmation: {
+          title: `Void ${bp.paymentNumber}`,
+          message: 'Void this supplier payment and reverse its GL impact?',
+          confirmLabel: 'Void',
+          destructive: true,
+          requireReason: true,
+          reasonLabel: 'Void reason',
+        },
+        execute: async (_ctx, helpers) => {
+          try {
+            await commercialApi.voidBillPayment(bp.id, helpers.reason || 'Voided by user');
+            triggerShortcutNotice(`Voided ${bp.paymentNumber} & reversed GL`);
+            await loadData();
+          } catch (err: any) {
+            setErrorMsg(err?.message);
+            throw err;
+          }
+        },
+      });
+    }
+    return defs;
+  };
+
+  const renderBillPaymentActions = (bp: any) => {
+    const defs = buildBillPaymentActions(bp);
+    const ctx = buildBillPaymentContext(bp);
+    const resolved = resolveActions(defs, ctx);
+    if (resolved.length === 0) return null;
+    return (
+      <TransactionActionMenu<any>
+        label={`Actions for ${bp.paymentNumber}`}
+        actions={resolved}
+        executionContext={ctx}
+        idempotencyRecordKey={bp.id}
+        notify={(m, t) => triggerShortcutNotice(m, t)}
+        onExecuteAction={async (action) => {
+          const def = action.definition;
+          if (def.confirmation) {
+            const conf = typeof def.confirmation === 'function' ? def.confirmation(ctx, def) : def.confirmation;
+            if (conf) {
+              const msg = `${conf.message}${conf.impactSummary ? '\n\n' + conf.impactSummary : ''}`;
+              if (conf.destructive || conf.requireReason) {
+                const input = window.prompt(msg, '');
+                if (input === null) return;
+                const reason = (input || '').trim();
+                if (conf.requireReason && !reason) throw new Error('A reason is required to continue');
+                if (typeof def.execute === 'function') {
+                  await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
+                }
+                return;
+              }
+              const ok = window.confirm(msg);
+              if (!ok) return;
+            }
+          }
+          if (typeof def.execute === 'function') {
+            await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t) });
+          }
+        }}
+      />
+    );
+  };
+
   const renderBillActions = (bill: ApiBill) => {
     const defs = buildBillActionDefinitions(bill);
     const ctx = buildBillActionContext(bill, null);
     const resolved = resolveActions(defs, ctx);
     if (resolved.length === 0) return null;
     return (
-      <AdvancedActionsMenu<ApiBill>
+      <TransactionActionMenu<ApiBill>
         label={`Actions for ${bill.billNumber}`}
         actions={resolved}
         executionContext={ctx}
@@ -782,58 +1094,72 @@ export const BillsView: React.FC = () => {
                   </button>
                 ))}
               </div>
-              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
-                      <tr>
-                        <th className="px-4 py-3">BILL #</th>
-                        <th className="px-4 py-3">VENDOR</th>
-                        <th className="px-4 py-3">BILL DATE</th>
-                        <th className="px-4 py-3">DUE DATE</th>
-                        <th className="px-4 py-3 text-right">TOTAL</th>
-                        <th className="px-4 py-3 text-right">PAID</th>
-                        <th className="px-4 py-3 text-right">BALANCE DUE</th>
-                        <th className="px-4 py-3 text-center">STATUS</th>
-                        <th className="px-4 py-3 text-right">ACTIONS</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-                      {pagedBills.map(bill => (
-                        <tr key={bill.id} className={`hover:bg-slate-50 dark:hover:bg-slate-850/50 ${bill.status === 'voided' ? 'opacity-60' : ''}`}>
-                          <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
-                            {bill.billNumber}
-                            {bill.currencyCode !== baseCurrency && (
-                              <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{bill.currencyCode}</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 font-sans font-semibold">{bill.vendorName}</td>
-                          <td className="px-4 py-3 text-slate-500">{bill.billDate}</td>
-                          <td className="px-4 py-3 text-slate-500">{bill.dueDate}</td>
-                          <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(bill.total, currency)}</td>
-                          <td className="px-4 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(bill.amountPaid, currency)}</td>
-                          <td className="px-4 py-3 text-right font-bold text-rose-600 tabular-nums">{formatCurrency(bill.balanceDue, currency)}</td>
-                          <td className="px-4 py-3 text-center font-sans uppercase text-[10px] font-bold">{bill.status}</td>
-                          <td className="px-4 py-3 text-right font-sans">
-                            {renderBillActions(bill)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <Pagination
-                  page={page}
-                  pageSize={pageSize}
-                  total={filteredBills.length}
-                  onPageChange={setPage}
-                  onPageSizeChange={size => {
-                    setPageSize(size);
-                    setPage(1);
-                  }}
-                  label="bills"
-                />
-              </div>
+              <BillsTable
+                rows={pagedBills}
+                colSpan={9}
+                emptyMessage="No bills match the current filter."
+                selectedId={detailBill?.id ?? null}
+                notify={(m, t) => triggerShortcutNotice(m, t)}
+                exportName="bills-selection.csv"
+                exportHeader={['Bill', 'Vendor', 'Bill Date', 'Due Date', 'Total', 'Paid', 'Balance Due', 'Status']}
+                exportRows={(rows) =>
+                  rows.map((b) => [b.billNumber, b.vendorName, b.billDate, b.dueDate, b.total, b.amountPaid, b.balanceDue, b.status])
+                }
+                onRowClick={(bill) => setDetailBill(bill)}
+                onRowContextMenu={(bill, pt) =>
+                  setBillContextMenu({
+                    point: pt,
+                    kind: 'bill',
+                    record: bill,
+                    resolved: resolveActions(buildBillActionDefinitions(bill), buildBillActionContext(bill, null)),
+                    ctx: buildBillActionContext(bill, null),
+                  })
+                }
+                renderHeader={() => (
+                  <>
+                    <th className="px-4 py-3">BILL #</th>
+                    <th className="px-4 py-3">VENDOR</th>
+                    <th className="px-4 py-3">BILL DATE</th>
+                    <th className="px-4 py-3">DUE DATE</th>
+                    <th className="px-4 py-3 text-right">TOTAL</th>
+                    <th className="px-4 py-3 text-right">PAID</th>
+                    <th className="px-4 py-3 text-right">BALANCE DUE</th>
+                    <th className="px-4 py-3 text-center">STATUS</th>
+                    <th className="px-4 py-3 text-right">ACTIONS</th>
+                  </>
+                )}
+                renderCells={(bill) => (
+                  <>
+                    <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
+                      {bill.billNumber}
+                      {bill.currencyCode !== baseCurrency && (
+                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{bill.currencyCode}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-sans font-semibold">{bill.vendorName}</td>
+                    <td className="px-4 py-3 text-slate-500">{bill.billDate}</td>
+                    <td className="px-4 py-3 text-slate-500">{bill.dueDate}</td>
+                    <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(bill.total, currency)}</td>
+                    <td className="px-4 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(bill.amountPaid, currency)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-rose-600 tabular-nums">{formatCurrency(bill.balanceDue, currency)}</td>
+                    <td className="px-4 py-3 text-center font-sans uppercase text-[10px] font-bold">{bill.status}</td>
+                    <td className="px-4 py-3 text-right font-sans">{renderBillActions(bill)}</td>
+                  </>
+                )}
+                footer={
+                  <Pagination
+                    page={page}
+                    pageSize={pageSize}
+                    total={filteredBills.length}
+                    onPageChange={setPage}
+                    onPageSizeChange={size => {
+                      setPageSize(size);
+                      setPage(1);
+                    }}
+                    label="bills"
+                  />
+                }
+              />
             </div>
           )}
 
@@ -1176,55 +1502,52 @@ export const BillsView: React.FC = () => {
 
           {/* BILL PAYMENTS */}
           {activeTab === 'payments' && (
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase text-[10px] font-bold border-b border-slate-200 dark:border-slate-800">
-                    <tr>
-                      <th className="px-4 py-3">PAYMENT #</th>
-                      <th className="px-4 py-3">VENDOR</th>
-                      <th className="px-4 py-3">DATE</th>
-                      <th className="px-4 py-3">CHECK / REF</th>
-                      <th className="px-4 py-3">BANK ACCOUNT</th>
-                      <th className="px-4 py-3 text-right">AMOUNT</th>
-                      <th className="px-4 py-3 text-center">STATUS</th>
-                      <th className="px-4 py-3 text-right">ACTIONS</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-                    {billPayments.map(bp => (
-                      <tr key={bp.id} className={bp.isVoided ? 'opacity-60' : ''}>
-                        <td className="px-4 py-3 font-bold text-blue-600">{bp.paymentNumber}</td>
-                        <td className="px-4 py-3 font-sans font-semibold">{bp.vendorName}</td>
-                        <td className="px-4 py-3 text-slate-500">{bp.paymentDate}</td>
-                        <td className="px-4 py-3">{bp.checkNumber || 'EFT'}</td>
-                        <td className="px-4 py-3 font-sans">{bp.bankAccountName}</td>
-                        <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(bp.amount, currency)}</td>
-                        <td className="px-4 py-3 text-center font-sans text-[10px] font-bold uppercase">{bp.isVoided ? 'Voided' : 'Posted'}</td>
-                        <td className="px-4 py-3 text-right font-sans">
-                          {canWrite && !bp.isVoided && (
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await commercialApi.voidBillPayment(bp.id, 'Voided by user');
-                                  triggerShortcutNotice(`Voided ${bp.paymentNumber} & reversed GL`);
-                                  await loadData();
-                                } catch (err: any) {
-                                  setErrorMsg(err?.message);
-                                }
-                              }}
-                              className="px-2 py-1 rounded border border-rose-300 text-rose-700 text-[11px] font-semibold"
-                            >
-                              Void
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <BillsTable
+              rows={billPayments}
+              colSpan={8}
+              emptyMessage="No supplier payments recorded yet."
+              selectedId={detailBillPayment?.id ?? null}
+              notify={(m, t) => triggerShortcutNotice(m, t)}
+              exportName="bill-payments-selection.csv"
+              exportHeader={['Payment', 'Vendor', 'Date', 'Check/Ref', 'Bank Account', 'Amount', 'Status']}
+              exportRows={(rows) =>
+                rows.map((bp) => [bp.paymentNumber, bp.vendorName, bp.paymentDate, bp.checkNumber || 'EFT', bp.bankAccountName, bp.amount, bp.isVoided ? 'Voided' : 'Posted'])
+              }
+              onRowClick={(bp) => setDetailBillPayment(bp)}
+              onRowContextMenu={(bp, pt) =>
+                setBillContextMenu({
+                  point: pt,
+                  kind: 'billPayment',
+                  record: bp,
+                  resolved: resolveActions(buildBillPaymentActions(bp), buildBillPaymentContext(bp)),
+                  ctx: buildBillPaymentContext(bp),
+                })
+              }
+              renderHeader={() => (
+                <>
+                  <th className="px-4 py-3">PAYMENT #</th>
+                  <th className="px-4 py-3">VENDOR</th>
+                  <th className="px-4 py-3">DATE</th>
+                  <th className="px-4 py-3">CHECK / REF</th>
+                  <th className="px-4 py-3">BANK ACCOUNT</th>
+                  <th className="px-4 py-3 text-right">AMOUNT</th>
+                  <th className="px-4 py-3 text-center">STATUS</th>
+                  <th className="px-4 py-3 text-right">ACTIONS</th>
+                </>
+              )}
+              renderCells={(bp) => (
+                <>
+                  <td className="px-4 py-3 font-bold text-blue-600">{bp.paymentNumber}</td>
+                  <td className="px-4 py-3 font-sans font-semibold">{bp.vendorName}</td>
+                  <td className="px-4 py-3 text-slate-500">{bp.paymentDate}</td>
+                  <td className="px-4 py-3">{bp.checkNumber || 'EFT'}</td>
+                  <td className="px-4 py-3 font-sans">{bp.bankAccountName}</td>
+                  <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(bp.amount, currency)}</td>
+                  <td className="px-4 py-3 text-center font-sans text-[10px] font-bold uppercase">{bp.isVoided ? 'Voided' : 'Posted'}</td>
+                  <td className="px-4 py-3 text-right font-sans">{renderBillPaymentActions(bp)}</td>
+                </>
+              )}
+            />
           )}
 
           {/* VENDOR CREDITS */}
@@ -1858,6 +2181,93 @@ export const BillsView: React.FC = () => {
           bankAccounts={accounts
             .filter((a: any) => String(a.accountType || a.type || '').toLowerCase() === 'bank')
             .map((a: any) => ({ id: a.id, name: a.name || a.accountName || `Account ${a.id}`, code: a.code || a.accountCode }))}
+        />
+      )}
+      <TransactionDetailDrawer
+        open={Boolean(detailBill)}
+        onClose={() => setDetailBill(null)}
+        title={detailBill ? `Bill ${detailBill.billNumber}` : 'Bill'}
+        number={detailBill?.billDate}
+        typeLabel="Purchase Bill"
+        statusBadge={
+          detailBill ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+              {detailBill.status}
+            </span>
+          ) : null
+        }
+        sections={detailBill ? buildBillSections(detailBill, currency) : []}
+        actions={detailBill ? renderBillActions(detailBill) : null}
+        audit={
+          <p className="text-[11px] text-slate-500">
+            Record-scoped audit requires a backend enhancement (see Phase 3A.1); no client-side filtering of the
+            company-wide log is performed.
+          </p>
+        }
+      />
+
+      <TransactionDetailDrawer
+        open={Boolean(detailBillPayment)}
+        onClose={() => setDetailBillPayment(null)}
+        title={detailBillPayment ? `Payment ${detailBillPayment.paymentNumber}` : 'Supplier Payment'}
+        number={detailBillPayment?.paymentDate}
+        typeLabel="Supplier Payment"
+        statusBadge={
+          detailBillPayment ? (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                detailBillPayment.isVoided
+                  ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                  : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+              }`}
+            >
+              {detailBillPayment.isVoided ? 'voided' : 'posted'}
+            </span>
+          ) : null
+        }
+        sections={detailBillPayment ? buildBillPaymentSections(detailBillPayment, currency) : []}
+        actions={detailBillPayment ? renderBillPaymentActions(detailBillPayment) : null}
+        audit={
+          <p className="text-[11px] text-slate-500">
+            Record-scoped audit requires a backend enhancement (see Phase 3A.1).
+          </p>
+        }
+      />
+
+      {billContextMenu && (
+        <TransactionContextMenu
+          actions={billContextMenu.resolved}
+          point={billContextMenu.point}
+          label="Actions"
+          executionContext={billContextMenu.ctx}
+          idempotencyRecordKey={billContextMenu.record.id}
+          notify={(m, t) => triggerShortcutNotice(m, t)}
+          onClose={() => setBillContextMenu(null)}
+          onExecuteAction={async (action) => {
+            const def = action.definition;
+            const ctx = billContextMenu.ctx;
+            if (def.confirmation) {
+              const conf = typeof def.confirmation === 'function' ? def.confirmation(ctx, def) : def.confirmation;
+              if (conf) {
+                const msg = `${conf.message}${conf.impactSummary ? '\n\n' + conf.impactSummary : ''}`;
+                if (conf.destructive || conf.requireReason) {
+                  const input = window.prompt(msg, '');
+                  if (input === null) return;
+                  const reason = (input || '').trim();
+                  if (conf.requireReason && !reason) throw new Error('A reason is required to continue');
+                  if (typeof def.execute === 'function') {
+                    await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
+                  }
+                  return;
+                }
+                const ok = window.confirm(msg);
+                if (!ok) return;
+              }
+            }
+            if (typeof def.execute === 'function') {
+              await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t) });
+            }
+          }}
         />
       )}
     </div>

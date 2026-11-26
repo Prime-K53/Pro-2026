@@ -857,6 +857,22 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
       return res.status(400).json({ error: 'Attachment content must be between 1 byte and 5MB' });
     }
 
+    // Reject content whose magic bytes do not match the declared type (defends
+    // against content-sniffing / stored-XSS via mislabelled uploads).
+    const declared = contentType.toLowerCase();
+    const isPdf = buffer.length >= 4 && buffer.toString('ascii', 0, 4) === '%PDF';
+    const isPng = buffer.length >= 8 && buffer[0] === 0x89 && buffer.toString('ascii', 1, 4) === 'PNG';
+    const isJpeg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    if (declared === 'application/pdf' && !isPdf) {
+      return res.status(400).json({ error: 'File content is not a valid PDF' });
+    }
+    if (declared === 'image/png' && !isPng) {
+      return res.status(400).json({ error: 'File content is not a valid PNG' });
+    }
+    if ((declared === 'image/jpeg' || declared === 'image/jpg') && !isJpeg) {
+      return res.status(400).json({ error: 'File content is not a valid JPEG' });
+    }
+
     const sha = crypto.createHash('sha256').update(buffer).digest('hex');
     const storageKey = `company_${auth.companyId}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
     const companyDir = path.join(db.config.attachmentsDir, `company_${auth.companyId}`);
@@ -873,10 +889,31 @@ export function createProtectedBusinessRouter(db: ServerDatabase): Router {
       );
       const fileId = Number(fRes.rows[0].id);
 
+      // Versioning: a new upload either starts a fresh version chain (v1) or
+      // supersedes an existing attachment (v = parent + 1, parent no longer
+      // current). This makes listDocumentVersions meaningful.
+      const supersedesId = Number(req.body?.supersedesAttachmentId || 0);
+      let versionNo = 1;
+      let supersedesAttachmentId: number | null = null;
+      if (Number.isInteger(supersedesId) && supersedesId > 0) {
+        const parentRes = await tx.query<{ version_no: number }>(
+          `SELECT version_no FROM attachments WHERE company_id = $1 AND id = $2`,
+          [auth.companyId, supersedesId]
+        );
+        if (parentRes.rows.length > 0) {
+          versionNo = Number(parentRes.rows[0].version_no || 1) + 1;
+          supersedesAttachmentId = supersedesId;
+          await tx.query(
+            `UPDATE attachments SET is_current = FALSE WHERE company_id = $1 AND id = $2`,
+            [auth.companyId, supersedesId]
+          );
+        }
+      }
+
       const attRes = await tx.query<{ id: number }>(
-        `INSERT INTO attachments (company_id, stored_file_id, entity_type, entity_id, notes)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [auth.companyId, fileId, entityType, entityId, notes]
+        `INSERT INTO attachments (company_id, stored_file_id, entity_type, entity_id, notes, version_no, is_current, supersedes_attachment_id)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7) RETURNING id`,
+        [auth.companyId, fileId, entityType, entityId, notes, versionNo, supersedesAttachmentId]
       );
       await writeAuditLog(tx, {
         companyId: auth.companyId,

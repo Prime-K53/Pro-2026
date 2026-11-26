@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { commercialApi } from '../../services/commercialApi';
@@ -14,6 +14,14 @@ import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import {
+  TransactionDetailDrawer,
+  TransactionActionMenu,
+  TransactionContextMenu,
+  TransactionSelectionProvider,
+  useTransactionSelection,
+  type DetailSection,
+} from '../../transaction-interaction';
 import {
   Package,
   Plus,
@@ -37,6 +45,7 @@ import {
   BarChart3,
   ShoppingCart,
   Pencil,
+  Download,
 } from 'lucide-react';
 import { InventoryItemDrawer } from '../inventory/InventoryItemDrawer';
 import { EditItemModal } from '../inventory/EditItemModal';
@@ -73,6 +82,133 @@ import { StockTransferModal } from '../inventory/StockTransferModal';
 import { StockCountModal } from '../inventory/StockCountModal';
 import { TransferReceiveModal } from '../inventory/TransferReceiveModal';
 
+interface InventoryTableProps<TRow extends { id: string | number }> {
+  rows: TRow[];
+  colSpan: number;
+  emptyMessage: string;
+  renderHeader: () => React.ReactNode;
+  renderCells: (row: TRow) => React.ReactNode;
+  onRowClick: (row: TRow) => void;
+  onRowContextMenu: (row: TRow, point: { x: number; y: number }) => void;
+  selectedId: string | number | null;
+  notify: (message: string, tone?: 'success' | 'error' | 'warning' | 'info') => void;
+  exportName: string;
+  exportHeader: string[];
+  exportRows: (rows: TRow[]) => any[][];
+}
+
+function InventoryTableInner<TRow extends { id: string | number }>({
+  rows,
+  colSpan,
+  emptyMessage,
+  renderHeader,
+  renderCells,
+  onRowClick,
+  onRowContextMenu,
+  selectedId,
+  notify,
+  exportName,
+  exportHeader,
+  exportRows,
+}: InventoryTableProps<TRow>) {
+  const selection = useTransactionSelection();
+  useEffect(() => {
+    selection.setOrderedIds(rows.map((r) => r.id));
+  }, [rows, selection]);
+  const selectedRows = rows.filter((r) => selection.isSelected(r.id));
+  const allSelected = rows.length > 0 && rows.every((r) => selection.isSelected(r.id));
+
+  const exportSelected = () => {
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = exportRows(selectedRows).map((r) => r.map(cell).join(','));
+    const blob = new Blob([[exportHeader.join(','), ...lines].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportName;
+    a.click();
+    URL.revokeObjectURL(url);
+    notify(`Exported ${selectedRows.length} item(s)`);
+  };
+
+  return (
+    <>
+      {selectedRows.length > 0 && (
+        <div className="flex justify-end px-1">
+          <button
+            type="button"
+            onClick={exportSelected}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <Download className="w-3.5 h-3.5" /> Export selected ({selectedRows.length})
+          </button>
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+            <tr>
+              <th className="px-3 py-3 w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Select all items"
+                  checked={allSelected}
+                  onChange={() => (allSelected ? selection.clear() : selection.selectAll(rows.map((r) => r.id)))}
+                />
+              </th>
+              {renderHeader()}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={colSpan + 1} className="px-4 py-10 text-center text-slate-500 font-sans">
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => {
+                const isSelected = selection.isSelected(row.id);
+                return (
+                  <tr
+                    key={row.id}
+                    onClick={() => onRowClick(row)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      onRowContextMenu(row, { x: e.clientX, y: e.clientY });
+                    }}
+                    className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-850/50 ${
+                      isSelected ? 'bg-blue-50/70 dark:bg-blue-900/20' : selectedId === row.id ? 'bg-blue-50/70 dark:bg-blue-900/20 ring-1 ring-inset ring-blue-200 dark:ring-blue-800' : ''
+                    }`}
+                  >
+                    <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${row.id}`}
+                        checked={isSelected}
+                        onChange={(e) => selection.toggle(row.id, { shiftKey: (e.nativeEvent as MouseEvent).shiftKey })}
+                      />
+                    </td>
+                    {renderCells(row)}
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+export function InventoryTable<TRow extends { id: string | number }>(props: InventoryTableProps<TRow>) {
+  return (
+    <TransactionSelectionProvider>
+      <InventoryTableInner {...props} />
+    </TransactionSelectionProvider>
+  );
+}
+
 export const InventoryView: React.FC = () => {
   const {
     companyProfile,
@@ -105,6 +241,8 @@ export const InventoryView: React.FC = () => {
   const [countOpen, setCountOpen] = useState(false);
   const [countItemId, setCountItemId] = useState<string | number | null>(null);
   const [receiveTransferOpen, setReceiveTransferOpen] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: InventoryItem } | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
@@ -431,7 +569,7 @@ export const InventoryView: React.FC = () => {
     const resolved = resolveActions(defs, ctx);
     if (resolved.length === 0) return null;
     return (
-      <AdvancedActionsMenu<InventoryItem>
+      <TransactionActionMenu<InventoryItem>
         label={`Actions for ${item.sku}`}
         actions={resolved}
         executionContext={ctx}
@@ -595,172 +733,121 @@ export const InventoryView: React.FC = () => {
 
       {/* Items Table */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
-              <tr>
-                <th className="px-4 py-3">SKU</th>
-                <th className="px-4 py-3">ITEM / CONVERSION / VARIANTS</th>
-                <th className="px-4 py-3">CATEGORY</th>
-                <th className="px-4 py-3 text-right">COST PRICE</th>
-                <th className="px-4 py-3 text-right">SELLING PRICE</th>
-                <th className="px-4 py-3 text-right">UNIT PROFIT</th>
-                <th className="px-4 py-3 text-right">ON HAND</th>
-                <th className="px-4 py-3 text-center">STOCK / BILLING</th>
-                <th className="px-4 py-3 text-right">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-              {filteredItems.map(item => {
-                const isStocked = STOCKED_ITEM_TYPES.includes(item.type);
-                const isInvoiceable = INVOICEABLE_ITEM_TYPES.includes(item.type);
-                const isLow = isStocked && item.onHand <= item.reorderPoint;
-                const liveUnitCost = getItemUnitCost(item);
-                const unitProfit = isInvoiceable ? item.salesPrice - liveUnitCost : 0;
-                const unitMarginPct =
-                  isInvoiceable && item.salesPrice > 0 ? (unitProfit / item.salesPrice) * 100 : 0;
-                const conv = item.conversionFactor || 1;
-                const usageCost = item.type === 'raw_material' ? getRawUsageUnitCost(item.id) : 0;
-
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-850/50">
-                    <td className="px-4 py-3 font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                      {item.sku}
-                    </td>
-                    <td className="px-4 py-3 font-sans">
-                      <div className="font-semibold text-slate-900 dark:text-white">
-                        {item.name}
-                      </div>
-                      <div className="text-[11px] text-slate-500">{item.description}</div>
-
-                      {item.type === 'raw_material' && (
-                        <div className="mt-1 text-[11px] font-mono text-blue-700 dark:text-blue-400 font-semibold">
-                          1 {item.purchaseUnit || 'Unit'} = {conv.toLocaleString()} {item.usageUnit || 'Unit'}s ({currencySymbol}{usageCost.toFixed(4)}/{item.usageUnit || 'Unit'})
-                        </div>
-                      )}
-
-                      {(item.type === 'printed_product' || item.type === 'printing_service') &&
-                        item.bomLines &&
-                        item.bomLines.length > 0 && (
-                          <div className="mt-1 text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
-                            BOM:{' '}
-                            {item.bomLines
-                              .map(b => {
-                                const rm = inventoryItems.find(r => r.id === b.rawMaterialId);
-                                return `${b.quantityPerUnit} ${rm?.usageUnit || 'Unit'} ${rm?.sku || b.rawMaterialId}`;
-                              })
-                              .join(' + ')}
-                          </div>
-                        )}
-
-                      {item.variants && item.variants.length > 0 && (
-                        <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">
-                          <span className="font-semibold">{item.variants.length} Variants:</span>{' '}
-                          {item.variants
-                            .map(v =>
-                              item.type === 'stationery'
-                                ? `${v.name} (${v.onHand} @ ${formatCurrency(v.salesPrice, currency)})`
-                                : `${v.name} (${formatCurrency(v.salesPrice, currency)})`
-                            )
-                            .join(' · ')}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-sans text-slate-700 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap">
-                      {ITEM_TYPE_LABELS[item.type]}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
-                      <div>{formatCurrency(liveUnitCost, currency)}</div>
-                      {item.type === 'raw_material' && (
-                        <div className="text-[10px] text-slate-400">
-                          per {item.purchaseUnit || 'Unit'}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold tabular-nums text-slate-900 dark:text-white">
-                      {isInvoiceable ? formatCurrency(item.salesPrice, currency) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {isInvoiceable ? (
-                        <div>
-                          <div
-                            className={`font-bold ${
-                              unitProfit >= 0
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-rose-600 dark:text-rose-400'
-                            }`}
-                          >
-                            {formatCurrency(unitProfit, currency)}
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            {unitMarginPct.toFixed(1)}%
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white tabular-nums">
-                      {item.type === 'raw_material' ? (
-                        <div>
-                          <div>
-                            {item.onHand} {item.purchaseUnit || 'Units'}
-                          </div>
-                          <div className="text-[10px] font-normal text-slate-500">
-                            {Math.round(item.onHand * conv).toLocaleString()} {item.usageUnit || 'Units'}
-                          </div>
-                        </div>
-                      ) : item.type === 'stationery' ? (
-                        item.onHand
-                      ) : (
-                        'No Stock'
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center font-sans text-[11px]">
-                      {item.type === 'raw_material' ? (
-                        <div className="space-y-0.5">
-                          <div className={isLow ? 'font-bold text-rose-600 dark:text-rose-400' : 'font-semibold text-emerald-700 dark:text-emerald-400'}>
-                            {isLow ? `Reorder (${item.reorderPoint} min)` : 'Stock OK'}
-                          </div>
-                          <div className="text-[10px] text-slate-400">Internal Only</div>
-                        </div>
-                      ) : item.type === 'stationery' ? (
-                        <div className="space-y-0.5">
-                          <div className={isLow ? 'font-bold text-rose-600 dark:text-rose-400' : 'font-semibold text-emerald-700 dark:text-emerald-400'}>
-                            {isLow ? `Reorder (${item.reorderPoint} min)` : 'In Stock'}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {item.variants?.length ? `${item.variants.length} variants` : 'Invoiceable'}
-                          </div>
-                        </div>
-                      ) : item.type === 'printed_product' ? (
-                        <div className="space-y-0.5">
-                          <div className="font-semibold text-indigo-600 dark:text-indigo-400">
-                            BOM ({item.bomLines?.length || 0} inputs)
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {item.variants?.length ? `${item.variants.length} variants` : 'Invoiceable'}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-0.5">
-                          <div className="font-medium text-blue-700 dark:text-blue-400">
-                            {item.bomLines?.length ? `BOM (${item.bomLines.length} raw)` : 'Service'}
-                          </div>
-                          <div className="text-[10px] text-slate-400">Invoiceable</div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right font-sans">
-                      {renderInventoryActions(item)}
-                    </td>
-
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <InventoryTable<InventoryItem>
+          rows={filteredItems}
+          colSpan={9}
+          emptyMessage="No inventory items match the current filter."
+          selectedId={selectedItemId}
+          notify={(m, t) => triggerShortcutNotice(m, t)}
+          exportName="inventory-selection.csv"
+          exportHeader={['SKU', 'Item', 'Category', 'Selling', 'On Hand', 'Reorder']}
+          exportRows={(rows) =>
+            rows.map((i) => [i.sku, i.name, ITEM_TYPE_LABELS[i.type], i.salesPrice, i.onHand, i.reorderPoint])
+          }
+          onRowClick={(item) => {
+            setSelectedItemId(Number(item.id));
+            setDetailItemId(Number(item.id));
+          }}
+          onRowContextMenu={(item, pt) => {
+            setSelectedItemId(Number(item.id));
+            setContextMenu({ x: pt.x, y: pt.y, item });
+          }}
+          renderHeader={() => (
+            <>
+              <th className="px-4 py-3">SKU</th>
+              <th className="px-4 py-3">ITEM / CONVERSION / VARIANTS</th>
+              <th className="px-4 py-3">CATEGORY</th>
+              <th className="px-4 py-3 text-right">COST PRICE</th>
+              <th className="px-4 py-3 text-right">SELLING PRICE</th>
+              <th className="px-4 py-3 text-right">UNIT PROFIT</th>
+              <th className="px-4 py-3 text-right">ON HAND</th>
+              <th className="px-4 py-3 text-center">STOCK / BILLING</th>
+              <th className="px-4 py-3 text-right">ACTIONS</th>
+            </>
+          )}
+          renderCells={(item) => {
+            const isStocked = STOCKED_ITEM_TYPES.includes(item.type);
+            const isInvoiceable = INVOICEABLE_ITEM_TYPES.includes(item.type);
+            const isLow = isStocked && item.onHand <= item.reorderPoint;
+            const liveUnitCost = getItemUnitCost(item);
+            const unitProfit = isInvoiceable ? item.salesPrice - liveUnitCost : 0;
+            const unitMarginPct = isInvoiceable && item.salesPrice > 0 ? (unitProfit / item.salesPrice) * 100 : 0;
+            const conv = item.conversionFactor || 1;
+            const usageCost = item.type === 'raw_material' ? getRawUsageUnitCost(item.id) : 0;
+            return (
+              <>
+                <td className="px-4 py-3 font-bold text-slate-900 dark:text-white whitespace-nowrap">{item.sku}</td>
+                <td className="px-4 py-3 font-sans">
+                  <div className="font-semibold text-slate-900 dark:text-white">{item.name}</div>
+                  <div className="text-[11px] text-slate-500">{item.description}</div>
+                  {item.type === 'raw_material' && (
+                    <div className="mt-1 text-[11px] font-mono text-blue-700 dark:text-blue-400 font-semibold">
+                      1 {item.purchaseUnit || 'Unit'} = {conv.toLocaleString()} {item.usageUnit || 'Unit'}s ({currencySymbol}{usageCost.toFixed(4)}/{item.usageUnit || 'Unit'})
+                    </div>
+                  )}
+                  {(item.type === 'printed_product' || item.type === 'printing_service') && item.bomLines && item.bomLines.length > 0 && (
+                    <div className="mt-1 text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
+                      BOM:{' '}
+                      {item.bomLines.map(b => { const rm = inventoryItems.find(r => r.id === b.rawMaterialId); return `${b.quantityPerUnit} ${rm?.usageUnit || 'Unit'} ${rm?.sku || b.rawMaterialId}`; }).join(' + ')}
+                    </div>
+                  )}
+                  {item.variants && item.variants.length > 0 && (
+                    <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">
+                      <span className="font-semibold">{item.variants.length} Variants:</span>{' '}
+                      {item.variants.map(v => item.type === 'stationery' ? `${v.name} (${v.onHand} @ ${formatCurrency(v.salesPrice, currency)})` : `${v.name} (${formatCurrency(v.salesPrice, currency)})`).join(' · ')}
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-3 font-sans text-slate-700 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap">{ITEM_TYPE_LABELS[item.type]}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-slate-600 dark:text-slate-400">
+                  <div>{formatCurrency(liveUnitCost, currency)}</div>
+                  {item.type === 'raw_material' && <div className="text-[10px] text-slate-400">per {item.purchaseUnit || 'Unit'}</div>}
+                </td>
+                <td className="px-4 py-3 text-right font-bold tabular-nums text-slate-900 dark:text-white">{isInvoiceable ? formatCurrency(item.salesPrice, currency) : '—'}</td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {isInvoiceable ? (
+                    <div>
+                      <div className={`font-bold ${unitProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{formatCurrency(unitProfit, currency)}</div>
+                      <div className="text-[10px] text-slate-500">{unitMarginPct.toFixed(1)}%</div>
+                    </div>
+                  ) : (<span className="text-slate-400">—</span>)}
+                </td>
+                <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white tabular-nums">
+                  {item.type === 'raw_material' ? (
+                    <div>
+                      <div>{item.onHand} {item.purchaseUnit || 'Units'}</div>
+                      <div className="text-[10px] font-normal text-slate-500">{Math.round(item.onHand * conv).toLocaleString()} {item.usageUnit || 'Units'}</div>
+                    </div>
+                  ) : item.type === 'stationery' ? item.onHand : 'No Stock'}
+                </td>
+                <td className="px-4 py-3 text-center font-sans text-[11px]">
+                  {item.type === 'raw_material' ? (
+                    <div className="space-y-0.5">
+                      <div className={isLow ? 'font-bold text-rose-600 dark:text-rose-400' : 'font-semibold text-emerald-700 dark:text-emerald-400'}>{isLow ? `Reorder (${item.reorderPoint} min)` : 'Stock OK'}</div>
+                      <div className="text-[10px] text-slate-400">Internal Only</div>
+                    </div>
+                  ) : item.type === 'stationery' ? (
+                    <div className="space-y-0.5">
+                      <div className={isLow ? 'font-bold text-rose-600 dark:text-rose-400' : 'font-semibold text-emerald-700 dark:text-emerald-400'}>{isLow ? `Reorder (${item.reorderPoint} min)` : 'In Stock'}</div>
+                      <div className="text-[10px] text-slate-400">{item.variants?.length ? `${item.variants.length} variants` : 'Invoiceable'}</div>
+                    </div>
+                  ) : item.type === 'printed_product' ? (
+                    <div className="space-y-0.5">
+                      <div className="font-semibold text-indigo-600 dark:text-indigo-400">BOM ({item.bomLines?.length || 0} inputs)</div>
+                      <div className="text-[10px] text-slate-400">{item.variants?.length ? `${item.variants.length} variants` : 'Invoiceable'}</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-0.5">
+                      <div className="font-medium text-blue-700 dark:text-blue-400">{item.bomLines?.length ? `BOM (${item.bomLines.length} raw)` : 'Service'}</div>
+                      <div className="text-[10px] text-slate-400">Invoiceable</div>
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right font-sans">{renderInventoryActions(item)}</td>
+              </>
+            );
+          }}
+        />
       </div>
 
       {/* Adjust Inventory Stock Modal (Raw Materials & Stationary Items only) */}
@@ -1457,6 +1544,29 @@ export const InventoryView: React.FC = () => {
           setReceiveTransferOpen(false);
         }}
       />
+
+      {contextMenu && (() => {
+        const defs = buildInventoryActionDefinitions(contextMenu.item);
+        const ctx = buildInventoryActionContext(contextMenu.item, null);
+        const resolved = resolveActions(defs, ctx);
+        return resolved.length > 0 ? (
+          <TransactionContextMenu<InventoryItem>
+            label={`Actions for ${contextMenu.item.sku}`}
+            actions={resolved}
+            executionContext={ctx}
+            idempotencyRecordKey={contextMenu.item.id}
+            notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
+            point={{ x: contextMenu.x, y: contextMenu.y }}
+            onClose={() => setContextMenu(null)}
+            onExecuteAction={async (action) => {
+              const def = action.definition;
+              if (typeof def.execute === 'function') {
+                await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t) });
+              }
+            }}
+          />
+        ) : null;
+      })()}
     </div>
   );
 };

@@ -32,6 +32,7 @@ import {
   CalendarDays,
   Building2,
   AlertTriangle,
+  Printer,
 } from 'lucide-react';
 
 type VendorStatus = 'active' | 'inactive' | 'on_hold' | 'blocked';
@@ -74,7 +75,7 @@ const emptyEditForm = {
 };
 
 export const VendorsView: React.FC = () => {
-  const { companyProfile, setCurrentView, triggerShortcutNotice, setIsNewVendorOpen } =
+  const { companyProfile, setCurrentView, triggerShortcutNotice, setIsNewVendorOpen, openPrimePreview } =
     useAccounting();
   const { activeCompany, hasPermission, authenticated, permissions } = useAuth();
   const currency = companyProfile.currency || 'K';
@@ -281,6 +282,43 @@ export const VendorsView: React.FC = () => {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handlePrintStatement = () => {
+    if (!statementData) return;
+    const cur = statementData.currencyCode || currency;
+    const lines = statementData.lines || [];
+    const totalDebit = lines.reduce((s: number, l: any) => s + (Number(l.charge) || 0), 0);
+    const totalCredit = lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0);
+    openPrimePreview(
+      'ACCOUNT_STATEMENT',
+      {
+        number: `STMT-VND-${statementData.vendorCode || statementData.vendorId || '0'}`,
+        statementNumber: `STMT-VND-${statementData.vendorCode || statementData.vendorId || '0'}`,
+        date: statementData.periodEnd,
+        clientName: statementData.vendorName,
+        customerName: statementData.vendorName,
+        address: statementData.remitToAddress || companyProfile.address || '',
+        phone: companyProfile.phone || '',
+        openingBalance: Number(statementData.openingBalance) || 0,
+        closingBalance: Number(statementData.closingBalance) || 0,
+        finalBalance: Number(statementData.closingBalance) || 0,
+        startDate: statementData.periodStart,
+        endDate: statementData.periodEnd,
+        totalDebit,
+        totalCredit,
+        currency: cur,
+        transactions: lines.map((l: any) => ({
+          date: l.date,
+          reference: l.number,
+          description: l.type,
+          debit: Number(l.charge) || 0,
+          credit: Number(l.credit) || 0,
+          balance: Number(l.runningBalance) || 0,
+        })),
+      },
+      `Supplier Statement — ${statementData.vendorName}`
+    );
   };
 
   const handleSendStatement = async () => {
@@ -1062,9 +1100,18 @@ export const VendorsView: React.FC = () => {
                   <span className="ml-2 font-mono text-[11px] text-slate-300">{statementData.vendorCode}</span>
                 )}
               </div>
-              <button onClick={() => setStatementData(null)}>
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrintStatement}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 text-white font-semibold text-[11px]"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Download PDF</span>
+                </button>
+                <button onClick={() => setStatementData(null)}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="p-6 space-y-4 overflow-y-auto text-xs">
               <div className="flex justify-between font-mono border-b pb-3">

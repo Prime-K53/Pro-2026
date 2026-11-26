@@ -22,6 +22,10 @@ export interface AdvancedActionsMenuViewProps<TRecord = unknown> {
   executionContext?: ActionEligibilityContext<TRecord>;
   idempotencyRecordKey?: string | number | null;
   notify?: (message: string, tone?: 'success' | 'error' | 'warning' | 'info') => void;
+  /** When provided, opens the menu as a context menu at this viewport point. */
+  contextPoint?: { x: number; y: number } | null;
+  onContextClose?: () => void;
+  hideTrigger?: boolean;
 }
 
 export function AdvancedActionsMenu<TRecord = unknown>({
@@ -33,14 +37,18 @@ export function AdvancedActionsMenu<TRecord = unknown>({
   executionContext,
   idempotencyRecordKey,
   notify,
+  contextPoint = null,
+  onContextClose,
+  hideTrigger = false,
 }: AdvancedActionsMenuViewProps<TRecord>) {
   const { companyProfile, triggerShortcutNotice } = useAccounting();
   const isMidnight = companyProfile.theme === 'midnight';
   const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number; openUp: boolean }>({
+  const [coords, setCoords] = useState<{ top: number; left: number; openUp: boolean; maxHeight: number }>({
     top: 0,
     left: 0,
     openUp: false,
+    maxHeight: 320,
   });
   const [localPendingId, setLocalPendingId] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<InternalConfirmState<TRecord> | null>(null);
@@ -50,6 +58,7 @@ export function AdvancedActionsMenu<TRecord = unknown>({
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const prevOpenRef = useRef(false);
   const confirmDialogRef = useRef<HTMLDivElement | null>(null);
   const confirmPrimaryRef = useRef<HTMLButtonElement | null>(null);
   const confirmCancelRef = useRef<HTMLButtonElement | null>(null);
@@ -65,18 +74,43 @@ export function AdvancedActionsMenu<TRecord = unknown>({
     else if (typeof triggerShortcutNotice === 'function') triggerShortcutNotice(message, tone);
   };
 
-  const updatePosition = () => {
+  const updatePosition = (point?: { x: number; y: number } | null) => {
+    const menuWidth = 260;
+    const margin = 8;
+    const estimatedHeight = Math.min(Math.max(visibleActions.length, 1) * 36 + 24, 420);
+    if (point) {
+      const spaceBelow = Math.max(0, window.innerHeight - point.y - margin);
+      const spaceAbove = Math.max(0, point.y - margin);
+      const openUp = spaceBelow < Math.min(estimatedHeight, 200) && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(120, Math.min(420, openUp ? spaceAbove - 4 : spaceBelow - 4));
+      const left = Math.max(margin, Math.min(point.x, window.innerWidth - menuWidth - margin));
+      const top = openUp ? point.y : point.y;
+      setCoords({ top, left, openUp, maxHeight });
+      return;
+    }
     const btn = buttonRef.current;
     if (!btn) return;
     const rect = btn.getBoundingClientRect();
-    const menuWidth = 260;
-    const estimatedHeight = Math.min(Math.max(visibleActions.length, 1) * 36 + 24, 320);
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const openUp = spaceBelow < estimatedHeight && rect.top > estimatedHeight;
-    const left = Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8));
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - margin);
+    const spaceAbove = Math.max(0, rect.top - margin);
+    const openUp = spaceBelow < Math.min(estimatedHeight, 200) && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(420, openUp ? spaceAbove - 4 : spaceBelow - 4));
+    const left = Math.max(margin, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin));
     const top = openUp ? rect.top - 6 : rect.bottom + 6;
-    setCoords({ top, left, openUp });
+    setCoords({ top, left, openUp, maxHeight });
   };
+
+  useEffect(() => {
+    if (contextPoint) {
+      updatePosition(contextPoint);
+      setOpen(true);
+    }
+  }, [contextPoint?.x, contextPoint?.y, visibleActions.length]);
+
+  useEffect(() => {
+    if (prevOpenRef.current && !open && contextPoint) onContextClose?.();
+    prevOpenRef.current = open;
+  }, [open, contextPoint, onContextClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -98,7 +132,13 @@ export function AdvancedActionsMenu<TRecord = unknown>({
         buttonRef.current?.focus();
       }
     };
-    const handleScrollOrResize = () => setOpen(false);
+    const handleScrollOrResize = (e: Event) => {
+      if (e.type === 'scroll') {
+        const target = e.target as Node | null;
+        if (target && menuRef.current?.contains(target)) return;
+      }
+      setOpen(false);
+    };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
     window.addEventListener('scroll', handleScrollOrResize, true);
@@ -348,33 +388,35 @@ export function AdvancedActionsMenu<TRecord = unknown>({
 
   return (
     <div className={`inline-flex items-center justify-end ${className}`}>
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-label={label}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!open) {
-            updatePosition();
-            setOpen(true);
-          } else {
-            setOpen(false);
-          }
-        }}
-        className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors cursor-pointer ${
-          open
-            ? isMidnight
-              ? 'bg-slate-700 border-slate-500 text-white'
-              : 'bg-slate-200 border-slate-400 text-slate-900'
-            : isMidnight
-            ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
-            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-        }`}
-      >
-        {effectivePendingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
-      </button>
+      {!hideTrigger && (
+        <button
+          ref={buttonRef}
+          type="button"
+          aria-label={label}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!open) {
+              updatePosition();
+              setOpen(true);
+            } else {
+              setOpen(false);
+            }
+          }}
+          className={`inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors cursor-pointer ${
+            open
+              ? isMidnight
+                ? 'bg-slate-700 border-slate-500 text-white'
+                : 'bg-slate-200 border-slate-400 text-slate-900'
+              : isMidnight
+              ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          }`}
+        >
+          {effectivePendingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
+        </button>
+      )}
 
       {open &&
         createPortal(
@@ -388,10 +430,11 @@ export function AdvancedActionsMenu<TRecord = unknown>({
               position: 'fixed',
               top: coords.top,
               left: coords.left,
+              maxHeight: coords.maxHeight,
               transform: coords.openUp ? 'translateY(-100%)' : 'none',
               zIndex: 9999,
             }}
-            className={`w-[260px] rounded-lg border shadow-xl py-1 text-xs ${
+            className={`w-[260px] overflow-y-auto overscroll-contain rounded-lg border shadow-xl py-1 text-xs ${
               isMidnight ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'
             }`}
           >

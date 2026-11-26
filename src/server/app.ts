@@ -1,4 +1,6 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
 import { ServerDatabase } from './db.ts';
 import { logger, newCorrelationId } from './logger.ts';
 import { rateLimit } from './rateLimiter.ts';
@@ -10,6 +12,7 @@ import { createFixedAssetRouter } from './routes/fixedAssetRoutes.ts';
 import { createComplianceRouter } from './routes/complianceRoutes.ts';
 import { createTaxRouter } from './routes/taxRoutes.ts';
 import { createQuoteRouter } from './routes/quoteRoutes.ts';
+import { createOcrRouter } from './routes/ocrRoutes.ts';
 import { createSalesRouter } from './routes/salesRoutes.ts';
 import { createPurchasingRouter } from './routes/purchasingRoutes.ts';
 import { createBankingRouter } from './routes/bankingRoutes.ts';
@@ -48,6 +51,33 @@ import { validateTwilioSignature, twilioRequestUrl } from './services/twilioSign
 export function createApiExpressApp(db: ServerDatabase): Express {
   const app = express();
   app.disable('x-powered-by');
+
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Security headers (HSTS, X-Frame-Options, nosniff, etc.). CSP is enabled in
+  // production (bundled assets) and disabled in dev to avoid blocking Vite.
+  app.use(
+    helmet({
+      contentSecurityPolicy: isProduction ? undefined : false,
+      crossOriginEmbedderPolicy: false,
+    })
+  );
+
+  // CORS: allow all in dev; in production allow APP_URL + CORS_ALLOWED_ORIGINS.
+  const allowedOrigins = [
+    process.env.APP_URL,
+    ...(process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean),
+  ].filter(Boolean) as string[];
+  app.use(
+    cors({
+      origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+        if (!origin || !isProduction) return cb(null, true);
+        cb(null, allowedOrigins.includes(origin));
+      },
+      credentials: true,
+    })
+  );
+
   app.use(express.json({ limit: '6mb' }));
   app.use(express.urlencoded({ extended: false, type: 'application/x-www-form-urlencoded' }));
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -133,6 +163,7 @@ export function createApiExpressApp(db: ServerDatabase): Express {
   app.use('/api', createTaxRouter(db));
   app.use('/api', createComplianceRouter(db));
   app.use('/api', createQuoteRouter(db));
+  app.use('/api', createOcrRouter(db));
   app.use('/api', createSalesRouter(db));
   app.use('/api', createPurchasingRouter(db));
   app.use('/api', createBankingRouter(db));

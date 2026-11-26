@@ -12,7 +12,11 @@ function getEncryptionKey(): Buffer {
   const secret =
     process.env.TOTP_ENC_KEY ||
     process.env.AUTH_SESSION_SECRET ||
-    'pms-local-dev-totp-key-change-me';
+    // Dev-only fallback; production is enforced by config.ts fail-fast.
+    (process.env.NODE_ENV === 'production' ? '' : 'pms-local-dev-totp-key-change-me');
+  if (!secret) {
+    throw new Error('[secretCrypto] No encryption key configured (TOTP_ENC_KEY / AUTH_SESSION_SECRET)');
+  }
   return crypto.createHash('sha256').update(secret).digest();
 }
 

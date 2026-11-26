@@ -11,6 +11,8 @@ export interface AiModel {
 export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** Optional base64 data URLs (image/png, image/jpeg) for vision-capable models. */
+  images?: string[];
 }
 
 export interface AiChatResponse {
@@ -120,10 +122,20 @@ export async function chatCompletion(config: AiProviderConfig, messages: AiChatM
     if (provider === 'gemini') {
       const contents = messages
         .filter((m) => m.role !== 'system')
-        .map((m) => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        }));
+        .map((m) => {
+          const parts: any[] = [];
+          if (m.content) parts.push({ text: m.content });
+          for (const img of m.images || []) {
+            const match = /^data:([^;]+);base64,(.*)$/s.exec(img);
+            if (match) {
+              parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            }
+          }
+          return {
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: parts.length > 0 ? parts : [{ text: '' }],
+          };
+        });
       const systemInstruction = messages.find((m) => m.role === 'system');
 
       const body: any = { contents };
@@ -167,7 +179,18 @@ export async function chatCompletion(config: AiProviderConfig, messages: AiChatM
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
       body: JSON.stringify({
         model: modelName,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        messages: messages.map((m) => {
+          if (m.images && m.images.length > 0) {
+            return {
+              role: m.role,
+              content: [
+                { type: 'text', text: m.content },
+                ...m.images.map((img) => ({ type: 'image_url', image_url: { url: img } })),
+              ],
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
       }),
     });
     if (!res.ok) {

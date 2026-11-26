@@ -1,12 +1,27 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { ACCOUNTING_UPDATED_EVENT, accountingApi, ApiAccount } from '../../services/accountingApi';
 import { ApiBankAccount, ApiBankTransaction, commercialApi } from '../../services/commercialApi';
 import { formatCurrency } from '../../utils/currency';
-import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
-import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import type {
+  ActionEligibilityContext,
+  AdvancedActionDefinition,
+  ResolvedAdvancedAction,
+} from '../../actions/types';
+import {
+  TransactionDetailDrawer,
+  TransactionActionMenu,
+  TransactionContextMenu,
+  TransactionSelectionProvider,
+  useTransactionSelection,
+  TransactionBulkActionToolbar,
+  TransactionAuditTimeline,
+  useTransactionAudit,
+  createTransactionRef,
+  type DetailSection,
+} from '../../transaction-interaction';
 import {
   CreditCard,
   CheckSquare,
@@ -25,7 +40,547 @@ import {
   AlertTriangle,
   Loader2,
   Trash2,
+  Eye,
+  Download,
+  BookOpen,
+  Layers,
 } from 'lucide-react';
+
+interface BankRegisterTableProps {
+  transactions: ApiBankTransaction[];
+  allTransactions: ApiBankTransaction[];
+  currency: string;
+  tableDensity?: string;
+  authenticated: boolean;
+  permissions: string[];
+  role: string | null;
+  companyId: number | null;
+  canWrite: boolean;
+  onSelectBankAccount: (glAccountId: number) => void;
+  onOpenGlAccount: (accountId: number) => void;
+  reload: () => Promise<void> | void;
+  notify: (message: string, tone?: 'success' | 'error' | 'warning' | 'info') => void;
+}
+
+const bankTxRef = (tx: ApiBankTransaction) =>
+  createTransactionRef(tx, {
+    moduleKey: 'banking',
+    entityType: 'bank_transaction',
+    id: (t) => t.id,
+    number: (t) => t.checkNumber || t.refNumber || t.type,
+    status: (t) => t.status,
+  });
+
+const bankRefLabel = (tx: ApiBankTransaction) => tx.checkNumber || tx.refNumber || tx.type;
+
+function buildBankSections(
+  tx: ApiBankTransaction,
+  currency: string,
+  onOpenGlAccount: (accountId: number) => void
+): DetailSection[] {
+  const isDeposit = tx.amount >= 0;
+  const sections: DetailSection[] = [
+    {
+      key: 'txn',
+      title: 'Transaction',
+      fields: [
+        { label: 'Reference', value: bankRefLabel(tx), mono: true },
+        { label: 'Date', value: tx.date, mono: true },
+        { label: 'Type', value: tx.type },
+        { label: 'Direction', value: isDeposit ? 'Deposit (+)' : 'Payment (-)' },
+        { label: 'Amount', value: formatCurrency(Math.abs(tx.amount), currency), mono: true, tone: isDeposit ? 'emerald' : 'rose' },
+        { label: 'Status', value: tx.status },
+        { label: 'Cleared', value: tx.cleared ? 'Yes' : 'No' },
+        { label: 'Reconciled', value: tx.reconciliationId ? `Yes (#${tx.reconciliationId})` : 'No' },
+      ],
+    },
+    {
+      key: 'classification',
+      title: 'Classification',
+      fields: [
+        { label: 'Bank account', value: tx.accountName },
+        { label: 'Category', value: tx.category || '—' },
+        {
+          label: 'Offset account',
+          value:
+            tx.offsetAccountId != null
+              ? `${tx.offsetAccountName || ''}`.trim() || `#${tx.offsetAccountId}`
+              : '—',
+        },
+        { label: 'Running balance', value: tx.status === 'posted' ? formatCurrency(tx.runningBalance, currency) : '—', mono: true },
+      ],
+    },
+    {
+      key: 'source',
+      title: 'Source & links',
+      fields: [
+        { label: 'Payee / payer', value: tx.payee },
+        { label: 'Memo', value: tx.memo || '—', span: 2 },
+        { label: 'Journal txn', value: tx.journalTxnId ? `#${tx.journalTxnId}` : '—', mono: true },
+        { label: 'Check #', value: tx.checkNumber || '—', mono: true },
+        { label: 'Print later', value: tx.printLater ? 'Yes' : 'No' },
+        { label: 'Printed at', value: tx.printedAt || '—' },
+      ],
+    },
+  ];
+  if (tx.offsetAccountId != null) {
+    sections.push({
+      key: 'related',
+      title: 'Related records',
+      content: (
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          {tx.journalTxnId != null && (
+            <button
+              type="button"
+              onClick={() => onOpenGlAccount(tx.offsetAccountId as number)}
+              className="rounded border border-slate-300 dark:border-slate-700 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              Open in General Ledger
+            </button>
+          )}
+          {tx.reconciliationId != null && (
+            <span className="rounded border border-emerald-300 dark:border-emerald-800 px-2 py-1 text-emerald-700 dark:text-emerald-300">
+              Reconciled #{tx.reconciliationId}
+            </span>
+          )}
+        </div>
+      ),
+    });
+  }
+  return sections;
+}
+
+function BankRegisterInner({
+  transactions,
+  allTransactions,
+  currency,
+  tableDensity,
+  authenticated,
+  permissions,
+  role,
+  companyId,
+  canWrite,
+  onSelectBankAccount,
+  onOpenGlAccount,
+  reload,
+  notify,
+}: BankRegisterTableProps) {
+  const selection = useTransactionSelection();
+  const [detail, setDetail] = useState<ApiBankTransaction | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    point: { x: number; y: number };
+    tx: ApiBankTransaction;
+    resolved: ResolvedAdvancedAction<ApiBankTransaction>[];
+    ctx: ActionEligibilityContext<ApiBankTransaction>;
+  } | null>(null);
+
+  useEffect(() => {
+    selection.setOrderedIds(transactions.map((t) => t.id));
+  }, [transactions, selection]);
+
+  const ctxFor = useCallback(
+    (tx: ApiBankTransaction): ActionEligibilityContext<ApiBankTransaction> => {
+      const caps: string[] = [];
+      if (tx.status === 'posted') caps.push('posted');
+      if (tx.cleared) caps.push('cleared');
+      if (tx.reconciliationId) caps.push('reconciled');
+      if (tx.printLater && !tx.printedAt) caps.push('print_queued');
+      return {
+        authenticated,
+        permissions,
+        role,
+        companyId,
+        moduleKey: 'banking',
+        entityType: 'bank_transaction',
+        record: tx,
+        recordStatus: tx.status,
+        recordCapabilities: caps,
+      };
+    },
+    [authenticated, permissions, role, companyId]
+  );
+
+  const buildActions = useCallback(
+    (tx: ApiBankTransaction): AdvancedActionDefinition<ApiBankTransaction>[] => {
+      const defs: AdvancedActionDefinition<ApiBankTransaction>[] = [
+        {
+          id: 'view',
+          label: 'View Transaction',
+          icon: <Eye className="w-3.5 h-3.5" />,
+          group: 'view',
+          groupLabel: 'Transaction',
+          requiredPermission: 'banking:read',
+          execute: async () => setDetail(tx),
+        },
+        {
+          id: 'copy-ref',
+          label: 'Copy Reference',
+          icon: <Copy className="w-3.5 h-3.5" />,
+          group: 'admin',
+          groupLabel: 'Other',
+          requiredPermission: 'banking:read',
+          execute: async () => {
+            await navigator.clipboard?.writeText(bankRefLabel(tx));
+            notify(`Copied ${bankRefLabel(tx)}`);
+          },
+        },
+      ];
+      if (canWrite && tx.status === 'posted' && !tx.reconciliationId) {
+        defs.push({
+          id: 'toggle-cleared',
+          label: tx.cleared ? 'Mark Uncleared' : 'Mark Cleared',
+          icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />,
+          group: 'process',
+          groupLabel: 'Reconciliation',
+          requiredPermission: 'banking:write',
+          execute: async () => {
+            await commercialApi.toggleCleared(tx.id, !tx.cleared);
+            await reload();
+          },
+        });
+      }
+      if (canWrite && tx.status === 'posted' && tx.printLater && !tx.printedAt) {
+        defs.push({
+          id: 'mark-printed',
+          label: 'Mark Check Printed',
+          icon: <Printer className="w-3.5 h-3.5" />,
+          group: 'process',
+          groupLabel: 'Reconciliation',
+          requiredPermission: 'banking:write',
+          execute: async () => {
+            await commercialApi.markChecksPrinted([tx.id]);
+            notify(`Marked ${bankRefLabel(tx)} printed`);
+            await reload();
+          },
+        });
+      }
+      if (canWrite && tx.status === 'posted' && !tx.reconciliationId) {
+        defs.push({
+          id: 'void',
+          label: 'Void Transaction (Reverse GL)',
+          icon: <Ban className="w-3.5 h-3.5 text-rose-600" />,
+          group: 'danger',
+          groupLabel: 'Sensitive operations',
+          destructive: true,
+          risk: 'destructive',
+          requiredPermission: 'banking:write',
+          confirmation: {
+            title: `Void ${bankRefLabel(tx)}`,
+            message: 'Void this bank transaction and reverse its GL impact?',
+            confirmLabel: 'Void',
+            destructive: true,
+            requireReason: true,
+            reasonLabel: 'Void reason',
+          },
+          execute: async (_ctx, helpers) => {
+            await commercialApi.voidBankTransaction(tx.id, helpers.reason || 'Voided in register');
+            notify(`Voided ${bankRefLabel(tx)} & reversed GL`);
+            await reload();
+          },
+        });
+      }
+      defs.push({
+        id: 'open-bank-account',
+        label: 'Open Bank Account',
+        icon: <ArrowLeftRight className="w-3.5 h-3.5" />,
+        group: 'navigation',
+        groupLabel: 'Navigation',
+        requiredPermission: 'banking:read',
+        execute: async () => onSelectBankAccount(tx.accountId),
+      });
+      if (tx.offsetAccountId != null) {
+        defs.push({
+          id: 'open-gl-account',
+          label: 'Open GL Account',
+          icon: <Layers className="w-3.5 h-3.5" />,
+          group: 'navigation',
+          groupLabel: 'Navigation',
+          requiredPermission: 'accounts:read',
+          execute: async () => onOpenGlAccount(tx.offsetAccountId as number),
+        });
+      }
+      defs.push({
+        id: 'audit',
+        label: 'View Audit History',
+        icon: <BookOpen className="w-3.5 h-3.5" />,
+        group: 'investigate',
+        groupLabel: 'Investigation',
+        requiredPermission: 'audit:read',
+        execute: async () => setDetail(tx),
+      });
+      return defs;
+    },
+    [canWrite, notify, onOpenGlAccount, onSelectBankAccount, reload]
+  );
+
+  const executeFrom = useCallback(
+    (ctx: ActionEligibilityContext<ApiBankTransaction>) =>
+      async (action: ResolvedAdvancedAction<ApiBankTransaction>) => {
+        const def = action.definition;
+        if (typeof def.execute === 'function') {
+          await def.execute(ctx, { notify });
+        }
+      },
+    [notify]
+  );
+
+  const detailRef = useMemo(() => (detail ? bankTxRef(detail) : null), [detail]);
+  const audit = useTransactionAudit(undefined, detailRef, Boolean(detail));
+  const canReadAudit = permissions.includes('audit:read');
+  const allSelected = transactions.length > 0 && transactions.every((t) => selection.isSelected(t.id));
+  const selected = allTransactions.filter((t) => selection.isSelected(t.id));
+  const cellPad = tableDensity === 'compact' ? 'px-3 py-2' : 'px-3 py-3';
+
+  const markPrintedBulk: AdvancedActionDefinition<ApiBankTransaction> = {
+    id: 'bulk-mark-printed',
+    label: 'Mark Printed',
+    icon: <Printer className="w-3.5 h-3.5" />,
+    group: 'process',
+    requiredPermission: 'banking:write',
+    applicableStatuses: ['posted'],
+    isEnabled: (ctx) => {
+      const tx = ctx.record as ApiBankTransaction;
+      return tx.printLater && !tx.printedAt
+        ? { enabled: true }
+        : { enabled: false, reason: 'Not queued for printing' };
+    },
+    confirmation: {
+      title: 'Mark selected checks printed',
+      message: 'Mark the selected queued checks as printed?',
+      confirmLabel: 'Mark Printed',
+    },
+    execute: async (ctx) => {
+      const tx = ctx.record as ApiBankTransaction;
+      await commercialApi.markChecksPrinted([tx.id]);
+      return { status: 'success', message: `Marked ${bankRefLabel(tx)} printed` };
+    },
+  };
+
+  const exportSelected = () => {
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = ['Date', 'Reference', 'Payee', 'Type', 'Category', 'Amount', 'Cleared', 'Status'];
+    const lines = selected.map((t) =>
+      [t.date, bankRefLabel(t), t.payee, t.type, t.category, t.amount, t.cleared ? 'Yes' : 'No', t.status]
+        .map(cell)
+        .join(',')
+    );
+    const blob = new Blob([[header.join(','), ...lines].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bank-register-selection.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    notify(`Exported ${selected.length} transaction(s)`);
+  };
+
+  return (
+    <>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <TransactionBulkActionToolbar
+            definitions={[markPrintedBulk]}
+            records={selected}
+            getRef={bankTxRef}
+            buildContext={ctxFor}
+            notify={notify}
+          />
+          <button
+            type="button"
+            onClick={exportSelected}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <Download className="w-3.5 h-3.5" /> Export selected
+          </button>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead className="bg-[#0f3d63] text-white uppercase tracking-wider font-bold text-[10px]">
+              <tr>
+                <th className="px-3 py-2.5 w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all transactions"
+                    checked={allSelected}
+                    onChange={() => (allSelected ? selection.clear() : selection.selectAll(transactions.map((t) => t.id)))}
+                  />
+                </th>
+                <th className="px-3 py-2.5 w-24">DATE</th>
+                <th className="px-3 py-2.5 w-28">REF / CHK #</th>
+                <th className="px-3 py-2.5">PAYEE / MEMO</th>
+                <th className="px-3 py-2.5 w-40">CATEGORY / OFFSET</th>
+                <th className="px-3 py-2.5 w-16 text-center">CLR</th>
+                <th className="px-3 py-2.5 w-28 text-right">PAYMENT (-)</th>
+                <th className="px-3 py-2.5 w-28 text-right">DEPOSIT (+)</th>
+                <th className="px-3 py-2.5 w-32 text-right">RUNNING BAL</th>
+                <th className="px-3 py-2.5 w-16 text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-xs">
+              {transactions.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-4 py-10 text-center font-sans text-slate-400">
+                    No bank register entries match your filter.
+                  </td>
+                </tr>
+              ) : (
+                transactions.map((tx) => {
+                  const isDisbursement = tx.amount < 0;
+                  const refLabel = bankRefLabel(tx);
+                  const ctx = ctxFor(tx);
+                  const resolved = resolveActions(buildActions(tx), ctx);
+                  const isSelected = selection.isSelected(tx.id);
+                  return (
+                    <tr
+                      key={tx.id}
+                      onClick={() => setDetail(tx)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setContextMenu({ point: { x: e.clientX, y: e.clientY }, tx, resolved, ctx });
+                      }}
+                      className={`cursor-pointer transition-colors hover:bg-blue-50/50 dark:hover:bg-slate-850 ${
+                        tx.status === 'voided' ? 'opacity-50 line-through' : ''
+                      } ${isSelected ? 'bg-blue-50 dark:bg-blue-950/40' : ''}`}
+                    >
+                      <td className={`${cellPad} align-top`} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${refLabel}`}
+                          checked={isSelected}
+                          onChange={(e) => selection.toggle(tx.id, { shiftKey: (e.nativeEvent as MouseEvent).shiftKey })}
+                        />
+                      </td>
+                      <td className={`${cellPad} text-slate-600 dark:text-slate-400 whitespace-nowrap align-top`}>{tx.date}</td>
+                      <td className={`${cellPad} font-bold whitespace-nowrap align-top`}>
+                        {refLabel}
+                        {tx.reconciliationId && (
+                          <span className="ml-1 text-[10px] text-emerald-600" title="Reconciled">[R]</span>
+                        )}
+                      </td>
+                      <td className={`${cellPad} font-sans align-top`}>
+                        <div className="font-semibold text-slate-900 dark:text-white">{tx.payee}</div>
+                        <div className="text-[11px] text-slate-500 italic">{tx.memo || tx.type}</div>
+                      </td>
+                      <td className={`${cellPad} font-sans text-[11px] text-slate-600 dark:text-slate-400 align-top`}>
+                        {tx.offsetAccountName || tx.category || '—'}
+                      </td>
+                      <td className={`${cellPad} text-center align-top`}>
+                        {tx.cleared ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-600 mx-auto" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-300 mx-auto" />
+                        )}
+                      </td>
+                      <td className={`${cellPad} text-right font-bold tabular-nums align-top`}>
+                        {isDisbursement ? formatCurrency(Math.abs(tx.amount), currency) : ''}
+                      </td>
+                      <td className={`${cellPad} text-right font-bold tabular-nums text-emerald-600 dark:text-emerald-400 align-top`}>
+                        {!isDisbursement ? formatCurrency(tx.amount, currency) : ''}
+                      </td>
+                      <td className={`${cellPad} text-right font-bold tabular-nums bg-slate-50 dark:bg-slate-850/50 align-top`}>
+                        {tx.status === 'posted' ? formatCurrency(tx.runningBalance, currency) : '—'}
+                      </td>
+                      <td className={`${cellPad} text-right font-sans align-top`} onClick={(e) => e.stopPropagation()}>
+                        {resolved.length > 0 && (
+                          <TransactionActionMenu
+                            label={`Actions for ${refLabel}`}
+                            actions={resolved}
+                            executionContext={ctx}
+                            idempotencyRecordKey={tx.id}
+                            notify={notify}
+                            onExecuteAction={executeFrom(ctx)}
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <TransactionDetailDrawer
+        open={Boolean(detail)}
+        onClose={() => setDetail(null)}
+        title={detail ? `Bank Transaction ${bankRefLabel(detail)}` : 'Bank Transaction'}
+        number={detail?.date}
+        typeLabel={detail?.type}
+        statusBadge={
+          detail ? (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                detail.status === 'posted'
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                  : detail.status === 'voided'
+                    ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+              }`}
+            >
+              {detail.status}
+            </span>
+          ) : null
+        }
+        sections={detail ? buildBankSections(detail, currency, onOpenGlAccount) : []}
+        actions={
+          detail
+            ? (() => {
+                const ctx = ctxFor(detail);
+                const resolved = resolveActions(buildActions(detail), ctx);
+                return resolved.length > 0 ? (
+                  <TransactionActionMenu
+                    label={`Actions for ${bankRefLabel(detail)}`}
+                    actions={resolved}
+                    executionContext={ctx}
+                    idempotencyRecordKey={detail.id}
+                    notify={notify}
+                    onExecuteAction={executeFrom(ctx)}
+                  />
+                ) : null;
+              })()
+            : null
+        }
+        audit={
+          canReadAudit ? (
+            <TransactionAuditTimeline
+              entries={audit.entries}
+              loading={audit.loading}
+              error={audit.error}
+              notice={audit.notice}
+            />
+          ) : (
+            <p className="text-[11px] text-slate-500">
+              You need the <span className="font-mono">audit:read</span> permission to view audit history.
+            </p>
+          )
+        }
+      />
+
+      {contextMenu && (
+        <TransactionContextMenu
+          actions={contextMenu.resolved}
+          point={contextMenu.point}
+          label={`Actions for ${bankRefLabel(contextMenu.tx)}`}
+          executionContext={contextMenu.ctx}
+          idempotencyRecordKey={contextMenu.tx.id}
+          notify={notify}
+          onExecuteAction={executeFrom(contextMenu.ctx)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </>
+  );
+}
+
+export const BankRegisterTable: React.FC<BankRegisterTableProps> = (props) => (
+  <TransactionSelectionProvider>
+    <BankRegisterInner {...props} />
+  </TransactionSelectionProvider>
+);
 
 export const BankingRegisterView: React.FC = () => {
   const { setCurrentView, companyProfile, tableDensity, triggerShortcutNotice } = useAccounting();
@@ -278,87 +833,6 @@ export const BankingRegisterView: React.FC = () => {
     }
   };
 
-  const buildTxActionContext = (tx: ApiBankTransaction, pendingId?: string | null): ActionEligibilityContext<ApiBankTransaction> => ({
-    authenticated,
-    permissions,
-    role: activeCompany?.role || null,
-    companyId: activeCompany?.id ?? null,
-    moduleKey: 'banking',
-    entityType: 'bank_transaction',
-    record: tx,
-    recordStatus: tx.status,
-    pendingActionIds: pendingId ? [pendingId] : [],
-  });
-
-  const buildTxActionDefinitions = (tx: ApiBankTransaction, refLabel: string): AdvancedActionDefinition<ApiBankTransaction>[] => {
-    const defs: AdvancedActionDefinition<ApiBankTransaction>[] = [];
-    if (canWrite && tx.status === 'posted' && !tx.reconciliationId) {
-      defs.push({
-        id: 'tx.toggle-cleared',
-        label: tx.cleared ? 'Mark Uncleared' : 'Mark Cleared',
-        icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />,
-        group: 'process',
-        groupLabel: 'Reconciliation',
-        requiredPermission: 'banking:write',
-        execute: async () => {
-          await commercialApi.toggleCleared(tx.id, !tx.cleared);
-          await loadData();
-        },
-      });
-      defs.push({
-        id: 'tx.void',
-        label: 'Void Transaction (Reverse GL)',
-        icon: <Ban className="w-3.5 h-3.5 text-rose-600" />,
-        group: 'danger',
-        groupLabel: 'Sensitive operations',
-        destructive: true,
-        risk: 'destructive',
-        requiredPermission: 'banking:write',
-        confirmation: { title: `Void ${refLabel}`, message: 'Void this bank transaction and reverse its GL impact?', confirmLabel: 'Void', destructive: true },
-        execute: async () => {
-          await commercialApi.voidBankTransaction(tx.id, 'Voided in register');
-          triggerShortcutNotice(`Voided ${refLabel} & reversed GL`);
-          await loadData();
-        },
-      });
-    }
-    defs.push({
-      id: 'tx.copy-ref',
-      label: 'Copy Ref #',
-      icon: <Copy className="w-3.5 h-3.5" />,
-      group: 'admin',
-      groupLabel: 'Other',
-      requiredPermission: 'banking:read',
-      execute: async () => {
-        await navigator.clipboard?.writeText(refLabel);
-        triggerShortcutNotice(`Copied ${refLabel}`);
-      },
-    });
-    return defs;
-  };
-
-  const renderTxActions = (tx: ApiBankTransaction, refLabel: string) => {
-    const defs = buildTxActionDefinitions(tx, refLabel);
-    const ctx = buildTxActionContext(tx, null);
-    const resolved = resolveActions(defs, ctx);
-    if (resolved.length === 0) return null;
-    return (
-      <AdvancedActionsMenu<ApiBankTransaction>
-        label={`Actions for ${refLabel}`}
-        actions={resolved}
-        executionContext={ctx}
-        idempotencyRecordKey={tx.id}
-        notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
-        onExecuteAction={async (action) => {
-          const def = action.definition;
-          if (typeof def.execute === 'function') {
-            await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t) });
-          }
-        }}
-      />
-    );
-  };
-
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -558,82 +1032,28 @@ export const BankingRegisterView: React.FC = () => {
       </div>
 
       {/* Register Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-[#0f3d63] text-white uppercase tracking-wider font-bold text-[10px]">
-              <tr>
-                <th className="px-3 py-2.5 w-24">DATE</th>
-                <th className="px-3 py-2.5 w-28">REF / CHK #</th>
-                <th className="px-3 py-2.5">PAYEE / MEMO</th>
-                <th className="px-3 py-2.5 w-40">CATEGORY / OFFSET</th>
-                <th className="px-3 py-2.5 w-16 text-center">CLR</th>
-                <th className="px-3 py-2.5 w-28 text-right">PAYMENT (-)</th>
-                <th className="px-3 py-2.5 w-28 text-right">DEPOSIT (+)</th>
-                <th className="px-3 py-2.5 w-32 text-right">RUNNING BAL</th>
-                <th className="px-3 py-2.5 w-16 text-right">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-xs">
-              {loading ? (
-                <tr><td colSpan={9} className="px-4 py-10 text-center font-sans text-slate-400"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Loading register...</td></tr>
-              ) : visibleTxs.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-10 text-center font-sans text-slate-400">No bank register entries match your filter.</td></tr>
-              ) : (
-                visibleTxs.map(tx => {
-                  const isDisbursement = tx.amount < 0;
-                  const cellPad = tableDensity === 'compact' ? 'px-3 py-2' : 'px-3 py-3';
-                  const refLabel = tx.checkNumber || tx.refNumber || tx.type;
-                  return (
-                    <tr key={tx.id} className={`hover:bg-blue-50/50 dark:hover:bg-slate-850 ${tx.status === 'voided' ? 'opacity-50 line-through' : ''}`}>
-                      <td className={`${cellPad} text-slate-600 dark:text-slate-400 whitespace-nowrap`}>{tx.date}</td>
-                      <td className={`${cellPad} font-bold whitespace-nowrap`}>
-                        {refLabel}
-                        {tx.reconciliationId && <span className="ml-1 text-[10px] text-emerald-600" title="Reconciled">[R]</span>}
-                      </td>
-                      <td className={`${cellPad} font-sans`}>
-                        <div className="font-semibold text-slate-900 dark:text-white">{tx.payee}</div>
-                        <div className="text-[11px] text-slate-500 italic">{tx.memo || tx.type}</div>
-                      </td>
-                      <td className={`${cellPad} font-sans text-[11px] text-slate-600 dark:text-slate-400`}>
-                        {tx.offsetAccountName || tx.category || '—'}
-                      </td>
-                      <td className={`${cellPad} text-center`}>
-                        <button
-                          disabled={!canWrite || tx.status !== 'posted' || Boolean(tx.reconciliationId)}
-                          onClick={async () => {
-                            try {
-                              await commercialApi.toggleCleared(tx.id, !tx.cleared);
-                              await loadData();
-                            } catch (err: any) {
-                              setErrorMsg(err?.message);
-                            }
-                          }}
-                          className="cursor-pointer disabled:opacity-40"
-                        >
-                          {tx.cleared ? <CheckSquare className="w-4 h-4 text-emerald-600 mx-auto" /> : <Square className="w-4 h-4 text-slate-300 mx-auto" />}
-                        </button>
-                      </td>
-                      <td className={`${cellPad} text-right font-bold tabular-nums`}>
-                        {isDisbursement ? formatCurrency(Math.abs(tx.amount), currency) : ''}
-                      </td>
-                      <td className={`${cellPad} text-right font-bold tabular-nums text-emerald-600 dark:text-emerald-400`}>
-                        {!isDisbursement ? formatCurrency(tx.amount, currency) : ''}
-                      </td>
-                      <td className={`${cellPad} text-right font-bold tabular-nums bg-slate-50 dark:bg-slate-850/50`}>
-                        {tx.status === 'posted' ? formatCurrency(tx.runningBalance, currency) : '—'}
-                      </td>
-                      <td className={`${cellPad} text-right font-sans`}>
-                        {renderTxActions(tx, refLabel)}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+      {loading ? (
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-10 text-center font-sans text-slate-400">
+          <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+          Loading register...
         </div>
-      </div>
+      ) : (
+        <BankRegisterTable
+          transactions={visibleTxs}
+          allTransactions={transactions}
+          currency={currency}
+          tableDensity={tableDensity}
+          authenticated={authenticated}
+          permissions={permissions}
+          role={activeCompany?.role || null}
+          companyId={activeCompany?.id ?? null}
+          canWrite={canWrite}
+          onSelectBankAccount={(gl) => setSelectedGlAccountId(gl)}
+          onOpenGlAccount={() => setCurrentView('chart-of-accounts')}
+          reload={loadData}
+          notify={(m, t) => triggerShortcutNotice(m, t)}
+        />
+      )}
 
       {/* EXPENSE / CHECK MODAL */}
       {modalKind === 'expense' && (

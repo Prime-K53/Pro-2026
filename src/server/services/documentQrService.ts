@@ -16,12 +16,17 @@ export interface QrVerificationResult {
 /**
  * Deterministic HMAC of a QR token used as an indexed lookup key.
  * The raw token is never stored.
+ *
+ * The key comes from QR_TOKEN_KEY / AUTH_SESSION_SECRET. If neither is set we
+ * fall back to a random per-process key (never a hardcoded constant) and warn
+ * once, so a misconfigured deployment cannot be verified with a known key.
  */
+let qrKeyFallback: string | null = null;
 function qrTokenLookup(token: string): string {
   const key =
     process.env.QR_TOKEN_KEY ||
     process.env.AUTH_SESSION_SECRET ||
-    'pms-local-dev-qr-key-change-me';
+    (qrKeyFallback ??= crypto.randomBytes(32).toString('hex'));
   return crypto.createHmac('sha256', key).update(token).digest('hex');
 }
 
@@ -94,10 +99,12 @@ export async function verifyQrToken(
     return mapVerificationRow(res.rows[0]);
   }
 
-  // Legacy fallback: rows created before token_lookup existed.
+  // Legacy fallback: rows created before token_lookup existed. Only rows with
+  // a NULL token_lookup need the O(n) scan; indexed rows were handled above.
   const allRes = await tx.query<any>(
     `SELECT company_id, document_kind, document_id, document_version, document_hash, created_at, revoked_at, qr_token_salt, qr_token_hash
-       FROM document_qr_codes`
+       FROM document_qr_codes
+      WHERE token_lookup IS NULL`
   );
   for (const row of allRes.rows) {
     const computedHash = crypto

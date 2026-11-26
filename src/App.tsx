@@ -78,11 +78,12 @@ import { NewCustomerModal } from './components/modals/NewCustomerModal';
 import { NewVendorModal } from './components/modals/NewVendorModal';
 import { NewItemModal } from './components/modals/NewItemModal';
 import { NewEmployeeModal } from './components/modals/NewEmployeeModal';
-import { OcrReceiptModal } from './components/modals/OcrReceiptModal';
+import { AiDocumentOcrModal } from './components/modals/AiDocumentOcrModal';
 import { PayBillsModal } from './components/modals/PayBillsModal';
 import { IifImportModal } from './components/modals/IifImportModal';
 import { CustomerStatementModal } from './components/modals/CustomerStatementModal';
 import { PrimeDocumentPreviewModal } from './components/modals/PrimeDocumentPreviewModal';
+import { PreviewModal } from './pdf/PreviewModal';
 import { PosModal } from './components/modals/PosModal';
 
 class AppErrorBoundary extends React.Component<
@@ -203,6 +204,8 @@ const AppContent: React.FC = () => {
     updateCompanyProfile,
     activeShortcutNotice,
     dismissShortcutNotice,
+    primePreview,
+    closePrimePreview,
   } = useAccounting();
 
   useEffect(() => {
@@ -402,11 +405,18 @@ const AppContent: React.FC = () => {
       <NewVendorModal />
       <NewItemModal />
       <NewEmployeeModal />
-      <OcrReceiptModal />
+      <AiDocumentOcrModal />
       <PayBillsModal />
       <IifImportModal />
       <CustomerStatementModal />
       <PrimeDocumentPreviewModal />
+      <PreviewModal
+        isOpen={!!primePreview}
+        onClose={closePrimePreview}
+        type={primePreview?.type as any}
+        data={primePreview?.data ?? null}
+        title={primePreview?.title}
+      />
       <PosModal />
     </div>
   );

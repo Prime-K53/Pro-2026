@@ -12,9 +12,26 @@ import {
   ApiJournalEntry,
 } from '../../services/accountingApi';
 import { formatCurrency } from '../../utils/currency';
+import { HubLandingView, HubCard } from './HubLandingView';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
-import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
+import type {
+  ActionEligibilityContext,
+  AdvancedActionDefinition,
+  ResolvedAdvancedAction,
+} from '../../actions/types';
+import {
+  TransactionDetailDrawer,
+  TransactionActionMenu,
+  TransactionContextMenu,
+  TransactionSelectionProvider,
+  useTransactionSelection,
+  TransactionBulkActionToolbar,
+  TransactionAuditTimeline,
+  useTransactionAudit,
+  createTransactionRef,
+  type DetailSection,
+} from '../../transaction-interaction';
 import {
   Plus,
   Search,
@@ -108,6 +125,534 @@ const DEBIT_NORMAL_TYPE_SET = new Set<ApiAccountType>([
   'OtherExpense',
 ]);
 
+interface JournalLedgerTableProps {
+  journals: ApiJournalEntry[];
+  currency: string;
+  authenticated: boolean;
+  permissions: string[];
+  role: string | null;
+  companyId: number | null;
+  canWriteJournals: boolean;
+  isPeriodRestricted: (txnDate: string) => boolean;
+  onOpenAccount: (accountId: number) => void;
+  onReverse: (entry: ApiJournalEntry) => void;
+  notify: (message: string, tone?: 'success' | 'error' | 'warning' | 'info') => void;
+}
+
+const journalRef = (entry: ApiJournalEntry) =>
+  createTransactionRef(entry, {
+    moduleKey: 'accounting',
+    entityType: 'journal',
+    id: (e) => e.id,
+    number: (e) => e.entryNumber,
+    status: (e) => e.status,
+  });
+
+const canReverseJournal = (entry: ApiJournalEntry, canWrite: boolean): boolean =>
+  canWrite &&
+  entry.status === 'posted' &&
+  entry.sourceType !== 'reversal' &&
+  entry.reversesTransactionId === null &&
+  entry.reversedByTransactionId === null;
+
+function buildJournalSections(
+  entry: ApiJournalEntry,
+  currency: string,
+  related: ApiJournalEntry[],
+  onOpenRelated: (entry: ApiJournalEntry) => void,
+  onOpenAccount: (accountId: number) => void
+): DetailSection[] {
+  const totalDebit = entry.lines.reduce((s, l) => s + l.debitNum, 0);
+  const totalCredit = entry.lines.reduce((s, l) => s + l.creditNum, 0);
+  const balanced = Math.abs(totalDebit - totalCredit) < 0.005;
+  const relatedReversal = entry.reversedByTransactionId
+    ? related.find((e) => e.id === entry.reversedByTransactionId)
+    : undefined;
+  const relatedOriginal = entry.reversesTransactionId
+    ? related.find((e) => e.id === entry.reversesTransactionId)
+    : undefined;
+
+  return [
+    {
+      key: 'journal',
+      title: 'Journal',
+      fields: [
+        { label: 'Reference', value: entry.reference || '—', mono: true },
+        { label: 'Transaction date', value: entry.txnDate, mono: true },
+        { label: 'Source', value: entry.sourceType },
+        { label: 'Adjusting', value: entry.isAdjusting ? 'Yes' : 'No' },
+        { label: 'Posted by', value: entry.postedByUsername || '—' },
+        { label: 'Posted at', value: entry.postedAt || '—' },
+      ],
+    },
+    {
+      key: 'description',
+      title: 'Description',
+      content: (
+        <p className="text-xs text-slate-700 dark:text-slate-200">
+          {entry.description || '—'}
+        </p>
+      ),
+    },
+    {
+      key: 'lines',
+      title: 'Debit / Credit lines',
+      content: (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-[11px]">
+            <thead className="text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-700">
+              <tr>
+                <th className="py-1.5 pr-2">Account</th>
+                <th className="py-1.5 px-2 text-right">Debit</th>
+                <th className="py-1.5 px-2 text-right">Credit</th>
+                <th className="py-1.5 pl-2">Basis</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+              {entry.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className="py-1.5 pr-2 font-sans">
+                    <button
+                      type="button"
+                      onClick={() => onOpenAccount(l.accountId)}
+                      className="text-left hover:underline text-slate-800 dark:text-slate-200"
+                    >
+                      {l.accountCode ? `${l.accountCode} ` : ''}
+                      {l.accountName}
+                    </button>
+                  </td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-blue-600 dark:text-blue-400">
+                    {l.debitNum > 0 ? formatCurrency(l.debitNum, currency) : ''}
+                  </td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {l.creditNum > 0 ? formatCurrency(l.creditNum, currency) : ''}
+                  </td>
+                  <td className="py-1.5 pl-2 text-slate-500">{l.basis}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="font-bold border-t border-slate-200 dark:border-slate-700">
+              <tr>
+                <td className="py-1.5 pr-2">Totals</td>
+                <td className="py-1.5 px-2 text-right tabular-nums">{formatCurrency(totalDebit, currency)}</td>
+                <td className="py-1.5 px-2 text-right tabular-nums">{formatCurrency(totalCredit, currency)}</td>
+                <td className="py-1.5 pl-2">
+                  <span className={balanced ? 'text-emerald-600' : 'text-rose-600'}>
+                    {balanced ? 'Balanced' : 'Out of balance'}
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ),
+    },
+    {
+      key: 'related',
+      title: 'Related transactions',
+      content:
+        relatedReversal || relatedOriginal ? (
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            {relatedOriginal && (
+              <button
+                type="button"
+                onClick={() => onOpenRelated(relatedOriginal)}
+                className="rounded border border-slate-300 dark:border-slate-700 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                Reverses {relatedOriginal.entryNumber}
+              </button>
+            )}
+            {relatedReversal && (
+              <button
+                type="button"
+                onClick={() => onOpenRelated(relatedReversal)}
+                className="rounded border border-slate-300 dark:border-slate-700 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                Reversed by {relatedReversal.entryNumber}
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="text-[11px] text-slate-400">No related transactions.</p>
+        ),
+    },
+  ];
+}
+
+function JournalLedgerInner({
+  journals,
+  currency,
+  authenticated,
+  permissions,
+  role,
+  companyId,
+  canWriteJournals,
+  isPeriodRestricted,
+  onOpenAccount,
+  onReverse,
+  notify,
+}: JournalLedgerTableProps) {
+  const selection = useTransactionSelection();
+  const [detail, setDetail] = useState<ApiJournalEntry | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    point: { x: number; y: number };
+    entry: ApiJournalEntry;
+    resolved: ResolvedAdvancedAction<ApiJournalEntry>[];
+    ctx: ActionEligibilityContext<ApiJournalEntry>;
+  } | null>(null);
+
+  useEffect(() => {
+    selection.setOrderedIds(journals.map((j) => j.id));
+  }, [journals, selection]);
+
+  const ctxFor = useCallback(
+    (entry: ApiJournalEntry): ActionEligibilityContext<ApiJournalEntry> => ({
+      authenticated,
+      permissions,
+      role,
+      companyId,
+      moduleKey: 'accounting',
+      entityType: 'journal',
+      record: entry,
+      recordStatus: entry.status,
+      financialPeriodRestricted: isPeriodRestricted(entry.txnDate),
+    }),
+    [authenticated, permissions, role, companyId, isPeriodRestricted]
+  );
+
+  const buildActions = useCallback(
+    (entry: ApiJournalEntry): AdvancedActionDefinition<ApiJournalEntry>[] => {
+      const defs: AdvancedActionDefinition<ApiJournalEntry>[] = [
+        {
+          id: 'view',
+          label: 'View Details',
+          icon: <Eye className="w-3.5 h-3.5" />,
+          group: 'view',
+          groupLabel: 'Journal',
+          requiredPermission: 'journals:read',
+          execute: async () => setDetail(entry),
+        },
+      ];
+      if (canReverseJournal(entry, canWriteJournals) && !isPeriodRestricted(entry.txnDate)) {
+        defs.push({
+          id: 'reverse',
+          label: 'Reverse (Void) Entry',
+          icon: <RotateCcw className="w-3.5 h-3.5 text-rose-600" />,
+          group: 'danger',
+          groupLabel: 'Sensitive operations',
+          destructive: true,
+          risk: 'destructive',
+          requiredPermission: 'journals:write',
+          confirmation: {
+            title: `Reverse ${entry.entryNumber}`,
+            message: 'Reverse this journal entry using a compensating entry?',
+            confirmLabel: 'Reverse',
+            destructive: true,
+          },
+          execute: async () => onReverse(entry),
+        });
+      }
+      defs.push({
+        id: 'copy-entry',
+        label: 'Copy Entry #',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        group: 'admin',
+        groupLabel: 'Other',
+        requiredPermission: 'journals:read',
+        execute: async () => {
+          await navigator.clipboard?.writeText(entry.entryNumber);
+          notify(`Copied ${entry.entryNumber}`);
+        },
+      });
+      if (entry.reversedByTransactionId) {
+        defs.push({
+          id: 'view-reversal',
+          label: 'View Reversal',
+          icon: <RotateCcw className="w-3.5 h-3.5" />,
+          group: 'view',
+          groupLabel: 'Journal',
+          requiredPermission: 'journals:read',
+          execute: async () => {
+            const rev = journals.find((j) => j.id === entry.reversedByTransactionId);
+            if (rev) setDetail(rev);
+            else notify('Reversal entry not found in the loaded range', 'warning');
+          },
+        });
+      }
+      defs.push({
+        id: 'audit',
+        label: 'View Audit History',
+        icon: <BookOpen className="w-3.5 h-3.5" />,
+        group: 'investigate',
+        groupLabel: 'Investigation',
+        requiredPermission: 'audit:read',
+        execute: async () => setDetail(entry),
+      });
+      if (entry.lines[0]) {
+        defs.push({
+          id: 'open-account',
+          label: 'Open Ledger Account',
+          icon: <Layers className="w-3.5 h-3.5" />,
+          group: 'navigation',
+          groupLabel: 'Navigation',
+          requiredPermission: 'accounts:read',
+          execute: async () => onOpenAccount(entry.lines[0].accountId),
+        });
+      }
+      return defs;
+    },
+    [canWriteJournals, isPeriodRestricted, journals, notify, onOpenAccount, onReverse]
+  );
+
+  const executeFrom = useCallback(
+    (ctx: ActionEligibilityContext<ApiJournalEntry>) =>
+      async (action: ResolvedAdvancedAction<ApiJournalEntry>) => {
+        const def = action.definition;
+        if (typeof def.execute === 'function') {
+          await def.execute(ctx, { notify });
+        }
+      },
+    [notify]
+  );
+
+  const detailRef = useMemo(() => (detail ? journalRef(detail) : null), [detail]);
+  const audit = useTransactionAudit(undefined, detailRef, Boolean(detail));
+  const allSelected = journals.length > 0 && journals.every((j) => selection.isSelected(j.id));
+  const canReadAudit = permissions.includes('audit:read');
+
+  const bulkReverse: AdvancedActionDefinition<ApiJournalEntry> = {
+    id: 'bulk-reverse',
+    label: 'Reverse eligible',
+    icon: <RotateCcw className="w-3.5 h-3.5" />,
+    group: 'process',
+    requiredPermission: 'journals:write',
+    applicableStatuses: ['posted'],
+    destructive: true,
+    risk: 'destructive',
+    confirmation: {
+      title: 'Reverse eligible journals',
+      message: 'Reverse every selected posted journal using compensating entries?',
+      confirmLabel: 'Reverse',
+      destructive: true,
+      requireReason: true,
+      reasonLabel: 'Reversal reason',
+    },
+    execute: async (ctx, helpers) => {
+      const entry = ctx.record as ApiJournalEntry;
+      await accountingApi.reverseJournal(entry.id, {
+        reason: helpers.reason,
+        idempotencyKey: helpers.idempotencyKey,
+      });
+      return { status: 'success', message: `Reversed ${entry.entryNumber}` };
+    },
+  };
+
+  const selectedEntries = journals.filter((j) => selection.isSelected(j.id));
+
+  return (
+    <>
+      {selectedEntries.length > 0 && (
+        <TransactionBulkActionToolbar
+          definitions={[bulkReverse]}
+          records={selectedEntries}
+          getRef={journalRef}
+          buildContext={ctxFor}
+          notify={notify}
+        />
+      )}
+
+      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="px-3 py-2.5 w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all journals"
+                    checked={allSelected}
+                    onChange={() => (allSelected ? selection.clear() : selection.selectAll(journals.map((j) => j.id)))}
+                  />
+                </th>
+                <th className="px-4 py-2.5">ENTRY #</th>
+                <th className="px-4 py-2.5">DATE</th>
+                <th className="px-4 py-2.5">SOURCE / DESCRIPTION</th>
+                <th className="px-4 py-2.5">SPLIT LINES</th>
+                <th className="px-4 py-2.5 text-right">AMOUNT</th>
+                <th className="px-4 py-2.5 text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {journals.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                    No journal transactions posted yet.
+                  </td>
+                </tr>
+              ) : (
+                journals.map((je) => {
+                  const ctx = ctxFor(je);
+                  const resolved = resolveActions(buildActions(je), ctx);
+                  const isSelected = selection.isSelected(je.id);
+                  return (
+                    <tr
+                      key={je.id}
+                      onClick={() => setDetail(je)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setContextMenu({ point: { x: e.clientX, y: e.clientY }, entry: je, resolved, ctx });
+                      }}
+                      className={`cursor-pointer transition-colors ${
+                        je.status === 'voided' ? 'bg-slate-50/70 dark:bg-slate-850/40 opacity-75' : ''
+                      } ${isSelected ? 'bg-blue-50 dark:bg-blue-950/40' : 'hover:bg-slate-50 dark:hover:bg-slate-850/50'}`}
+                    >
+                      <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${je.entryNumber}`}
+                          checked={isSelected}
+                          onChange={(e) => selection.toggle(je.id, { shiftKey: (e.nativeEvent as MouseEvent).shiftKey })}
+                        />
+                      </td>
+                      <td className="px-4 py-3 font-mono font-bold text-slate-900 dark:text-white align-top whitespace-nowrap">
+                        <div>{je.entryNumber}</div>
+                        <div className="text-[10px] font-normal text-slate-500">
+                          {je.status.toUpperCase()}
+                          {je.isAdjusting ? ' · ADJ' : ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300 align-top whitespace-nowrap">
+                        <div>{je.txnDate}</div>
+                        {je.reference && <div className="text-[10px] text-slate-400">Ref: {je.reference}</div>}
+                      </td>
+                      <td className="px-4 py-3 align-top max-w-xs">
+                        <div className="font-semibold text-slate-900 dark:text-white">{je.description || '—'}</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Source: {je.sourceType}
+                          {je.postedByUsername ? ` · Posted by ${je.postedByUsername}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="space-y-1 font-mono text-[11px]">
+                          {je.lines.map((l) => (
+                            <div key={l.id} className="flex items-center justify-between gap-4">
+                              <span className="font-sans text-slate-700 dark:text-slate-300">
+                                {l.accountCode ? `${l.accountCode} ` : ''}
+                                {l.accountName}
+                              </span>
+                              <span className="tabular-nums shrink-0">
+                                {l.debitNum > 0 ? (
+                                  <span className="text-blue-600 dark:text-blue-400">Dr {formatCurrency(l.debitNum, currency)}</span>
+                                ) : (
+                                  <span className="text-emerald-600 dark:text-emerald-400">Cr {formatCurrency(l.creditNum, currency)}</span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono tabular-nums font-bold align-top whitespace-nowrap">
+                        {formatCurrency(Number(je.totalDebits), currency)}
+                      </td>
+                      <td className="px-4 py-3 text-right align-top" onClick={(e) => e.stopPropagation()}>
+                        {resolved.length > 0 && (
+                          <TransactionActionMenu
+                            label={`Actions for ${je.entryNumber}`}
+                            actions={resolved}
+                            executionContext={ctx}
+                            idempotencyRecordKey={je.id}
+                            notify={notify}
+                            onExecuteAction={executeFrom(ctx)}
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <TransactionDetailDrawer
+        open={Boolean(detail)}
+        onClose={() => setDetail(null)}
+        title={detail ? `Journal ${detail.entryNumber}` : 'Journal'}
+        number={detail?.txnDate}
+        typeLabel={detail?.sourceType}
+        statusBadge={
+          detail ? (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                detail.status === 'posted'
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                  : detail.status === 'voided'
+                    ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                    : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+              }`}
+            >
+              {detail.status}
+            </span>
+          ) : null
+        }
+        sections={detail ? buildJournalSections(detail, currency, journals, setDetail, onOpenAccount) : []}
+        actions={
+          detail
+            ? (() => {
+                const ctx = ctxFor(detail);
+                const resolved = resolveActions(buildActions(detail), ctx);
+                return resolved.length > 0 ? (
+                  <TransactionActionMenu
+                    label={`Actions for ${detail.entryNumber}`}
+                    actions={resolved}
+                    executionContext={ctx}
+                    idempotencyRecordKey={detail.id}
+                    notify={notify}
+                    onExecuteAction={executeFrom(ctx)}
+                  />
+                ) : null;
+              })()
+            : null
+        }
+        audit={
+          canReadAudit ? (
+            <TransactionAuditTimeline
+              entries={audit.entries}
+              loading={audit.loading}
+              error={audit.error}
+              notice={audit.notice}
+            />
+          ) : (
+            <p className="text-[11px] text-slate-500">
+              You need the <span className="font-mono">audit:read</span> permission to view audit history.
+            </p>
+          )
+        }
+      />
+
+      {contextMenu && (
+        <TransactionContextMenu
+          actions={contextMenu.resolved}
+          point={contextMenu.point}
+          label={`Actions for ${contextMenu.entry.entryNumber}`}
+          executionContext={contextMenu.ctx}
+          idempotencyRecordKey={contextMenu.entry.id}
+          notify={notify}
+          onExecuteAction={executeFrom(contextMenu.ctx)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </>
+  );
+}
+
+export const JournalLedgerTable: React.FC<JournalLedgerTableProps> = (props) => (
+  <TransactionSelectionProvider>
+    <JournalLedgerInner {...props} />
+  </TransactionSelectionProvider>
+);
+
 export const ChartOfAccountsView: React.FC = () => {
   const { companyProfile, setIsJournalEntryOpen, triggerShortcutNotice } = useAccounting();
   const { activeCompany, hasPermission, authenticated, permissions } = useAuth();
@@ -121,6 +666,7 @@ export const ChartOfAccountsView: React.FC = () => {
   const canReopenPeriods = hasPermission('periods:reopen');
 
   const [activeTab, setActiveTab] = useState<CoaTab>('accounts');
+  const [hubOpen, setHubOpen] = useState(false);
   const [accounts, setAccounts] = useState<ApiAccount[]>([]);
   const [journals, setJournals] = useState<ApiJournalEntry[]>([]);
   const [periods, setPeriods] = useState<ApiFiscalPeriod[]>([]);
@@ -498,26 +1044,17 @@ export const ChartOfAccountsView: React.FC = () => {
     );
   };
 
-  const renderJournalActions = (je: any, canReverseThis: boolean) => {
-    const defs: AdvancedActionDefinition<any>[] = [
-      { id: 'view-details', label: 'View Details', icon: <Eye className="w-3.5 h-3.5" />, group: 'view', groupLabel: 'Journal', requiredPermission: 'accounting:read', execute: async () => { try { const entry = await accountingApi.getJournal(je.id); setViewingJournal(entry); } catch (err: any) { triggerShortcutNotice(err?.message || 'Failed to load journal details', 'error'); } } },
-    ];
-    if (canReverseThis) defs.push({ id: 'reverse', label: 'Reverse (Void) Entry', icon: <RotateCcw className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'accounting:reverse', confirmation: { title: `Reverse ${je.entryNumber}`, message: 'Reverse this journal entry?', confirmLabel: 'Reverse', destructive: true }, execute: async () => { setReversingEntry(je); setReversalDate(je.txnDate); setReversalReason(''); } });
-    defs.push({ id: 'copy-entry', label: 'Copy Entry #', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'accounting:read', execute: async () => { await navigator.clipboard?.writeText(je.entryNumber); triggerShortcutNotice(`Copied ${je.entryNumber}`); } });
-    const ctx = buildCoaActionContext(je, null);
-    const resolved = resolveActions(defs, ctx);
-    if (resolved.length === 0) return null;
-    return (
-      <AdvancedActionsMenu<any>
-        label={`Actions for ${je.entryNumber}`}
-        actions={resolved}
-        executionContext={ctx}
-        idempotencyRecordKey={je.id}
-        notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
-        onExecuteAction={async (action) => { const def = action.definition; if (typeof def.execute === 'function') await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t) }); }}
-      />
-    );
-  };
+  const isPeriodRestricted = useCallback(
+    (txnDate: string) =>
+      periods.some((p) => p.status !== 'open' && txnDate >= p.start_date && txnDate <= p.end_date),
+    [periods]
+  );
+
+  const handleOpenLedgerAccount = useCallback((accountId: number) => {
+    setSelectedAccountId(accountId);
+    setActiveTab('accounts');
+    setHubOpen(true);
+  }, []);
 
   const renderPeriodActions = (p: any) => {
     const defs: AdvancedActionDefinition<any>[] = [];
@@ -540,25 +1077,63 @@ export const ChartOfAccountsView: React.FC = () => {
     );
   };
 
-  return (
-    <div className="p-6 space-y-5 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-            Accounting Foundation & General Ledger
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Double-entry Chart of Accounts, immutable journals, traceable reversals, opening balances, and period closing locks.
-          </p>
-        </div>
+  const coaCards: HubCard[] = [
+    {
+      id: 'accounts',
+      label: 'Chart of Accounts',
+      description: 'Account register, balances and detail drill-down.',
+      icon: BookOpen,
+      count: accounts.length,
+    },
+    ...(canReadJournals
+      ? [
+          {
+            id: 'journals',
+            label: 'General Journal',
+            description: 'Immutable double-entry journals and reversals.',
+            icon: Layers,
+            count: journals.length,
+          },
+        ]
+      : []),
+    ...(canWriteJournals
+      ? [
+          {
+            id: 'opening',
+            label: 'Opening Balances',
+            description: 'Enter and post opening balances for new accounts.',
+            icon: Scale,
+          },
+        ]
+      : []),
+    {
+      id: 'periods',
+      label: 'Fiscal Periods',
+      description: 'Accounting periods and closing locks.',
+      icon: Calendar,
+      count: periods.length,
+    },
+  ];
 
+  return (
+    <>
+    <HubLandingView
+      title="Accounting"
+      subtitle="Double-entry Chart of Accounts, immutable journals, traceable reversals, opening balances and period closing locks."
+      cards={coaCards}
+      activeId={hubOpen ? activeTab : null}
+      onOpen={id => {
+        setActiveTab(id as CoaTab);
+        setHubOpen(true);
+      }}
+      onBack={() => setHubOpen(false)}
+      headerActions={
         <div className="flex flex-wrap items-center gap-2">
           {canRebuild && (
             <button
               type="button"
               onClick={handleRebuildBalances}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold"
+              className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Rebuild Balances</span>
@@ -568,7 +1143,7 @@ export const ChartOfAccountsView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsJournalEntryOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold"
+              className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
             >
               <Scale className="w-3.5 h-3.5" />
               <span>New Journal Entry</span>
@@ -578,71 +1153,16 @@ export const ChartOfAccountsView: React.FC = () => {
             <button
               type="button"
               onClick={openCreateAccountModal}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs"
+              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#1f8577] to-[#0f544c] px-4 py-2 text-xs font-bold text-white shadow-[0_4px_10px_-3px_rgba(31,133,119,0.5)] transition-transform hover:-translate-y-px"
             >
               <Plus className="w-4 h-4" />
               <span>Add Account</span>
             </button>
           )}
         </div>
-      </div>
-
-      {/* Sub-module Tabs */}
-      <div className="flex flex-wrap items-center gap-1.5 p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold">
-        <button
-          type="button"
-          onClick={() => setActiveTab('accounts')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors ${
-            activeTab === 'accounts'
-              ? 'bg-[#0f3d63] text-white'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <BookOpen className="w-3.5 h-3.5" />
-          <span>Chart of Accounts & Register</span>
-        </button>
-        {canReadJournals && (
-          <button
-            type="button"
-            onClick={() => setActiveTab('journals')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors ${
-              activeTab === 'journals'
-                ? 'bg-[#0f3d63] text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>General Journal & Reversals ({journals.length})</span>
-          </button>
-        )}
-        {canWriteJournals && (
-          <button
-            type="button"
-            onClick={() => setActiveTab('opening')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors ${
-              activeTab === 'opening'
-                ? 'bg-[#0f3d63] text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Scale className="w-3.5 h-3.5" />
-            <span>Opening Balances</span>
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setActiveTab('periods')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors ${
-            activeTab === 'periods'
-              ? 'bg-[#0f3d63] text-white'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Calendar className="w-3.5 h-3.5" />
-          <span>Fiscal Periods & Closing ({periods.length})</span>
-        </button>
-      </div>
-
+      }
+    >
+      <div className="space-y-5">
       {errorBanner && (
         <div
           role="alert"
@@ -854,108 +1374,23 @@ export const ChartOfAccountsView: React.FC = () => {
 
       {/* TAB 2: GENERAL JOURNAL & TRACEABLE REVERSALS */}
       {activeTab === 'journals' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
-                <tr>
-                  <th className="px-4 py-2.5">ENTRY #</th>
-                  <th className="px-4 py-2.5">DATE</th>
-                  <th className="px-4 py-2.5">SOURCE / DESCRIPTION</th>
-                  <th className="px-4 py-2.5">SPLIT LINES</th>
-                  <th className="px-4 py-2.5 text-right">AMOUNT</th>
-                  <th className="px-4 py-2.5 text-right">ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {journals.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
-                      No journal transactions posted yet.
-                    </td>
-                  </tr>
-                ) : (
-                  journals.map(je => {
-                    const canReverseThis =
-                      canWriteJournals &&
-                      je.status === 'posted' &&
-                      je.sourceType !== 'reversal' &&
-                      je.reversesTransactionId === null &&
-                      je.reversedByTransactionId === null;
-
-                    return (
-                      <tr
-                        key={je.id}
-                        className={je.status === 'voided' ? 'bg-slate-50/70 dark:bg-slate-850/40 opacity-75' : ''}
-                      >
-                        <td className="px-4 py-3 font-mono font-bold text-slate-900 dark:text-white align-top whitespace-nowrap">
-                          <div>{je.entryNumber}</div>
-                          <div className="text-[10px] font-normal text-slate-500">
-                            {je.status.toUpperCase()}
-                            {je.isAdjusting ? ' · ADJ' : ''}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300 align-top whitespace-nowrap">
-                          <div>{je.txnDate}</div>
-                          {je.reference && <div className="text-[10px] text-slate-400">Ref: {je.reference}</div>}
-                        </td>
-                        <td className="px-4 py-3 align-top max-w-xs">
-                          <div className="font-semibold text-slate-900 dark:text-white">
-                            {je.description || '—'}
-                          </div>
-                          <div className="text-[11px] text-slate-500 mt-0.5">
-                            Source: {je.sourceType}
-                            {je.postedByUsername ? ` · Posted by ${je.postedByUsername}` : ''}
-                          </div>
-                          {je.reversedByTransactionId && (
-                            <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 mt-0.5">
-                              Voided by txn #{je.reversedByTransactionId}
-                            </div>
-                          )}
-                          {je.reversesTransactionId && (
-                            <div className="text-[11px] font-mono text-blue-700 dark:text-blue-400 mt-0.5">
-                              Reverses txn #{je.reversesTransactionId}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          <div className="space-y-1 font-mono text-[11px]">
-                            {je.lines.map(l => (
-                              <div key={l.id} className="flex items-center justify-between gap-4">
-                                <span className="font-sans text-slate-700 dark:text-slate-300">
-                                  {l.accountCode ? `${l.accountCode} ` : ''}
-                                  {l.accountName}
-                                  {l.basis !== 'both' ? ` [${l.basis}]` : ''}
-                                </span>
-                                <span className="tabular-nums shrink-0">
-                                  {l.debitNum > 0 ? (
-                                    <span className="text-blue-600 dark:text-blue-400">
-                                      Dr {formatCurrency(l.debitNum, currency)}
-                                    </span>
-                                  ) : (
-                                    <span className="text-emerald-600 dark:text-emerald-400">
-                                      Cr {formatCurrency(l.creditNum, currency)}
-                                    </span>
-                                  )}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums font-bold align-top whitespace-nowrap">
-                          {formatCurrency(Number(je.totalDebits), currency)}
-                        </td>
-                        <td className="px-4 py-3 text-right align-top">
-                          {renderJournalActions(je, canReverseThis)}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <JournalLedgerTable
+          journals={journals}
+          currency={currency}
+          authenticated={authenticated}
+          permissions={permissions}
+          role={activeCompany?.role || null}
+          companyId={activeCompany?.id ?? null}
+          canWriteJournals={canWriteJournals}
+          isPeriodRestricted={isPeriodRestricted}
+          onOpenAccount={handleOpenLedgerAccount}
+          onReverse={(entry) => {
+            setReversingEntry(entry);
+            setReversalDate(entry.txnDate);
+            setReversalReason('');
+          }}
+          notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
+        />
       )}
 
       {/* TAB 3: OPENING BALANCES WIZARD */}
@@ -1496,5 +1931,7 @@ export const ChartOfAccountsView: React.FC = () => {
         </div>
       )}
     </div>
+    </HubLandingView>
+    </>
   );
 };

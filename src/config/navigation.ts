@@ -410,7 +410,7 @@ export const QUICK_ACTIONS: QuickActionDefinition[] = [
     shortLabel: 'POS Checkout',
     icon: ShoppingCart,
     action: 'activities.pos',
-    tone: 'emerald',
+    tone: 'default',
   },
   {
     id: 'invoice',
@@ -418,7 +418,7 @@ export const QUICK_ACTIONS: QuickActionDefinition[] = [
     shortLabel: '+ Invoice',
     icon: FileText,
     action: 'activities.invoice',
-    tone: 'gold',
+    tone: 'default',
     shortcut: 'Alt+N',
   },
   {

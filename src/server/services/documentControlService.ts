@@ -1,6 +1,7 @@
 import type { Transaction } from '@electric-sql/pglite';
 import { AccountingError, type ActorContext } from './accountingEngine.ts';
 import { writeAuditLog } from '../audit.ts';
+import { deleteAttachmentRecord } from './documentsService.ts';
 
 export async function listDocumentVersions(tx: Transaction, companyId: number, entityType: string, entityId: number) {
   const res = await tx.query<any>(
@@ -35,4 +36,41 @@ export async function setDocumentRetention(tx: Transaction, companyId: number, a
   if (res.rows.length === 0) throw new AccountingError(404, 'Attachment not found', 'NOT_FOUND');
   await writeAuditLog(tx, { companyId, actorUserId: actor.userId, actorUsername: actor.username, action: 'DOCUMENT_RETENTION_SET', tableName: 'attachments', recordId: attachmentId, newValues: { retentionUntil } });
   return { id: Number(res.rows[0].id), retentionUntil: res.rows[0].retention_until };
+}
+
+/**
+ * Enforce retention: delete attachments whose retention_until date has passed.
+ * Attachments with a pending approval (potential legal hold) are skipped.
+ * Returns the ids purged so the caller can report/audit the run.
+ */
+export async function purgeExpiredRetentions(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  attachmentsDir: string
+): Promise<{ purged: number; ids: number[] }> {
+  const res = await tx.query<{ id: number }>(
+    `SELECT id FROM attachments
+      WHERE company_id = $1
+        AND retention_until IS NOT NULL
+        AND retention_until < CURRENT_DATE
+        AND (approval_status IS NULL OR approval_status <> 'pending')`,
+    [companyId]
+  );
+  const ids = res.rows.map(r => Number(r.id));
+  for (const id of ids) {
+    await deleteAttachmentRecord(tx, companyId, actor, id, attachmentsDir);
+  }
+  if (ids.length > 0) {
+    await writeAuditLog(tx, {
+      companyId,
+      actorUserId: actor.userId,
+      actorUsername: actor.username,
+      action: 'DOCUMENT_RETENTION_PURGED',
+      tableName: 'attachments',
+      recordId: 0,
+      newValues: { purged: ids.length, ids },
+    });
+  }
+  return { purged: ids.length, ids };
 }
