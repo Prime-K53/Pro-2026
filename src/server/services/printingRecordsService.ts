@@ -1132,6 +1132,277 @@ export async function cancelPrintingContract(
   return getPrintingContract(tx, companyId, contractId);
 }
 
+/**
+ * Void a contract as a compensating reversal for one raised in error.
+ *
+ * Distinct from `cancelPrintingContract`:
+ *   - cancel settles a remaining balance by refunding to the bank or
+ *     forfeiting to income;
+ *   - void returns any unallocated retainer to the customer wallet (the exact
+ *     inverse of the funding allocation) and posts no income/forfeit.
+ *
+ * Void is only permitted while nothing has been consumed
+ * (`completed_assessments = 0`) and a positive balance remains, is idempotent
+ * (a second void is a 409), and is terminal.
+ */
+export async function voidPrintingContract(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  contractId: number,
+  input: { reason: string }
+) {
+  const row = await loadContract(tx, companyId, contractId, true);
+  if (row.status === 'voided') {
+    throw new AccountingError(409, 'Contract is already voided', 'CONTRACT_ALREADY_VOIDED');
+  }
+  if (!['draft', 'active', 'suspended'].includes(row.status)) {
+    throw new AccountingError(
+      409,
+      'Contract cannot be voided in its current status',
+      'INVALID_CONTRACT_STATUS'
+    );
+  }
+  assertTransition(row.status as PrintingContractStatus, 'VOID', 'voided', actor.role);
+
+  const reason = String(input.reason || '').trim();
+  if (!reason) {
+    throw new AccountingError(400, 'A void reason is required', 'VOID_REASON_REQUIRED');
+  }
+  if (Number(row.completed_assessments) > 0) {
+    throw new AccountingError(
+      409,
+      'A contract with completed assessments cannot be voided; cancel it instead',
+      'CONTRACT_HAS_COMPLETED_ASSESSMENTS'
+    );
+  }
+
+  const remaining = parseDecimal4(row.remaining_balance);
+  if (remaining <= 0n) {
+    throw new AccountingError(
+      409,
+      'There is no remaining retainer to void',
+      'NOTHING_TO_VOID'
+    );
+  }
+
+  const wallet = await getOrCreateWallet(tx, companyId, Number(row.school_customer_id));
+  const alloc = await tx.query<{ id: number }>(
+    `SELECT id FROM customer_wallet_allocations
+      WHERE company_id = $1 AND contract_id = $2 AND allocation_type = 'contract'
+      ORDER BY id ASC
+      LIMIT 1
+      FOR UPDATE`,
+    [companyId, contractId]
+  );
+  if (alloc.rows.length === 0) {
+    throw new AccountingError(409, 'Contract allocation not found', 'CONTRACT_ALLOCATION_NOT_FOUND');
+  }
+  const allocationId = Number(alloc.rows[0].id);
+
+  await releaseWalletAllocation(tx, companyId, actor, {
+    customerId: Number(row.school_customer_id),
+    walletId: wallet.walletId,
+    allocationId,
+    amount: formatDecimal4(remaining),
+    idempotencyKey: `contract-void-${contractId}-release`,
+    notes: `Void reversal: ${reason}`,
+  });
+
+  await tx.query(
+    `UPDATE printing_contracts
+        SET status = 'voided',
+            voided_at = NOW(),
+            voided_by = $3,
+            void_reason = $4,
+            remaining_balance = 0,
+            credit_balance = FALSE
+      WHERE company_id = $1 AND id = $2`,
+    [companyId, contractId, actor.userId, reason]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'PRINTING_CONTRACT_VOIDED',
+    tableName: 'printing_contracts',
+    recordId: contractId,
+    oldValues: { status: row.status, remainingBalance: formatDecimal4(remaining) },
+    newValues: { status: 'voided', reason, releasedToWallet: formatDecimal4(remaining) },
+  });
+
+  return getPrintingContract(tx, companyId, contractId);
+}
+
+/**
+ * Read-only reconciliation report for printing contracts, grouped by customer.
+ *
+ * Surfaces commercial value, funding position, document gaps and suspected
+ * discrepancies without mutating anything.
+ */
+export async function getContractReconciliation(tx: Transaction, companyId: number) {
+  const res = await tx.query<{
+    school_customer_id: string;
+    contract_count: string;
+    total_value: string;
+    consumed: string;
+    reserved: string;
+    total_assessments: string;
+    completed_assessments: string;
+    missing_docs: string;
+    discrepancies: string;
+  }>(
+    `SELECT
+        school_customer_id::text AS school_customer_id,
+        COUNT(*)::text AS contract_count,
+        COALESCE(SUM(total_prepaid_amount), 0)::text AS total_value,
+        COALESCE(SUM(total_prepaid_amount - remaining_balance), 0)::text AS consumed,
+        COALESCE(SUM(remaining_balance), 0)::text AS reserved,
+        COALESCE(SUM(total_assessments), 0)::text AS total_assessments,
+        COALESCE(SUM(completed_assessments), 0)::text AS completed_assessments,
+        COUNT(*) FILTER (WHERE status = 'active' AND deposit_invoice_id IS NULL)::text AS missing_docs,
+        COUNT(*) FILTER (WHERE credit_balance = TRUE OR (status = 'completed' AND remaining_balance > 0))::text AS discrepancies
+      FROM printing_contracts
+     WHERE company_id = $1
+     GROUP BY school_customer_id
+     ORDER BY school_customer_id ASC`,
+    [companyId]
+  );
+
+  const customers = res.rows.map(r => ({
+    customerId: Number(r.school_customer_id),
+    contractCount: Number(r.contract_count),
+    totalValue: Number(r.total_value),
+    consumed: Number(r.consumed),
+    reserved: Number(r.reserved),
+    totalAssessments: Number(r.total_assessments),
+    completedAssessments: Number(r.completed_assessments),
+    missingDocuments: Number(r.missing_docs),
+    discrepancies: Number(r.discrepancies),
+  }));
+
+  const totals = customers.reduce(
+    (acc, c) => ({
+      customers: acc.customers + 1,
+      contracts: acc.contracts + c.contractCount,
+      discrepancies: acc.discrepancies + c.discrepancies,
+      missingDocuments: acc.missingDocuments + c.missingDocuments,
+      totalValue: acc.totalValue + c.totalValue,
+    }),
+    { customers: 0, contracts: 0, discrepancies: 0, missingDocuments: 0, totalValue: 0 }
+  );
+
+  return { customers, totals };
+}
+
+/**
+ * List the append-only signature ceremony records for a contract.
+ */
+export async function listContractSignatures(
+  tx: Transaction,
+  companyId: number,
+  contractId: number
+) {
+  const res = await tx.query(
+    `SELECT id, signer_role, signer_name, method, document_version, signed_at
+       FROM contract_signatures
+      WHERE company_id = $1 AND contract_id = $2
+      ORDER BY signed_at ASC, id ASC`,
+    [companyId, contractId]
+  );
+  return res.rows;
+}
+
+/**
+ * Record a signature in the contract signing ceremony.
+ *
+ * The company must sign before the customer, each role signs at most once, and
+ * records are append-only (never updated or deleted).
+ */
+export async function recordContractSignature(
+  tx: Transaction,
+  companyId: number,
+  actor: ActorContext,
+  contractId: number,
+  input: {
+    signerRole: 'company' | 'customer';
+    signerName: string;
+    method: 'drawn' | 'typed' | 'upload';
+    signatureData: string;
+    documentVersion?: string | null;
+  }
+) {
+  const contract = await loadContract(tx, companyId, contractId);
+  const signerName = String(input.signerName || '').trim();
+  if (!signerName) throw new AccountingError(400, 'Signer name is required', 'SIGNER_REQUIRED');
+  const signatureData = String(input.signatureData || '').trim();
+  if (!signatureData) {
+    throw new AccountingError(400, 'Signature data is required', 'SIGNATURE_DATA_REQUIRED');
+  }
+  if (input.signerRole !== 'company' && input.signerRole !== 'customer') {
+    throw new AccountingError(400, 'Invalid signer role', 'INVALID_SIGNER_ROLE');
+  }
+
+  const existing = await tx.query<{ signer_role: string }>(
+    `SELECT signer_role FROM contract_signatures
+      WHERE company_id = $1 AND contract_id = $2
+      ORDER BY signed_at ASC, id ASC`,
+    [companyId, contractId]
+  );
+  const roles = existing.rows.map(r => r.signer_role);
+  if (roles.includes(input.signerRole)) {
+    throw new AccountingError(
+      409,
+      `The ${input.signerRole} has already signed`,
+      'ALREADY_SIGNED'
+    );
+  }
+  if (input.signerRole === 'customer' && !roles.includes('company')) {
+    throw new AccountingError(
+      409,
+      'The company must sign before the customer',
+      'COMPANY_SIGNATURE_REQUIRED'
+    );
+  }
+
+  const ins = await tx.query<{ id: number; signed_at: string }>(
+    `INSERT INTO contract_signatures (
+       company_id, contract_id, signer_role, signer_name, method, signature_data,
+       document_version, created_by
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, signed_at`,
+    [
+      companyId,
+      contractId,
+      input.signerRole,
+      signerName,
+      input.method,
+      signatureData,
+      input.documentVersion?.trim() || null,
+      actor.userId,
+    ]
+  );
+
+  await writeAuditLog(tx, {
+    companyId,
+    actorUserId: actor.userId,
+    actorUsername: actor.username,
+    action: 'PRINTING_CONTRACT_SIGNED',
+    tableName: 'contract_signatures',
+    recordId: Number(ins.rows[0].id),
+    newValues: {
+      contractId,
+      contractNumber: contract.contract_number,
+      signerRole: input.signerRole,
+      signerName,
+      method: input.method,
+    },
+  });
+
+  return { id: Number(ins.rows[0].id), signedAt: String(ins.rows[0].signed_at) };
+}
+
 export interface ExamPaperInput {
   subjectName: string;
   pages: number;

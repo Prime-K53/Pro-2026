@@ -47,6 +47,7 @@ import {
   listExamPaperEvents,
   fundContractFromWallet,
   getPrintingContract,
+  getContractReconciliation,
   listContractAmendments,
   listContractWalletTransactions,
   listExamPapers,
@@ -54,6 +55,8 @@ import {
   linkContractDepositInvoice,
   linkMilestoneInvoice,
   recordContractAcceptance,
+  recordContractSignature,
+  listContractSignatures,
   rejectContractAmendment,
   removeContractAssessment,
   renewPrintingContract,
@@ -67,6 +70,7 @@ import {
   updateContractAssessment,
   updateExamPaperDetails,
   updateExamPaperStatus,
+  voidPrintingContract,
 } from '../services/printingRecordsService.ts';
 
 function toActor(req: Request): ActorContext {
@@ -669,6 +673,21 @@ export function createPrintingRouter(db: ServerDatabase): Router {
     }
   });
 
+  router.post('/printing/contracts/:id/void', contractMoneyLimit, requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const contract = await db.withCompanyDb(req.auth!.companyId, tx =>
+        voidPrintingContract(tx, req.auth!.companyId, toActor(req), id, {
+          reason: req.body?.reason ?? '',
+        })
+      );
+      return res.json({ contract });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
   router.post('/printing/contracts/:id/renew', contractMoneyLimit, requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -736,6 +755,54 @@ export function createPrintingRouter(db: ServerDatabase): Router {
         })
       );
       return res.status(201).json({ acceptance });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.get('/printing/contracts/reconciliation', requirePermission('reports:view_reconciliation'), async (req: Request, res: Response) => {
+    try {
+      const report = await db.withCompanyDb(req.auth!.companyId, tx =>
+        getContractReconciliation(tx, req.auth!.companyId)
+      );
+      return res.json({ report });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.get('/printing/contracts/:id/signatures', requirePermission('printing:read'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const signatures = await db.withCompanyDb(req.auth!.companyId, tx =>
+        listContractSignatures(tx, req.auth!.companyId, id)
+      );
+      return res.json({ signatures });
+    } catch (err) {
+      return handlePrintingError(res, err);
+    }
+  });
+
+  router.post('/printing/contracts/:id/signatures', requirePermission('printing:contracts:manage'), async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid contract id' });
+      const body = req.body || {};
+      const method = String(body.method || '');
+      if (!['drawn', 'typed', 'upload'].includes(method)) {
+        return res.status(400).json({ error: 'Invalid signature method' });
+      }
+      const signature = await db.withCompanyDb(req.auth!.companyId, tx =>
+        recordContractSignature(tx, req.auth!.companyId, toActor(req), id, {
+          signerRole: body.signerRole === 'customer' ? 'customer' : 'company',
+          signerName: String(body.signerName || ''),
+          method: method as 'drawn' | 'typed' | 'upload',
+          signatureData: String(body.signatureData || ''),
+          documentVersion: body.documentVersion ?? null,
+        })
+      );
+      return res.status(201).json({ signature });
     } catch (err) {
       return handlePrintingError(res, err);
     }

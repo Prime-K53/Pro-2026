@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
+import { useAuth } from '../../context/AuthContext';
 import { Account, PrintingContract, ContractAssessmentMilestone } from '../../types/accounting';
 import { formatCurrency } from '../../utils/currency';
 import { printingApi } from '../../services/printingApi';
@@ -16,6 +17,7 @@ import {
   Clock,
   Landmark,
   Save,
+  Ban,
 } from 'lucide-react';
 
 const ModalFrame: React.FC<{
@@ -1145,6 +1147,553 @@ export const RenewContractModal: React.FC<{ contract: PrintingContract; onClose:
           original contract is left unchanged.
         </p>
         {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+/* --------------------------------------------------------- Amendments */
+export const AmendmentsModal: React.FC<{
+  contract: PrintingContract;
+  onClose: () => void;
+}> = ({ contract, onClose }) => {
+  const { listContractAmendments, approveContractAmendment, rejectContractAmendment, triggerShortcutNotice } =
+    useAccounting();
+  const { hasPermission } = useAuth();
+  const canDecide = hasPermission('approvals:decide');
+  const [amendments, setAmendments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const list = await listContractAmendments(contract.id);
+        if (alive) setAmendments(list);
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Could not load amendments');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [contract.id, listContractAmendments]);
+
+  const decide = async (amendmentId: number, approve: boolean) => {
+    setBusyId(amendmentId);
+    setError(null);
+    try {
+      if (approve) {
+        await approveContractAmendment(contract.id, amendmentId);
+        triggerShortcutNotice(`Approved amendment #${amendmentId}`);
+      } else {
+        await rejectContractAmendment(contract.id, amendmentId);
+        triggerShortcutNotice(`Rejected amendment #${amendmentId}`);
+      }
+      const list = await listContractAmendments(contract.id);
+      setAmendments(list);
+    } catch (e: any) {
+      setError(e?.message || 'Could not decide the amendment');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const statusCls: Record<string, string> = {
+    pending: 'text-amber-600',
+    approved: 'text-emerald-600',
+    rejected: 'text-rose-600',
+  };
+
+  return (
+    <ModalFrame
+      title="Contract Amendments"
+      subtitle={`${contract.contractNumber} · request → approve`}
+      icon={<History className="h-4 w-4 text-amber-400" />}
+      onClose={onClose}
+      width="max-w-2xl"
+      footer={
+        <Btn variant="ghost" onClick={onClose}>
+          Close
+        </Btn>
+      }
+    >
+      <div className="space-y-3">
+        {loading ? (
+          <p className="text-xs text-slate-500">Loading amendments…</p>
+        ) : amendments.length === 0 ? (
+          <p className="text-xs text-slate-500">No amendments have been raised for this contract.</p>
+        ) : (
+          <ul className="space-y-2">
+            {amendments.map((a: any) => (
+              <li
+                key={a.id}
+                className="rounded-lg border border-slate-200 p-3 dark:border-slate-700"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[11px] text-slate-500">
+                    #{a.id} · {a.amendmentType || a.type || 'amendment'}
+                  </span>
+                  <span className={`text-[11px] font-bold ${statusCls[a.status] || 'text-slate-500'}`}>
+                    {a.status}
+                  </span>
+                </div>
+                {a.description && (
+                  <p className="mt-1 text-xs text-slate-700 dark:text-slate-300">{a.description}</p>
+                )}
+                {a.status === 'pending' && canDecide && (
+                  <div className="mt-2 flex gap-2">
+                    <Btn
+                      variant="success"
+                      onClick={() => decide(a.id, true)}
+                      disabled={busyId === a.id}
+                    >
+                      Approve
+                    </Btn>
+                    <Btn
+                      variant="danger"
+                      onClick={() => decide(a.id, false)}
+                      disabled={busyId === a.id}
+                    >
+                      Reject
+                    </Btn>
+                  </div>
+                )}
+                {a.status === 'pending' && !canDecide && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Awaiting approval by an authorised approver.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+/* -------------------------------------------------------------- Void */
+export const VoidContractModal: React.FC<{
+  contract: PrintingContract;
+  onClose: () => void;
+}> = ({ contract, onClose }) => {
+  const { voidPrintingContract, triggerShortcutNotice } = useAccounting();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!reason.trim()) {
+      setError('A void reason is required.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await voidPrintingContract(contract.id, reason.trim());
+      triggerShortcutNotice(`Voided ${contract.contractNumber}; retainer returned to wallet`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Could not void the contract');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Void Contract"
+      subtitle={`${contract.contractNumber} · ${contract.title}`}
+      icon={<Ban className="h-4 w-4 text-rose-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="danger" onClick={submit} disabled={busy || !reason.trim()}>
+            {busy ? 'Voiding…' : 'Void Contract'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-800 dark:bg-rose-950/40">
+          Voiding is a compensating reversal for a contract raised in error. Any unallocated retainer is
+          returned to the customer wallet (no bank refund, no forfeiture). A contract with completed
+          assessments cannot be voided — cancel it instead. This action is terminal.
+        </div>
+        <Field label="Void reason">
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={3}
+            placeholder="e.g. Raised in error — duplicate of PC-2026-0001"
+            className={inputClsModal}
+          />
+        </Field>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+export const RecordAcceptanceModal: React.FC<{
+  contract: PrintingContract;
+  onClose: () => void;
+}> = ({ contract, onClose }) => {
+  const { recordContractAcceptance, triggerShortcutNotice } = useAccounting();
+  const [method, setMethod] = useState<'drawn' | 'otp' | 'upload'>('upload');
+  const [signerName, setSignerName] = useState('');
+  const [signerEmail, setSignerEmail] = useState('');
+  const [signerPhone, setSignerPhone] = useState('');
+  const [documentVersion, setDocumentVersion] = useState('1.0');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!signerName.trim() || !documentVersion.trim()) {
+      setError('Signer name and document version are required.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await recordContractAcceptance(contract.id, {
+        method,
+        signerName: signerName.trim(),
+        signerEmail: signerEmail.trim() || null,
+        signerPhone: signerPhone.trim() || null,
+        documentVersion: documentVersion.trim(),
+        otpVerified: method === 'otp' ? true : undefined,
+        outcome: 'accepted',
+      });
+      triggerShortcutNotice(`Recorded customer acceptance for ${contract.contractNumber}`);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Could not record acceptance');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Record Customer Acceptance"
+      subtitle={`${contract.contractNumber} · ${contract.title}`}
+      icon={<CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn variant="success" onClick={submit} disabled={busy}>
+            {busy ? 'Recording…' : 'Record Acceptance'}
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Acceptance method">
+            <select
+              value={method}
+              onChange={e => setMethod(e.target.value as 'drawn' | 'otp' | 'upload')}
+              className={inputClsModal}
+            >
+              <option value="upload">Signed file upload</option>
+              <option value="drawn">Drawn signature</option>
+              <option value="otp">OTP verified</option>
+            </select>
+          </Field>
+          <Field label="Document version">
+            <input
+              value={documentVersion}
+              onChange={e => setDocumentVersion(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+        </div>
+        <Field label="Signer name">
+          <input
+            value={signerName}
+            onChange={e => setSignerName(e.target.value)}
+            placeholder="e.g. School Bursar"
+            className={inputClsModal}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Signer email (optional)">
+            <input
+              value={signerEmail}
+              onChange={e => setSignerEmail(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+          <Field label="Signer phone (optional)">
+            <input
+              value={signerPhone}
+              onChange={e => setSignerPhone(e.target.value)}
+              className={inputClsModal}
+            />
+          </Field>
+        </div>
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+/* ---------------------------------------------------- Signing ceremony */
+export const SignContractModal: React.FC<{
+  contract: PrintingContract;
+  onClose: () => void;
+}> = ({ contract, onClose }) => {
+  const { listContractSignatures, recordContractSignature, triggerShortcutNotice } = useAccounting();
+  const [signatures, setSignatures] = useState<any[]>([]);
+  const [signerName, setSignerName] = useState('');
+  const [method, setMethod] = useState<'typed' | 'drawn' | 'upload'>('typed');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const list = await listContractSignatures(contract.id);
+        if (alive) setSignatures(list);
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Could not load signatures');
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [contract.id, listContractSignatures]);
+
+  const companySigned = signatures.some((s: any) => s.signer_role === 'company');
+  const customerSigned = signatures.some((s: any) => s.signer_role === 'customer');
+  const nextRole: 'company' | 'customer' | null = !companySigned
+    ? 'company'
+    : !customerSigned
+      ? 'customer'
+      : null;
+
+  const submit = async () => {
+    if (!nextRole || !signerName.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await recordContractSignature(contract.id, {
+        signerRole: nextRole,
+        signerName: signerName.trim(),
+        method,
+        signatureData: signerName.trim(),
+        documentVersion: '1.0',
+      });
+      triggerShortcutNotice(`Recorded ${nextRole} signature for ${contract.contractNumber}`);
+      setSignerName('');
+      const list = await listContractSignatures(contract.id);
+      setSignatures(list);
+    } catch (e: any) {
+      setError(e?.message || 'Could not record the signature');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalFrame
+      title="Signing Ceremony"
+      subtitle={`${contract.contractNumber} · company signs before customer`}
+      icon={<CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+      onClose={onClose}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>
+            Close
+          </Btn>
+          {nextRole && (
+            <Btn variant="success" onClick={submit} disabled={busy || !signerName.trim()}>
+              {busy ? 'Signing…' : `Sign as ${nextRole}`}
+            </Btn>
+          )}
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <ul className="space-y-1 text-xs">
+          <li className={companySigned ? 'text-emerald-600' : 'text-slate-500'}>
+            {companySigned ? '✔ Company signed' : '○ Company signature pending'}
+          </li>
+          <li className={customerSigned ? 'text-emerald-600' : 'text-slate-500'}>
+            {customerSigned ? '✔ Customer signed' : '○ Customer signature pending'}
+          </li>
+        </ul>
+        {nextRole ? (
+          <>
+            <Field label={`Signing as ${nextRole}`}>
+              <input
+                value={signerName}
+                onChange={e => setSignerName(e.target.value)}
+                placeholder="Full name of signatory"
+                className={inputClsModal}
+              />
+            </Field>
+            <Field label="Method">
+              <select
+                value={method}
+                onChange={e => setMethod(e.target.value as 'typed' | 'drawn' | 'upload')}
+                className={inputClsModal}
+              >
+                <option value="typed">Typed signature</option>
+                <option value="drawn">Drawn signature</option>
+                <option value="upload">Uploaded signature file</option>
+              </select>
+            </Field>
+          </>
+        ) : (
+          <p className="text-xs font-semibold text-emerald-600">
+            Both parties have signed. The ceremony is complete.
+          </p>
+        )}
+        {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+      </div>
+    </ModalFrame>
+  );
+};
+
+/* ---------------------------------------------------- Reconciliation */
+export const ReconciliationView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+  const { getContractReconciliation, customers } = useAccounting();
+  const [report, setReport] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await getContractReconciliation();
+        if (alive) setReport(r);
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Could not load reconciliation');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [getContractReconciliation]);
+
+  const nameFor = (id: number) => {
+    const c = customers.find(cu => String(cu.id) === String(id));
+    return c?.companyName || c?.name || `Customer #${id}`;
+  };
+
+  const totals = report?.totals;
+  const rows: any[] = report?.customers || [];
+
+  return (
+    <ModalFrame
+      title="Contract Reconciliation"
+      subtitle="Read-only · per-customer funding & document position"
+      icon={<Landmark className="h-4 w-4 text-amber-400" />}
+      onClose={onClose}
+      width="max-w-4xl"
+      footer={
+        <Btn variant="ghost" onClick={onClose}>
+          Close
+        </Btn>
+      }
+    >
+      <div className="space-y-4">
+        {loading ? (
+          <p className="text-xs text-slate-500">Loading reconciliation…</p>
+        ) : error ? (
+          <p className="text-xs font-semibold text-rose-600">{error}</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { label: 'Customers', value: totals?.customers ?? 0 },
+                { label: 'Contracts', value: totals?.contracts ?? 0 },
+                { label: 'Discrepancies', value: totals?.discrepancies ?? 0 },
+                { label: 'Missing docs', value: totals?.missingDocuments ?? 0 },
+              ].map(k => (
+                <div
+                  key={k.label}
+                  className="rounded-lg border border-slate-200 p-3 text-center dark:border-slate-700"
+                >
+                  <div className="text-[10px] font-bold uppercase text-slate-500">{k.label}</div>
+                  <div className="font-mono text-lg font-bold text-slate-900 dark:text-white">
+                    {k.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {totals?.discrepancies > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40">
+                {totals.discrepancies} contract(s) show a discrepancy (credit balance or a completed
+                contract with funds remaining).
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[11px]">
+                <thead className="text-slate-500 uppercase">
+                  <tr>
+                    <th className="py-1 pr-3">Customer</th>
+                    <th className="py-1 px-2 text-right">Contracts</th>
+                    <th className="py-1 px-2 text-right">Value</th>
+                    <th className="py-1 px-2 text-right">Consumed</th>
+                    <th className="py-1 px-2 text-right">Reserved</th>
+                    <th className="py-1 px-2 text-center">Done/Total</th>
+                    <th className="py-1 px-2 text-right">Docs</th>
+                    <th className="py-1 pl-2 text-right">Issues</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {rows.map(r => (
+                    <tr key={r.customerId} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="py-1 pr-3 font-sans">{nameFor(r.customerId)}</td>
+                      <td className="py-1 px-2 text-right">{r.contractCount}</td>
+                      <td className="py-1 px-2 text-right">{formatCurrency(r.totalValue, '')}</td>
+                      <td className="py-1 px-2 text-right">{formatCurrency(r.consumed, '')}</td>
+                      <td className="py-1 px-2 text-right">{formatCurrency(r.reserved, '')}</td>
+                      <td className="py-1 px-2 text-center">
+                        {r.completedAssessments}/{r.totalAssessments}
+                      </td>
+                      <td className="py-1 px-2 text-right">{r.missingDocuments || '—'}</td>
+                      <td className="py-1 pl-2 text-right">
+                        {r.discrepancies > 0 ? (
+                          <span className="font-bold text-amber-600">{r.discrepancies}</span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-2 text-center text-slate-500">
+                        No contracts to reconcile.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </ModalFrame>
   );

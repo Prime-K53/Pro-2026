@@ -22,6 +22,11 @@ import {
   CancelContractModal,
   TopUpContractModal,
   RenewContractModal,
+  RecordAcceptanceModal,
+  VoidContractModal,
+  AmendmentsModal,
+  SignContractModal,
+  ReconciliationView,
 } from '../modals/ContractActionModals';
 import {
   FileSpreadsheet,
@@ -81,6 +86,9 @@ export const PrintingContractsView: React.FC = () => {
     activatePrintingContract,
     renewPrintingContract,
     amendPrintingContract,
+    suspendContract,
+    resumeContract,
+    voidPrintingContract,
     addContractAssessment,
     removeContractAssessment,
     generateAndSyncWorkflowInvoice,
@@ -133,7 +141,12 @@ export const PrintingContractsView: React.FC = () => {
           | 'activation'
           | 'cancel'
           | 'topup'
-          | 'renew';
+          | 'renew'
+          | 'acceptance'
+          | 'void'
+          | 'amendments'
+          | 'sign'
+          | 'reconciliation';
         contractId: string;
       }
     | null;
@@ -208,6 +221,33 @@ export const PrintingContractsView: React.FC = () => {
   const [attachNotes, setAttachNotes] = useState('');
   const [attachUploading, setAttachUploading] = useState(false);
   const [contractActionBusy, setContractActionBusy] = useState(false);
+
+  // Register search / status filter / pagination
+  const [contractSearch, setContractSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | PrintingContract['status']>('all');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
+
+  const filteredContracts = useMemo(() => {
+    const q = contractSearch.trim().toLowerCase();
+    return printingContracts.filter(c => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (!q) return true;
+      const school = customers.find(cu => cu.id === c.schoolCustomerId);
+      return (
+        c.contractNumber.toLowerCase().includes(q) ||
+        c.title.toLowerCase().includes(q) ||
+        (school?.companyName || school?.name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [printingContracts, customers, contractSearch, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredContracts.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedContracts = filteredContracts.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   const handleAssessmentsCountChange = (count: 2 | 3 | 4 | 5) => {
     setTotalAssessments(count);
@@ -289,6 +329,10 @@ export const PrintingContractsView: React.FC = () => {
   const handleCreateContract = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!schoolCustomerId || totalPrepaidAmount <= 0 || customMismatch) return;
+    if (endDate < startDate) {
+      triggerShortcutNotice('End date cannot be before the start date.', 'error');
+      return;
+    }
 
     const created = await addPrintingContract({
       schoolCustomerId,
@@ -616,16 +660,25 @@ export const PrintingContractsView: React.FC = () => {
     defs.push({ id: 'contract.production-progress', label: 'View Production Progress', icon: <BookOpen className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Production', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'progress', contractId: contract.id }) });
     defs.push({ id: 'contract.wallet-tx', label: 'View Wallet Transactions', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Financials', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'wallet', contractId: contract.id }) });
     defs.push({ id: 'contract.history', label: 'View Contract History', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', execute: async () => setActiveModal({ type: 'history', contractId: contract.id }) });
+    defs.push({ id: 'contract.amendments', label: 'View / Manage Amendments', icon: <Pencil className="w-3.5 h-3.5 text-indigo-600" />, group: 'view', groupLabel: 'Contract', requiredPermission: 'printing:read', isVisible: () => contract.status !== 'voided' && contract.status !== 'cancelled', execute: async () => setActiveModal({ type: 'amendments', contractId: contract.id }) });
+    defs.push({ id: 'contract.sign', label: 'Signing Ceremony', icon: <ClipboardCheck className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', isVisible: () => contract.status === 'draft' || contract.status === 'active', execute: async () => setActiveModal({ type: 'sign', contractId: contract.id }) });
 
     // Contract-money actions require the dedicated manage permission (G-22).
     if (contract.status === 'draft') {
       defs.push({ id: 'contract.fund', label: `Allocate Retainer from Wallet (${formatCurrency(contract.totalPrepaidAmount, currency)})`, icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'fund', contractId: contract.id }) });
+      if (!contract.customerAcceptanceId) defs.push({ id: 'contract.record-acceptance', label: 'Record Customer Acceptance', icon: <ClipboardCheck className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'acceptance', contractId: contract.id }) });
       defs.push({ id: 'contract.request-activation', label: 'Request Activation Approval', icon: <ClipboardCheck className="w-3.5 h-3.5 text-blue-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'activation', contractId: contract.id }) });
     }
     if (contract.status === 'active') {
       defs.push({ id: 'contract.amend', label: 'Amend Contract', icon: <Pencil className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'amend', contractId: contract.id }) });
       defs.push({ id: 'contract.topup', label: 'Top Up Retainer', icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'topup', contractId: contract.id }) });
+      defs.push({ id: 'contract.suspend', label: 'Suspend Contract', icon: <Clock className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => { await suspendContract(contract.id, 'Suspended from contract register'); triggerShortcutNotice(`Suspended ${contract.contractNumber}`); } });
+      defs.push({ id: 'contract.void', label: 'Void Contract (return retainer to wallet)', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:contracts:manage', isVisible: () => contract.completedAssessments === 0, execute: async () => setActiveModal({ type: 'void', contractId: contract.id }) });
       defs.push({ id: 'contract.cancel', label: 'Cancel Contract', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'cancel', contractId: contract.id }) });
+    }
+    if (contract.status === 'suspended') {
+      defs.push({ id: 'contract.resume', label: 'Resume Contract', icon: <Play className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Contract management', requiredPermission: 'printing:contracts:manage', execute: async () => { await resumeContract(contract.id); triggerShortcutNotice(`Resumed ${contract.contractNumber}`); } });
+      defs.push({ id: 'contract.void', label: 'Void Contract (return retainer to wallet)', icon: <Ban className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:contracts:manage', isVisible: () => contract.completedAssessments === 0, execute: async () => setActiveModal({ type: 'void', contractId: contract.id }) });
     }
     if (contract.creditBalance && contract.status === 'active') {
       defs.push({ id: 'contract.credit-refund', label: `Refund Unallocated Retainer (${formatCurrency(contract.remainingBalance, currency)})`, icon: <Undo2 className="w-3.5 h-3.5 text-amber-600" />, group: 'danger', groupLabel: 'Sensitive operations', destructive: true, risk: 'destructive', requiredPermission: 'printing:contracts:manage', execute: async () => setActiveModal({ type: 'cancel', contractId: contract.id }) });
@@ -691,13 +744,22 @@ export const PrintingContractsView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsNewContractOpen(true)}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Prepaid School Contract</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveModal({ type: 'reconciliation', contractId: selectedContractId })}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-semibold transition-colors"
+          >
+            <Landmark className="w-4 h-4" />
+            <span>Reconciliation</span>
+          </button>
+          <button
+            onClick={() => setIsNewContractOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-all active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Prepaid School Contract</span>
+          </button>
+        </div>
       </div>
 
       {/* KPI Strip */}
@@ -728,7 +790,8 @@ export const PrintingContractsView: React.FC = () => {
               {formatCurrency(totalRemainingRetainer, currency)}
             </div>
             <div className="text-[11px] text-slate-500 mt-1">
-              Account #2250 · {totalCompletedAssessments}/{totalAgreedAssessments} completed
+              {selectedContract?.liabilityAccountId ? `Account #${selectedContract.liabilityAccountId} · ` : ''}
+              {totalCompletedAssessments}/{totalAgreedAssessments} completed
             </div>
           </div>
           <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
@@ -773,13 +836,39 @@ export const PrintingContractsView: React.FC = () => {
 
       {/* Contracts Register Table */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-bold text-sm text-slate-900 dark:text-white">
             Active & Historical School Contracts
           </h2>
-          <span className="text-[11px] text-slate-500">
-            Select a contract row to view specific assessment dates & real profit
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={contractSearch}
+              onChange={e => {
+                setContractSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search contract #, school or title"
+              className="w-56 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            />
+            <select
+              value={statusFilter}
+              onChange={e => {
+                setStatusFilter(e.target.value as 'all' | PrintingContract['status']);
+                setPage(1);
+              }}
+              className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="all">All statuses</option>
+              <option value="draft">Draft</option>
+              <option value="active">Active</option>
+              <option value="suspended">Suspended</option>
+              <option value="completed">Completed</option>
+              <option value="exhausted">Exhausted</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="voided">Voided</option>
+            </select>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -798,7 +887,7 @@ export const PrintingContractsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-              {printingContracts.map(contract => {
+              {pagedContracts.map(contract => {
                 const school = customers.find(c => c.id === contract.schoolCustomerId);
                 const deducted = contract.totalPrepaidAmount - contract.remainingBalance;
                 const nextPending = contract.assessments.find(a => a.status === 'pending');
@@ -850,8 +939,12 @@ export const PrintingContractsView: React.FC = () => {
                         <span className="text-emerald-700 dark:text-emerald-400">Active</span>
                       ) : contract.status === 'draft' ? (
                         <span className="text-blue-600 dark:text-blue-400">Draft</span>
+                      ) : contract.status === 'suspended' ? (
+                        <span className="text-amber-600 dark:text-amber-400">Suspended</span>
                       ) : contract.status === 'cancelled' ? (
                         <span className="text-rose-600 dark:text-rose-400">Cancelled</span>
+                      ) : contract.status === 'voided' ? (
+                        <span className="text-slate-500 line-through">Voided</span>
                       ) : (
                         <span className="text-slate-500">Completed / Exhausted</span>
                       )}
@@ -865,6 +958,35 @@ export const PrintingContractsView: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {filteredContracts.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2 text-[11px] text-slate-500 dark:border-slate-800">
+            <span>
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+              {Math.min(currentPage * PAGE_SIZE, filteredContracts.length)} of {filteredContracts.length}
+            </span>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="rounded border border-slate-300 px-2 py-1 font-semibold disabled:opacity-40 dark:border-slate-700"
+              >
+                Prev
+              </button>
+              <span className="font-mono">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="rounded border border-slate-300 px-2 py-1 font-semibold disabled:opacity-40 dark:border-slate-700"
+              >
+                Next
+              </button>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Selected Contract Assessment Drawdown & Profitability Schedule */}
@@ -1811,6 +1933,21 @@ export const PrintingContractsView: React.FC = () => {
       )}
       {activeModal?.type === 'renew' && activeContract && (
         <RenewContractModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'acceptance' && activeContract && (
+        <RecordAcceptanceModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'void' && activeContract && (
+        <VoidContractModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'amendments' && activeContract && (
+        <AmendmentsModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'sign' && activeContract && (
+        <SignContractModal contract={activeContract} onClose={() => setActiveModal(null)} />
+      )}
+      {activeModal?.type === 'reconciliation' && (
+        <ReconciliationView onClose={() => setActiveModal(null)} />
       )}
       {activeContract &&
         activeModal &&

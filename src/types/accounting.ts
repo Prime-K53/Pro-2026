@@ -256,7 +256,7 @@ export interface PrintingContract {
   remainingBalance: number;
   completedAssessments: number;
   depositBankAccountId: string;
-  status: 'draft' | 'active' | 'suspended' | 'completed' | 'exhausted' | 'cancelled';
+  status: 'draft' | 'active' | 'suspended' | 'completed' | 'exhausted' | 'cancelled' | 'voided';
   activatedAt?: string;
   activatedBy?: number;
   completedAt?: string;

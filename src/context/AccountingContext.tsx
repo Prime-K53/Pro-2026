@@ -510,6 +510,45 @@ interface AccountingContextType {
     deposit?: { amount?: string | number; bankAccountId?: number; startDate?: string; endDate?: string }
   ) => Promise<void>;
   amendPrintingContract: (contractId: string, updates: Partial<PrintingContract>) => Promise<void>;
+  suspendContract: (contractId: string, reason?: string) => Promise<void>;
+  resumeContract: (contractId: string) => Promise<void>;
+  listContractAmendments: (contractId: string) => Promise<any[]>;
+  approveContractAmendment: (
+    contractId: string,
+    amendmentId: number,
+    notes?: string | null
+  ) => Promise<void>;
+  rejectContractAmendment: (
+    contractId: string,
+    amendmentId: number,
+    notes?: string | null
+  ) => Promise<void>;
+  recordContractAcceptance: (
+    contractId: string,
+    payload: {
+      method: 'drawn' | 'otp' | 'upload';
+      signerName: string;
+      signerEmail?: string | null;
+      signerPhone?: string | null;
+      documentVersion: string;
+      evidenceFileId?: number | null;
+      otpVerified?: boolean;
+      outcome?: 'accepted' | 'rejected';
+    }
+  ) => Promise<void>;
+  voidPrintingContract: (contractId: string, reason: string) => Promise<void>;
+  listContractSignatures: (contractId: string) => Promise<any[]>;
+  getContractReconciliation: () => Promise<any>;
+  recordContractSignature: (
+    contractId: string,
+    payload: {
+      signerRole: 'company' | 'customer';
+      signerName: string;
+      method: 'drawn' | 'typed' | 'upload';
+      signatureData: string;
+      documentVersion?: string | null;
+    }
+  ) => Promise<void>;
   addContractAssessment: (contractId: string, milestone: ContractAssessmentMilestone) => void;
   removeContractAssessment: (contractId: string, assessmentNumber: number) => void;
   completeContractAssessment: (
@@ -613,6 +652,10 @@ interface AccountingContextType {
   previewDocument: DocumentPreviewModel | null;
   openDocumentPreview: (doc: DocumentPreviewModel) => void;
   closeDocumentPreview: () => void;
+  /** Global PrimeDocument preview (type + data rendered by the real PDF engine). */
+  primePreview: { type: string; data: any; title?: string } | null;
+  openPrimePreview: (type: string, data: any, title?: string) => void;
+  closePrimePreview: () => void;
 
   // Backup & Reset
   resetToDemoData: () => void;
@@ -1299,6 +1342,9 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   const [previewDocument, setPreviewDocument] = useState<DocumentPreviewModel | null>(null);
   const openDocumentPreview = (doc: DocumentPreviewModel) => setPreviewDocument(doc);
   const closeDocumentPreview = () => setPreviewDocument(null);
+  const [primePreview, setPrimePreview] = useState<{ type: string; data: any; title?: string } | null>(null);
+  const openPrimePreview = (type: string, data: any, title?: string) => setPrimePreview({ type, data, title });
+  const closePrimePreview = () => setPrimePreview(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [tableDensity, setTableDensity] = useState<'compact' | 'comfortable'>('compact');
@@ -1387,6 +1433,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       setIsCommandPaletteOpen(false);
       setIsPosModalOpen(false);
       setPreviewDocument(null);
+      setPrimePreview(null);
       setIsMobileDrawerOpen(false);
     };
 
@@ -3425,6 +3472,206 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     logAuditAction('AMEND_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Amended from contract register');
   };
 
+  /** Suspend an active contract; local state updates only after the server confirms. */
+  const suspendContract = async (contractId: string, reason?: string) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr) return;
+    if (ctr.backendId) {
+      const updated = await printingApi.suspendContract(ctr.backendId, reason);
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                status: updated?.status ?? 'suspended',
+                suspendedAt: updated?.suspendedAt ?? new Date().toISOString(),
+                suspensionReason: reason ?? updated?.suspensionReason,
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? { ...c, status: 'suspended', suspensionReason: reason }
+            : c
+        )
+      );
+    }
+    logAuditAction('SUSPEND_PRINTING_CONTRACT', 'PrintingContract', contractId, reason || 'Suspended from contract register');
+  };
+
+  /** Resume a suspended contract; local state updates only after the server confirms. */
+  const resumeContract = async (contractId: string) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr) return;
+    if (ctr.backendId) {
+      const updated = await printingApi.resumeContract(ctr.backendId);
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                status: updated?.status ?? 'active',
+                resumedAt: updated?.resumedAt ?? new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev =>
+        prev.map(c => (c.id === contractId ? { ...c, status: 'active' } : c))
+      );
+    }
+    logAuditAction('RESUME_PRINTING_CONTRACT', 'PrintingContract', contractId, 'Resumed from contract register');
+  };
+
+  /** Fetch the amendment request history for a contract (read-only). */
+  const listContractAmendments = async (contractId: string): Promise<any[]> => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) return [];
+    return printingApi.listAmendments(ctr.backendId);
+  };
+
+  /** Approve a pending amendment; replaces local state with the server's contract. */
+  const approveContractAmendment = async (
+    contractId: string,
+    amendmentId: number,
+    notes?: string | null
+  ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) return;
+    const updated = await printingApi.approveAmendment(ctr.backendId, amendmentId, notes);
+    if (updated) {
+      setPrintingContracts(prev =>
+        prev.map(c => (c.id === contractId ? mapApiContract(updated) : c))
+      );
+    }
+    logAuditAction('APPROVE_CONTRACT_AMENDMENT', 'PrintingContract', contractId, `Approved amendment #${amendmentId}`);
+  };
+
+  /** Reject a pending amendment (no contract mutation beyond the request status). */
+  const rejectContractAmendment = async (
+    contractId: string,
+    amendmentId: number,
+    notes?: string | null
+  ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) return;
+    await printingApi.rejectAmendment(ctr.backendId, amendmentId, notes);
+    logAuditAction('REJECT_CONTRACT_AMENDMENT', 'PrintingContract', contractId, `Rejected amendment #${amendmentId}`);
+  };
+
+  /** Record customer acceptance of a contract document (G-03 evidence). */
+  const recordContractAcceptance = async (
+    contractId: string,
+    payload: {
+      method: 'drawn' | 'otp' | 'upload';
+      signerName: string;
+      signerEmail?: string | null;
+      signerPhone?: string | null;
+      documentVersion: string;
+      evidenceFileId?: number | null;
+      otpVerified?: boolean;
+      outcome?: 'accepted' | 'rejected';
+    }
+  ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) {
+      throw new Error('This contract has no server record, so acceptance cannot be recorded.');
+    }
+    const acceptance = await printingApi.recordAcceptance(ctr.backendId, payload);
+    setPrintingContracts(prev =>
+      prev.map(c =>
+        c.id === contractId
+          ? {
+              ...c,
+              customerAcceptanceId:
+                acceptance?.id != null ? Number(acceptance.id) : c.customerAcceptanceId,
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+    logAuditAction(
+      'RECORD_CONTRACT_ACCEPTANCE',
+      'PrintingContract',
+      contractId,
+      `Customer acceptance via ${payload.method}`
+    );
+  };
+
+  /** Void a contract (compensating reversal); local state updates after server confirms. */
+  const voidPrintingContract = async (contractId: string, reason: string) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr) return;
+    if (ctr.backendId) {
+      const updated = await printingApi.voidContract(ctr.backendId, reason);
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? {
+                ...c,
+                status: updated?.status ?? 'voided',
+                remainingBalance: 0,
+                creditBalance: false,
+                updatedAt: new Date().toISOString(),
+                notes: reason ? `${c.notes || ''}\nVoided: ${reason}`.trim() : c.notes,
+              }
+            : c
+        )
+      );
+    } else {
+      setPrintingContracts(prev =>
+        prev.map(c =>
+          c.id === contractId
+            ? { ...c, status: 'voided', remainingBalance: 0, creditBalance: false }
+            : c
+        )
+      );
+    }
+    logAuditAction('VOID_PRINTING_CONTRACT', 'PrintingContract', contractId, reason || 'Voided from contract register');
+  };
+
+  /** Fetch the signature ceremony records for a contract (read-only). */
+  const listContractSignatures = async (contractId: string): Promise<any[]> => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) return [];
+    return printingApi.listSignatures(ctr.backendId);
+  };
+
+  /** Read-only reconciliation report grouped by customer. */
+  const getContractReconciliation = async (): Promise<any> => {
+    return printingApi.getContractReconciliation();
+  };
+
+  /** Record a company/customer signature in the signing ceremony. */
+  const recordContractSignature = async (
+    contractId: string,
+    payload: {
+      signerRole: 'company' | 'customer';
+      signerName: string;
+      method: 'drawn' | 'typed' | 'upload';
+      signatureData: string;
+      documentVersion?: string | null;
+    }
+  ) => {
+    const ctr = printingContracts.find(c => c.id === contractId);
+    if (!ctr?.backendId) {
+      throw new Error('This contract has no server record, so it cannot be signed.');
+    }
+    await printingApi.recordSignature(ctr.backendId, payload);
+    logAuditAction(
+      'PRINTING_CONTRACT_SIGNED',
+      'PrintingContract',
+      contractId,
+      `${payload.signerRole} signed via ${payload.method}`
+    );
+  };
+
   const addContractAssessment = (contractId: string, milestone: ContractAssessmentMilestone) => {
     setPrintingContracts(prev =>
       prev.map(c =>
@@ -4180,6 +4427,16 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         activatePrintingContract,
         renewPrintingContract,
         amendPrintingContract,
+    suspendContract,
+    resumeContract,
+    listContractAmendments,
+    approveContractAmendment,
+    rejectContractAmendment,
+    recordContractAcceptance,
+    voidPrintingContract,
+    listContractSignatures,
+    recordContractSignature,
+    getContractReconciliation,
         addContractAssessment,
         removeContractAssessment,
         getAssessmentActualStats,
@@ -4249,6 +4506,9 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         previewDocument,
         openDocumentPreview,
         closeDocumentPreview,
+        primePreview,
+        openPrimePreview,
+        closePrimePreview,
         resetToDemoData,
         clearAllData,
         exportDataToJson,

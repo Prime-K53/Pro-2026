@@ -525,6 +525,120 @@ export const printingApi = {
     return d.transactions || [];
   },
 
+  /** Suspend an active contract (active → suspended). */
+  async suspendContract(id: number, reason?: string): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Void a contract as a compensating reversal (returns retainer to wallet). */
+  async voidContract(id: number, reason: string): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/void`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Read-only reconciliation report grouped by customer. */
+  async getContractReconciliation(): Promise<any> {
+    const d = await requestJson<{ report: any }>('/api/printing/contracts/reconciliation');
+    return d.report;
+  },
+
+  /** List the append-only signature ceremony records for a contract. */
+  async listSignatures(id: number): Promise<any[]> {
+    const d = await requestJson<{ signatures: any[] }>(
+      `/api/printing/contracts/${id}/signatures`
+    );
+    return d.signatures || [];
+  },
+
+  /** Record a company/customer signature (company signs before customer). */
+  async recordSignature(
+    id: number,
+    payload: {
+      signerRole: 'company' | 'customer';
+      signerName: string;
+      method: 'drawn' | 'typed' | 'upload';
+      signatureData: string;
+      documentVersion?: string | null;
+    }
+  ): Promise<any> {
+    const d = await requestJson<{ signature: any }>(
+      `/api/printing/contracts/${id}/signatures`,
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+    emitAccountingUpdated();
+    return d.signature;
+  },
+
+  /** Resume a suspended contract (suspended → active). */
+  async resumeContract(id: number): Promise<any> {
+    const d = await requestJson<{ contract: any }>(`/api/printing/contracts/${id}/resume`, {
+      method: 'POST',
+      body: '{}',
+    });
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** List the amendment requests raised against a contract. */
+  async listAmendments(id: number): Promise<any[]> {
+    const d = await requestJson<{ amendments: any[] }>(
+      `/api/printing/contracts/${id}/amendments`
+    );
+    return d.amendments || [];
+  },
+
+  /** Approve a pending contract amendment (applies its delta server-side). */
+  async approveAmendment(id: number, amendmentId: number, notes?: string | null): Promise<any> {
+    const d = await requestJson<{ contract: any }>(
+      `/api/printing/contracts/${id}/amendments/${amendmentId}/approve`,
+      { method: 'POST', body: JSON.stringify({ notes: notes ?? null }) }
+    );
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Reject a pending contract amendment. */
+  async rejectAmendment(id: number, amendmentId: number, notes?: string | null): Promise<any> {
+    const d = await requestJson<{ contract: any }>(
+      `/api/printing/contracts/${id}/amendments/${amendmentId}/reject`,
+      { method: 'POST', body: JSON.stringify({ notes: notes ?? null }) }
+    );
+    emitAccountingUpdated();
+    return d.contract;
+  },
+
+  /** Request approval for an assessment change (date/amount/costs) on an active contract. */
+  async requestAssessmentChange(
+    id: number,
+    payload: {
+      assessmentNumber: number;
+      scheduledDate?: string;
+      agreedAmount?: string | number;
+      reason?: string | null;
+      idempotencyKey?: string | null;
+    }
+  ): Promise<any> {
+    const d = await requestJson<{ request: any }>(
+      `/api/printing/contracts/${id}/assessment-changes`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders(payload.idempotencyKey),
+        body: JSON.stringify(payload),
+      }
+    );
+    emitAccountingUpdated();
+    return d.request;
+  },
+
   // ---- Examination papers: read + status + removal ----
 
   /** List examination print papers for the active company. */

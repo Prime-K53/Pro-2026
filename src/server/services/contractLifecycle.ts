@@ -37,7 +37,8 @@ export type PrintingContractStatus =
   | 'suspended'
   | 'completed'
   | 'exhausted'
-  | 'cancelled';
+  | 'cancelled'
+  | 'voided';
 
 /**
  * Lifecycle actions that can move a contract from one status to another.
@@ -160,6 +161,32 @@ export const CONTRACT_TRANSITIONS: ContractStateTransition[] = [
     requiredRoles: ['Administrator'],
     isImmutabilityTrigger: true,
   },
+
+  // Void: a distinct compensating reversal for a contract raised in error.
+  // Unlike cancellation (which settles a remaining balance by refund or
+  // forfeit), void returns any unallocated retainer to the customer wallet and
+  // is only permitted while nothing has been consumed. It is terminal.
+  {
+    from: 'draft',
+    to: 'voided',
+    action: 'VOID',
+    requiredRoles: ['Administrator'],
+    isImmutabilityTrigger: true,
+  },
+  {
+    from: 'active',
+    to: 'voided',
+    action: 'VOID',
+    requiredRoles: ['Administrator'],
+    isImmutabilityTrigger: true,
+  },
+  {
+    from: 'suspended',
+    to: 'voided',
+    action: 'VOID',
+    requiredRoles: ['Administrator'],
+    isImmutabilityTrigger: true,
+  },
 ];
 
 /**
@@ -176,6 +203,7 @@ export const CONTRACT_IMMUTABILITY_RULES: Record<PrintingContractStatus, boolean
   completed: true,   // immutable
   exhausted: true,   // immutable
   cancelled: true,   // immutable
+  voided: true,      // immutable (terminal reversal)
 };
 
 /**
