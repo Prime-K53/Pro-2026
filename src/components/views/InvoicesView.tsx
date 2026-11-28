@@ -3,6 +3,7 @@ import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { ACCOUNTING_UPDATED_EVENT, accountingApi, ApiAccount } from '../../services/accountingApi';
 import { ApiCustomer, ApiInvoice, commercialApi } from '../../services/commercialApi';
+import { requestJson } from '../../services/http';
 import { useFxRates } from '../../hooks/useFxRates';
 import { Pagination, pageSlice } from '../common/Pagination';
 import { FinancialDataNotice } from '../common/FinancialDataNotice';
@@ -10,6 +11,21 @@ import { resolveFinancialFigureState } from '../common/financialDataState';
 import { documentsApi } from '../../services/documentsApi';
 import { DocumentPreviewKind, mapApiPreviewToModel } from '../../types/documents';
 import { formatCurrency } from '../../utils/currency';
+import { appDialog, confirmActionModal } from '../../design-system';
+import {
+  Button,
+  FormField,
+  InlineAlert,
+  MetricTile,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+  Tabs,
+} from '../common/ui';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions, isActionExecutable } from '../../actions/evaluateActions';
 import type {
@@ -38,7 +54,6 @@ import {
   CheckCircle2,
   Clock,
   ArrowRight,
-  ArrowLeft,
   Copy,
   X,
   ArrowUpDown,
@@ -47,7 +62,6 @@ import {
   Repeat,
   Play,
   CreditCard,
-  AlertTriangle,
   Loader2,
   Lock,
   Eye,
@@ -395,19 +409,20 @@ function CustomerPaymentsInner({
     <>
       {selected.length > 0 && (
         <div className="flex justify-end px-1">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={exportSelected}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+            icon={<Download className="h-3.5 w-3.5" />}
           >
-            <Download className="w-3.5 h-3.5" /> Export selected ({selected.length})
-          </button>
+            Export selected ({selected.length})
+          </Button>
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-          <span className="text-xs font-bold text-slate-900 dark:text-white">Customer Payments & Allocations</span>
+      <div className="surface overflow-hidden">
+        <div className="surface-header">
+          <span className="section-title">Customer Payments &amp; Allocations</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -434,7 +449,7 @@ function CustomerPaymentsInner({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
               {payments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center font-sans text-slate-400">No payments posted yet.</td>
+                  <td colSpan={9} className="px-4 py-8 text-center font-sans text-slate-500 dark:text-slate-400">No payments posted yet.</td>
                 </tr>
               ) : (
                 payments.map((p) => {
@@ -449,9 +464,9 @@ function CustomerPaymentsInner({
                         e.preventDefault();
                         setContextMenu({ point: { x: e.clientX, y: e.clientY }, payment: p, resolved, ctx });
                       }}
-                      className={`cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-850/50 ${
+                      className={`cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04] ${
                         p.isVoided ? 'opacity-60' : ''
-                      } ${isSelected ? 'bg-blue-50 dark:bg-blue-950/40' : ''}`}
+                      } ${isSelected ? 'bg-brand-50/70 dark:bg-brand-500/10' : ''}`}
                     >
                       <td className="px-3 py-2.5 align-top" onClick={(e) => e.stopPropagation()}>
                         <input
@@ -461,9 +476,9 @@ function CustomerPaymentsInner({
                           onChange={(e) => selection.toggle(p.id, { shiftKey: (e.nativeEvent as MouseEvent).shiftKey })}
                         />
                       </td>
-                      <td className="px-4 py-2.5 font-bold text-[#1f8577] dark:text-[#5ec2b3] align-top">{p.paymentNumber}</td>
-                      <td className="px-4 py-2.5 font-sans font-semibold align-top">{p.customerName}</td>
-                      <td className="px-4 py-2.5 text-slate-500 align-top">{p.paymentDate}</td>
+                      <td className="px-4 py-2.5 font-bold text-brand-600 dark:text-brand-400 align-top whitespace-nowrap">{p.paymentNumber}</td>
+                      <td className="px-4 py-2.5 font-sans font-semibold text-slate-900 dark:text-white align-top">{p.customerName}</td>
+                      <td className="px-4 py-2.5 text-slate-500 align-top whitespace-nowrap">{p.paymentDate}</td>
                       <td className="px-4 py-2.5 font-sans text-slate-600 dark:text-slate-300 align-top">
                         {p.paymentMethod} · {p.depositAccountName || '—'}
                       </td>
@@ -474,9 +489,9 @@ function CustomerPaymentsInner({
                         {formatCurrency(p.amount, currency)}
                       </td>
                       <td className="px-4 py-2.5 text-center font-sans align-top">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${p.isVoided ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                        <StatusBadge tone={p.isVoided ? 'neutral' : 'success'}>
                           {p.isVoided ? 'Voided' : 'Posted'}
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td className="px-4 py-2.5 text-right font-sans align-top" onClick={(e) => e.stopPropagation()}>
                         {resolved.length > 0 && (
@@ -624,16 +639,17 @@ function InvoicesTableInner({
     <>
       {selectedRows.length > 0 && (
         <div className="flex justify-end">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={exportSelected}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+            icon={<Download className="h-3.5 w-3.5" />}
           >
-            <Download className="w-3.5 h-3.5" /> Export selected ({selectedRows.length})
-          </button>
+            Export selected ({selectedRows.length})
+          </Button>
         </div>
       )}
-      <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
+      <div className="surface overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800 select-none">
@@ -708,7 +724,6 @@ export const InvoicesView: React.FC = () => {
   const { options: fxOptions, baseCurrency, rateFor: fxRateFor } = useFxRates();
 
   const [activeTab, setActiveTab] = useState<SalesTab>('invoices');
-  const [hubOpen, setHubOpen] = useState(false);
   const [invoiceFilter, setInvoiceFilter] = useState<'all' | 'open' | 'paid' | 'receipts' | 'voided'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortField, setSortField] = useState<'invoiceNumber' | 'date' | 'dueDate' | 'total' | 'balanceDue'>('date');
@@ -907,54 +922,47 @@ export const InvoicesView: React.FC = () => {
 
   const pagedInvoices = pageSlice(filteredInvoices, page, pageSize);
 
-  const salesFlowCards: Array<{
+  const salesTabs: Array<{
     id: SalesTab;
     label: string;
-    description: string;
-    icon: React.ElementType;
-    count: number;
+    icon: React.ReactNode;
+    badge: number;
   }> = [
     {
       id: 'invoices',
       label: 'Invoices & Receipts',
-      description: 'Official invoicing, sales receipts and live payment status.',
-      icon: FileText,
-      count: invoices.length,
+      icon: <FileText className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: invoices.length,
     },
     {
       id: 'payments',
       label: 'Payments',
-      description: 'Record and track payments received from your customers.',
-      icon: CreditCard,
-      count: payments.length,
+      icon: <CreditCard className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: payments.length,
     },
     {
       id: 'creditMemos',
       label: 'Credit Memos',
-      description: 'Issue, apply and void customer credits against open invoices.',
-      icon: Scissors,
-      count: creditMemos.length,
+      icon: <Scissors className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: creditMemos.length,
     },
     {
       id: 'estimates',
       label: 'Estimates',
-      description: 'Generate quotes and track approval through to conversion.',
-      icon: FileCheck2,
-      count: estimates.length,
+      icon: <FileCheck2 className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: estimates.length,
     },
     {
       id: 'recurring',
       label: 'Recurring',
-      description: 'Automated invoice schedules for retainers and repeat work.',
-      icon: Repeat,
-      count: recurringList.length,
+      icon: <Repeat className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: recurringList.length,
     },
     {
       id: 'collections',
-      label: 'Reminders & Email Log',
-      description: 'Collections reminders and outbound communication audit.',
-      icon: Mail,
-      count: comms.remindersSent.length,
+      label: 'Reminders & Log',
+      icon: <Mail className="h-3.5 w-3.5" strokeWidth={1.75} />,
+      badge: comms.remindersSent.length,
     },
   ];
 
@@ -1128,11 +1136,20 @@ export const InvoicesView: React.FC = () => {
   };
 
   const handleVoidCreditMemo = async (cm: any) => {
-    const reason = window.prompt(`Void credit memo ${cm.creditNumber}. Reason (optional):`) ?? '';
+    const reason = await appDialog.prompt({
+      title: `Void Credit Memo ${cm.creditNumber}`,
+      message: 'Voiding reverses the credit memo ledger impact. Provide an optional reason below.',
+      label: 'Void reason (optional)',
+      placeholder: 'Reason for voiding…',
+      confirmLabel: 'Void Credit Memo',
+      destructive: true,
+      multiline: true,
+    });
+    if (reason === null) return;
     setBusy(true);
     setErrorMsg(null);
     try {
-      await commercialApi.voidCreditMemo(cm.id, reason || undefined);
+      await commercialApi.voidCreditMemo(cm.id, reason.trim() || undefined);
       triggerShortcutNotice(`Voided Credit Memo ${cm.creditNumber}`);
       await loadData();
     } catch (err: any) {
@@ -1168,29 +1185,29 @@ export const InvoicesView: React.FC = () => {
   const getStatusBadge = (inv: ApiInvoice) => {
     if (inv.status === 'voided') {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-          <Ban className="w-3 h-3" /> Voided
-        </span>
+        <StatusBadge tone="neutral" icon={<Ban className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />}>
+          Voided
+        </StatusBadge>
       );
     }
     if (inv.isSalesReceipt || inv.status === 'paid' || inv.balanceDue === 0) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-          <CheckCircle2 className="w-3 h-3" /> {inv.isSalesReceipt ? 'Receipt' : 'Paid'}
-        </span>
+        <StatusBadge tone="success" icon={<CheckCircle2 className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />}>
+          {inv.isSalesReceipt ? 'Receipt' : 'Paid'}
+        </StatusBadge>
       );
     }
     if (inv.status === 'partial') {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-          <Clock className="w-3 h-3" /> Partial
-        </span>
+        <StatusBadge tone="warning" icon={<Clock className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />}>
+          Partial
+        </StatusBadge>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-        <Clock className="w-3 h-3" /> Open
-      </span>
+      <StatusBadge tone="info" icon={<Clock className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />}>
+        Open
+      </StatusBadge>
     );
   };
   const buildInvoiceActionContext = (inv: ApiInvoice, pendingId?: string | null): ActionEligibilityContext<ApiInvoice> => ({
@@ -1459,7 +1476,10 @@ export const InvoicesView: React.FC = () => {
             return;
           }
           const summary = related.map((p: any) => `${p.paymentNumber}: ${formatCurrency(p.amount, currency)}`).join('\n');
-          window.alert(`Payment history for ${inv.invoiceNumber}:\n${summary}`);
+          await appDialog.alert({
+            title: `Payment History — ${inv.invoiceNumber}`,
+            message: summary,
+          });
         },
       },
       {
@@ -1506,7 +1526,13 @@ export const InvoicesView: React.FC = () => {
         groupLabel: 'Other',
         requiredPermission: 'invoices:write',
         execute: async () => {
-          const note = window.prompt(`Internal note for ${inv.invoiceNumber}:`);
+          const note = await appDialog.prompt({
+            title: `Internal Note — ${inv.invoiceNumber}`,
+            message: 'Record an internal operational note on this invoice.',
+            label: 'Internal note',
+            placeholder: 'Enter note…',
+            multiline: true,
+          });
           if (note === null) return;
           const trimmed = note.trim();
           if (!trimmed) return;
@@ -1529,15 +1555,17 @@ export const InvoicesView: React.FC = () => {
         requiredPermission: 'audit:read',
         execute: async () => {
           try {
-            const res = await fetch(`/api/audit/logs?limit=200`, { credentials: 'include' });
-            const data = await res.json();
+            const data = await requestJson<any>(`/api/audit/logs?limit=200`);
             const logs = (data.logs || []).filter((l: any) => l.tableName === 'invoices' && l.recordId === inv.id);
             if (logs.length === 0) {
               triggerShortcutNotice(`No audit entries for ${inv.invoiceNumber}`);
               return;
             }
             const summary = logs.map((l: any) => `${l.occurredAt} ${l.action} by ${l.actorUsername || 'system'}`).join('\n');
-            window.alert(`Audit history for ${inv.invoiceNumber}:\n${summary}`);
+            await appDialog.alert({
+              title: `Audit History — ${inv.invoiceNumber}`,
+              message: summary,
+            });
           } catch (err: any) {
             setErrorMsg(err?.message || 'Failed to load audit history');
           }
@@ -1732,17 +1760,9 @@ export const InvoicesView: React.FC = () => {
             let reason: string | undefined;
             const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
             if (confirmation) {
-              const defaultReason = confirmation.requireReason ? '' : '';
-              const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}${confirmation.requireReason ? '\n\nReason required.' : (confirmation.reasonLabel ? '\n\nOptional reason:' : '')}`;
-              if (confirmation.requireReason || confirmation.destructive) {
-                const input = window.prompt(msg, defaultReason);
-                if (input === null) return; // cancelled
-                reason = (input || '').trim();
-                if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
-              } else {
-                const ok = window.confirm(msg);
-                if (!ok) return;
-              }
+              const res = await confirmActionModal(confirmation);
+              if (!res.confirmed) return;
+              reason = res.reason;
             }
             if (typeof def.execute === 'function') {
               await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
@@ -1784,16 +1804,9 @@ export const InvoicesView: React.FC = () => {
             let reason: string | undefined;
             const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
             if (confirmation) {
-              const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}`;
-              if (confirmation.requireReason || confirmation.destructive) {
-                const input = window.prompt(msg, '');
-                if (input === null) return;
-                reason = (input || '').trim();
-                if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
-              } else {
-                const ok = window.confirm(msg);
-                if (!ok) return;
-              }
+              const res = await confirmActionModal(confirmation);
+              if (!res.confirmed) return;
+              reason = res.reason;
             }
             if (typeof def.execute === 'function') {
               await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
@@ -1810,193 +1823,120 @@ export const InvoicesView: React.FC = () => {
   };
 
   return (
-    <div
-      className="min-h-full bg-[#FEFDFB] px-5 py-10 text-[#23282A] dark:bg-[#070b14] dark:text-slate-100"
-      style={{ fontFamily: "'Inter', 'Plus Jakarta Sans', sans-serif" }}
-    >
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6">
-        {!hubOpen && (
-        <div className="relative mx-auto mb-2 flex w-full flex-col items-center pt-3.5 text-center">
-          <div className="absolute left-1/2 top-0 h-1 w-[120px] -translate-x-1/2 rounded-full bg-gradient-to-r from-[#0f766e] via-[#3fa294] to-[#f59e0b]" />
-          <h1
-            className="mb-2 bg-gradient-to-br from-[#0f544c] to-[#3fa294] bg-clip-text text-[28px] font-normal tracking-[0.2px] text-transparent sm:text-[36px] dark:from-[#8be0d3] dark:to-[#3fa294]"
-            style={{ fontFamily: "'DM Serif Display', Georgia, serif" }}
-          >
-            Sales Flow{' '}
-            <span className="bg-gradient-to-br from-[#0f544c] to-[#2eb12e] bg-clip-text text-transparent dark:from-[#8be0d3] dark:to-[#2eb12e]">
-              Command
-            </span>
-          </h1>
-          <p className="mx-auto max-w-[520px] text-[13.5px] font-medium leading-relaxed text-[#5c6567] dark:text-slate-400">
-            Sales, invoices &amp; receivables — live A/R ledger for receipts, payments, credits, estimates, recurring schedules and reminders.
-          </p>
-
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+    <PageShell>
+      <PageHeader
+        title="Invoices & Accounts Receivable (A/R)"
+        subtitle="Live A/R ledger for sales invoices, point-of-sale receipts, customer payments, credit memos, estimates, and recurring schedules."
+        icon={<FileText className="h-4 w-4" strokeWidth={1.75} />}
+        actions={
+          <>
             {canWriteEst && (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => openModalFor('estimate')}
-                className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
+                icon={<FileText className="h-3.5 w-3.5" strokeWidth={1.75} />}
               >
-                <FileText className="h-3.5 w-3.5" />
-                <span>New Quote</span>
-              </button>
+                New Quote
+              </Button>
             )}
             {canWrite && (
               <>
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => openModalFor('sales_receipt')}
-                  className="flex items-center gap-1.5 rounded-lg border border-[#1f8577]/35 bg-[#1f8577]/[0.06] px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#1f8577] hover:bg-[#1f8577]/10 dark:border-[#3fa294]/40 dark:bg-[#1f8577]/10 dark:text-[#8be0d3]"
+                  icon={<CreditCard className="h-3.5 w-3.5" strokeWidth={1.75} />}
                 >
-                  <CreditCard className="h-3.5 w-3.5" />
-                  <span>Sales Receipt</span>
-                </button>
-                <button
+                  Sales Receipt
+                </Button>
+                <Button
+                  variant="emerald"
+                  size="sm"
                   onClick={() => openReceivePaymentForInvoice()}
-                  className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
+                  icon={<DollarSign className="h-3.5 w-3.5" strokeWidth={1.75} />}
                 >
-                  <DollarSign className="h-3.5 w-3.5 text-[#1f8577] dark:text-[#5ec2b3]" />
-                  <span>Receive Payment</span>
-                </button>
-                <button
+                  Receive Payment
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={() => openModalFor('invoice')}
-                  className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#1f8577] to-[#0f544c] px-4 py-2 text-xs font-bold text-white shadow-[0_4px_10px_-3px_rgba(31,133,119,0.5)] transition-transform hover:-translate-y-px"
+                  icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
                 >
-                  <Plus className="h-4 w-4" />
-                  <span>New Invoice</span>
-                </button>
+                  New Invoice
+                </Button>
               </>
             )}
-          </div>
-        </div>
-        )}
-
-      {!hubOpen && (
-        <>
-          <FinancialDataNotice
-            state={agingFigureState}
-            label="sales ledger data"
-            onRetry={loadData}
-          />
-          {aging?.totals && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {[
-            { label: 'Outstanding', value: aging.totals.total, tone: 'text-slate-900 dark:text-white' },
-            { label: 'Current', value: aging.totals.current, tone: 'text-emerald-600 dark:text-emerald-400' },
-            { label: '1–30 days', value: aging.totals.days1To30, tone: 'text-amber-600 dark:text-amber-400' },
-            { label: '31–60 days', value: aging.totals.days31To60, tone: 'text-orange-600 dark:text-orange-400' },
-            { label: '61–90 days', value: aging.totals.days61To90, tone: 'text-rose-600 dark:text-rose-400' },
-            { label: '90+ days', value: aging.totals.daysOver90, tone: 'text-rose-700 dark:text-rose-300' },
-          ].map(k => (
-            <div key={k.label} className="rounded-xl border border-[#e4ddd1] bg-white/80 p-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/60">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-[#5c6567] dark:text-slate-400">{k.label}</div>
-              <div className={`font-mono text-sm font-bold ${k.tone}`}>{formatCurrency(Number(k.value) || 0, currency)}</div>
-            </div>
-          ))}
-        </div>
-          )}
-        </>
-      )}
+          </>
+        }
+      />
 
       {errorMsg && (
-        <div role="alert" className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between">
-          <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="text-xs underline">Dismiss</button>
+        <InlineAlert tone="error" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </InlineAlert>
+      )}
+
+      <FinancialDataNotice
+        state={agingFigureState}
+        label="sales ledger data"
+        onRetry={loadData}
+      />
+      {aging?.totals && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <MetricTile compact label="Outstanding" value={formatCurrency(Number(aging.totals.total) || 0, currency)} tone="neutral" />
+          <MetricTile compact label="Current" value={formatCurrency(Number(aging.totals.current) || 0, currency)} tone="emerald" />
+          <MetricTile compact label="1–30 days" value={formatCurrency(Number(aging.totals.days1To30) || 0, currency)} tone="amber" />
+          <MetricTile compact label="31–60 days" value={formatCurrency(Number(aging.totals.days31To60) || 0, currency)} tone="amber" />
+          <MetricTile compact label="61–90 days" value={formatCurrency(Number(aging.totals.days61To90) || 0, currency)} tone="rose" />
+          <MetricTile compact label="90+ days" value={formatCurrency(Number(aging.totals.daysOver90) || 0, currency)} tone="rose" />
         </div>
       )}
 
-      {!hubOpen ? (
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))' }}
-        >
-          {salesFlowCards.map(card => {
-            const Icon = card.icon;
-            return (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => {
-                  setActiveTab(card.id);
-                  setHubOpen(true);
-                }}
-                className="group relative flex w-full flex-col items-center justify-center gap-3.5 rounded-[14px] border border-[#e4ddd1] bg-[#FEFDFB] px-5 py-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#3fa294] hover:shadow-[0_4px_12px_rgba(31,133,119,0.1)] dark:border-white/10 dark:bg-slate-900/60"
-              >
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#1f8577] to-[#0f544c] shadow-[0_4px_10px_-3px_rgba(31,133,119,0.4)]">
-                  <Icon className="h-[22px] w-[22px] text-white" />
-                </span>
-                <span className="flex flex-col gap-1.5">
-                  <span className="flex items-center justify-center gap-2">
-                    <span className="m-0 text-base font-bold tracking-[0.01em] text-[#0f544c] dark:text-[#8be0d3]">
-                      {card.label}
-                    </span>
-                    <span
-                      className={`min-w-5 rounded-full px-2 py-[1px] text-center text-[10px] font-extrabold leading-[18px] ${
-                        card.count > 0
-                          ? 'bg-[#dc2626] text-white'
-                          : 'bg-[#e4ddd1] text-[#5c6567] dark:bg-white/10 dark:text-slate-400'
-                      }`}
-                    >
-                      {card.count}
-                    </span>
-                  </span>
-                  <span className="m-0 text-[11px] leading-relaxed text-[#5c6567] dark:text-slate-400">
-                    {card.description}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+      {/* Unified Tabs + Search Toolbar */}
+      <div className="surface flex flex-wrap items-center justify-between gap-3 p-2.5">
+        <Tabs
+          tabs={salesTabs}
+          value={activeTab}
+          onChange={setActiveTab}
+          ariaLabel="Sales ledger sections"
+        />
+        <div className="relative w-full sm:w-64">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search #, customer, memo..."
+            className="app-input pl-9"
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="surface py-12 flex items-center justify-center gap-2 text-xs text-slate-500">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> Loading commercial sales ledger...
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => setHubOpen(false)}
-              className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span>Sales Flow</span>
-            </button>
-            <span className="text-sm font-bold text-[#0f544c] dark:text-[#8be0d3]">
-              {salesFlowCards.find(card => card.id === activeTab)?.label}
-            </span>
-          </div>
-
-          {loading ? (
-            <div className="py-12 flex items-center justify-center gap-2 text-xs text-slate-500">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading commercial sales ledger...
-            </div>
-          ) : (
-            <>
-              {activeTab === 'invoices' && (
+          {activeTab === 'invoices' && (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  {(['all', 'open', 'paid', 'receipts', 'voided'] as const).map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setInvoiceFilter(f)}
-                      className={`px-3 py-1 rounded-md border text-[11px] font-semibold capitalize ${
-                        invoiceFilter === f
-                          ? 'bg-[#1f8577] text-white border-[#1f8577]'
-                          : 'bg-white dark:bg-slate-900 border-[#e4ddd1] dark:border-white/10 text-[#5c6567] dark:text-slate-300'
-                      }`}
-                    >
-                      {f === 'receipts' ? 'Sales Receipts' : f}
-                    </button>
-                  ))}
-                </div>
-                <div className="relative w-full sm:w-72">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#5c6567]/60 dark:text-slate-500" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search #, customer, memo..."
-                    className="w-full rounded-lg border border-[#e4ddd1] bg-[#FEFDFB] py-1.5 pl-9 pr-3 text-xs text-[#23282A] outline-none transition-colors focus:border-[#3fa294] focus:ring-2 focus:ring-[#3fa294]/20 dark:border-white/10 dark:bg-slate-950 dark:text-slate-100"
-                  />
-                </div>
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                {(['all', 'open', 'paid', 'receipts', 'voided'] as const).map(f => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setInvoiceFilter(f)}
+                    className={`px-3 py-1 rounded-md border text-[11px] font-semibold capitalize transition-colors ${
+                      invoiceFilter === f
+                        ? 'bg-brand-600 text-white border-brand-600'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {f === 'receipts' ? 'Sales Receipts' : f}
+                  </button>
+                ))}
               </div>
 
               <InvoicesTable
@@ -2016,23 +1956,23 @@ export const InvoicesView: React.FC = () => {
                 renderHeader={() => (
                   <>
                     <th className="px-4 py-3">
-                      <button onClick={() => toggleSort('invoiceNumber')} className="inline-flex items-center gap-1">
+                      <button type="button" onClick={() => toggleSort('invoiceNumber')} className="inline-flex items-center gap-1">
                         <span>DOC #</span> <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </th>
                     <th className="px-4 py-3">CUSTOMER</th>
                     <th className="px-4 py-3">
-                      <button onClick={() => toggleSort('date')} className="inline-flex items-center gap-1">
+                      <button type="button" onClick={() => toggleSort('date')} className="inline-flex items-center gap-1">
                         <span>DATE</span> <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </th>
                     <th className="px-4 py-3">
-                      <button onClick={() => toggleSort('dueDate')} className="inline-flex items-center gap-1">
+                      <button type="button" onClick={() => toggleSort('dueDate')} className="inline-flex items-center gap-1">
                         <span>DUE DATE</span> <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </th>
                     <th className="px-4 py-3 text-right">
-                      <button onClick={() => toggleSort('total')} className="inline-flex items-center gap-1 ml-auto">
+                      <button type="button" onClick={() => toggleSort('total')} className="inline-flex items-center gap-1 ml-auto">
                         <span>TOTAL</span> <ArrowUpDown className="w-3 h-3" />
                       </button>
                     </th>
@@ -2048,7 +1988,7 @@ export const InvoicesView: React.FC = () => {
                   const margin = inv.subtotal > 0 ? (inv.grossProfit / inv.subtotal) * 100 : 0;
                   return (
                     <>
-                      <td className={`${cellPad} font-bold text-[#1f8577] dark:text-[#5ec2b3] whitespace-nowrap`}>
+                      <td className={`${cellPad} font-bold text-brand-600 dark:text-brand-400 whitespace-nowrap`}>
                         {inv.invoiceNumber}
                         {inv.currencyCode && inv.currencyCode !== baseCurrency && (
                           <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
@@ -2073,7 +2013,7 @@ export const InvoicesView: React.FC = () => {
                         </span>
                         <div className="text-[10px] font-normal text-slate-400">{margin.toFixed(1)}%</div>
                       </td>
-                      <td className={`${cellPad} text-right font-bold text-[#1f8577] dark:text-[#5ec2b3] tabular-nums`}>
+                      <td className={`${cellPad} text-right font-bold text-brand-600 dark:text-brand-400 tabular-nums`}>
                         {formatCurrency(inv.balanceDue, currency)}
                       </td>
                       <td className={`${cellPad} text-center font-sans`}>{getStatusBadge(inv)}</td>
@@ -2097,16 +2037,19 @@ export const InvoicesView: React.FC = () => {
               />
             </div>
           )}
+
           {activeTab === 'payments' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {canWrite && (
                 <div className="flex justify-end">
-                  <button
+                  <Button
+                    variant="emerald"
+                    size="sm"
                     onClick={() => openReceivePaymentForInvoice()}
-                    className="px-3 py-1.5 rounded-lg bg-[#1f8577] hover:bg-[#177065] text-white text-xs font-bold flex items-center gap-1"
+                    icon={<Plus className="w-3.5 h-3.5" />}
                   >
-                    <Plus className="w-3.5 h-3.5" /> Record Payment
-                  </button>
+                    Record Payment
+                  </Button>
                 </div>
               )}
               <CustomerPaymentsTable
@@ -2126,16 +2069,18 @@ export const InvoicesView: React.FC = () => {
           )}
 
           {activeTab === 'creditMemos' && (
-            <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
-              <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-900 dark:text-white">Customer Credit Memos</span>
+            <div className="surface overflow-hidden">
+              <div className="surface-header">
+                <span className="section-title">Customer Credit Memos</span>
                 {canWrite && (
-                  <button
+                  <Button
+                    variant="primary"
+                    size="sm"
                     onClick={() => setIsCreditMemoOpen(true)}
-                    className="px-3 py-1.5 rounded-lg bg-[#1f8577] hover:bg-[#177065] text-white text-xs font-bold flex items-center gap-1"
+                    icon={<Plus className="w-3.5 h-3.5" />}
                   >
-                    <Plus className="w-3.5 h-3.5" /> Issue Credit Memo
-                  </button>
+                    Issue Credit Memo
+                  </Button>
                 )}
               </div>
               <div className="overflow-x-auto">
@@ -2153,44 +2098,53 @@ export const InvoicesView: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                     {creditMemos.length === 0 ? (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center font-sans text-slate-400">No credit memos issued.</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center font-sans text-slate-500 dark:text-slate-400">No credit memos issued.</td></tr>
                     ) : (
                       creditMemos.map(cm => (
                         <tr key={cm.id}>
-                          <td className="px-4 py-2.5 font-bold text-[#1f8577] dark:text-[#5ec2b3]">{cm.creditNumber}</td>
-                          <td className="px-4 py-2.5 font-sans font-semibold">{cm.customerName}</td>
+                          <td className="px-4 py-2.5 font-bold text-brand-600 dark:text-brand-400">{cm.creditNumber}</td>
+                          <td className="px-4 py-2.5 font-sans font-semibold text-slate-900 dark:text-white">{cm.customerName}</td>
                           <td className="px-4 py-2.5 text-slate-500">{cm.creditDate}</td>
                           <td className="px-4 py-2.5 text-right font-bold tabular-nums">{formatCurrency(cm.total, currency)}</td>
-                          <td className="px-4 py-2.5 text-right font-bold tabular-nums text-emerald-600">{formatCurrency(cm.remainingCredit, currency)}</td>
-                          <td className="px-4 py-2.5 text-center font-sans uppercase text-[10px] font-bold">{cm.status}</td>
+                          <td className="px-4 py-2.5 text-right font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatCurrency(cm.remainingCredit, currency)}</td>
+                          <td className="px-4 py-2.5 text-center font-sans">
+                            <StatusBadge tone={cm.status === 'voided' ? 'neutral' : cm.status === 'open' ? 'info' : 'success'}>
+                              {cm.status}
+                            </StatusBadge>
+                          </td>
                           <td className="px-4 py-2.5 text-right font-sans">
                             <div className="inline-flex items-center gap-1.5">
-                              <button
+                              <Button
+                                variant="secondary"
+                                size="sm"
                                 onClick={() => handleOpenPreview('credit_memo', cm.id)}
-                                className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold inline-flex items-center gap-1"
+                                icon={<Printer className="w-3 h-3" />}
                               >
-                                <Printer className="w-3 h-3" /> Preview
-                              </button>
+                                Preview
+                              </Button>
                               {canWrite && cm.status === 'open' && cm.remainingCredit > 0 && (
-                                <button
+                                <Button
+                                  variant="primary"
+                                  size="sm"
                                   onClick={() => {
                                     const custOpen = invoices.filter(i => i.customerId === cm.customerId && i.status !== 'voided' && i.balanceDue > 0);
                                     setApplyCmTarget(cm);
                                     setApplyCmInvoiceId(custOpen[0]?.id || 0);
                                     setApplyCmAmount(String(Math.min(cm.remainingCredit, custOpen[0]?.balanceDue || cm.remainingCredit)));
                                   }}
-                                  className="px-2.5 py-1 rounded bg-[#1f8577] text-white text-[11px] font-semibold"
                                 >
                                   Apply to Invoice
-                                </button>
+                                </Button>
                               )}
                               {canWrite && cm.status !== 'voided' && (
-                                <button
+                                <Button
+                                  variant="danger"
+                                  size="sm"
                                   onClick={() => void handleVoidCreditMemo(cm)}
-                                  className="px-2 py-1 rounded border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-semibold inline-flex items-center gap-1"
+                                  icon={<Ban className="w-3 h-3" />}
                                 >
-                                  <Ban className="w-3 h-3" /> Void
-                                </button>
+                                  Void
+                                </Button>
                               )}
                             </div>
                           </td>
@@ -2206,12 +2160,14 @@ export const InvoicesView: React.FC = () => {
           {activeTab === 'estimates' && (
             <div className="space-y-3">
               {!costDetailsIncluded && (
-                <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-center gap-2">
-                  <Lock className="w-4 h-4" />
-                  <span>Production cost & estimated margin columns are redacted for your current role permissions.</span>
-                </div>
+                <InlineAlert tone="warning">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5" />
+                    Production cost &amp; estimated margin columns are redacted for your current role permissions.
+                  </span>
+                </InlineAlert>
               )}
-              <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
+              <div className="surface overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase text-[10px] font-bold border-b border-slate-200 dark:border-slate-800">
@@ -2228,38 +2184,46 @@ export const InvoicesView: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-                      {estimates.map(est => (
-                        <tr
-                          key={est.id}
-                          onClick={() => setSelectedEstimateId(est.id)}
-                          onContextMenu={(e) => { e.preventDefault(); setSelectedEstimateId(est.id); setRowContextMenu({ x: e.clientX, y: e.clientY, type: 'estimate', record: est }); }}
-                          className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-850/50 ${selectedEstimateId === est.id ? 'bg-blue-50/70 dark:bg-blue-900/20 ring-1 ring-inset ring-blue-200 dark:ring-blue-800' : ''}`}
-                        >
-                          <td className="px-4 py-3 font-bold text-[#1f8577] dark:text-[#5ec2b3]">{est.estimateNumber}</td>
-                          <td className="px-4 py-3 font-sans font-semibold">{est.customerName}</td>
-                          <td className="px-4 py-3 text-slate-500">{est.estimateDate}</td>
-                          <td className="px-4 py-3 text-slate-500">{est.expiryDate}</td>
-                          <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(Number(est.totalNum ?? est.total), currency)}</td>
-                          {costDetailsIncluded && (
-                            <td className="px-4 py-3 text-right text-slate-500 tabular-nums">
-                              {formatCurrency(Number(est.totalCostNum ?? est.totalCost ?? 0), currency)}
-                            </td>
-                          )}
-                          {costDetailsIncluded && (
-                            <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
-                              {formatCurrency(Number(est.estimatedProfitNum ?? est.estimatedProfit ?? 0), currency)}
-                            </td>
-                          )}
-                          <td className="px-4 py-3 text-center font-sans">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 uppercase">
-                              {est.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right font-sans">
-                            {renderEstimateActions(est)}
+                      {estimates.length === 0 ? (
+                        <tr>
+                          <td colSpan={costDetailsIncluded ? 9 : 7} className="px-4 py-8 text-center font-sans text-slate-500 dark:text-slate-400">
+                            No estimates or quotes created yet.
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        estimates.map(est => (
+                          <tr
+                            key={est.id}
+                            onClick={() => setSelectedEstimateId(est.id)}
+                            onContextMenu={(e) => { e.preventDefault(); setSelectedEstimateId(est.id); setRowContextMenu({ x: e.clientX, y: e.clientY, type: 'estimate', record: est }); }}
+                            className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-white/[0.04] ${selectedEstimateId === est.id ? 'bg-brand-50/70 dark:bg-brand-500/10 ring-1 ring-inset ring-brand-200 dark:ring-brand-700' : ''}`}
+                          >
+                            <td className="px-4 py-3 font-bold text-brand-600 dark:text-brand-400">{est.estimateNumber}</td>
+                            <td className="px-4 py-3 font-sans font-semibold text-slate-900 dark:text-white">{est.customerName}</td>
+                            <td className="px-4 py-3 text-slate-500">{est.estimateDate}</td>
+                            <td className="px-4 py-3 text-slate-500">{est.expiryDate}</td>
+                            <td className="px-4 py-3 text-right font-bold tabular-nums">{formatCurrency(Number(est.totalNum ?? est.total), currency)}</td>
+                            {costDetailsIncluded && (
+                              <td className="px-4 py-3 text-right text-slate-500 tabular-nums">
+                                {formatCurrency(Number(est.totalCostNum ?? est.totalCost ?? 0), currency)}
+                              </td>
+                            )}
+                            {costDetailsIncluded && (
+                              <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                                {formatCurrency(Number(est.estimatedProfitNum ?? est.estimatedProfit ?? 0), currency)}
+                              </td>
+                            )}
+                            <td className="px-4 py-3 text-center font-sans">
+                              <StatusBadge tone={est.status === 'invoiced' || est.status === 'approved' ? 'success' : est.status === 'rejected' ? 'danger' : 'purple'}>
+                                {est.status}
+                              </StatusBadge>
+                            </td>
+                            <td className="px-4 py-3 text-right font-sans">
+                              {renderEstimateActions(est)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -2268,14 +2232,17 @@ export const InvoicesView: React.FC = () => {
           )}
 
           {activeTab === 'recurring' && (
-            <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
-              <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <Repeat className="w-4 h-4 text-[#1f8577] dark:text-[#5ec2b3]" /> Recurring Invoice Schedules
+            <div className="surface overflow-hidden">
+              <div className="surface-header">
+                <span className="section-title flex items-center gap-1.5">
+                  <Repeat className="w-4 h-4 text-brand-600 dark:text-brand-400" strokeWidth={1.75} />
+                  <span>Recurring Invoice Schedules</span>
                 </span>
                 {canWrite && (
                   <div className="flex items-center gap-2">
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       onClick={async () => {
                         try {
                           const res = await commercialApi.runDueRecurringInvoices();
@@ -2285,16 +2252,18 @@ export const InvoicesView: React.FC = () => {
                           setErrorMsg(err?.message);
                         }
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-[#1f8577] hover:bg-[#177065] text-white text-xs font-bold flex items-center gap-1"
+                      icon={<Play className="w-3.5 h-3.5" />}
                     >
-                      <Play className="w-3.5 h-3.5" /> Run Due Schedules Now
-                    </button>
-                    <button
+                      Run Due Schedules Now
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
                       onClick={() => setIsRecurringModalOpen(true)}
-                      className="px-3 py-1.5 rounded-lg bg-[#1f8577] hover:bg-[#177065] text-white text-xs font-bold flex items-center gap-1"
+                      icon={<Plus className="w-3.5 h-3.5" />}
                     >
-                      <Plus className="w-3.5 h-3.5" /> New Schedule
-                    </button>
+                      New Schedule
+                    </Button>
                   </div>
                 )}
               </div>
@@ -2312,19 +2281,19 @@ export const InvoicesView: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                     {recurringList.length === 0 ? (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center font-sans text-slate-400">No recurring invoice schedules configured.</td></tr>
+                      <tr><td colSpan={6} className="px-4 py-8 text-center font-sans text-slate-500 dark:text-slate-400">No recurring invoice schedules configured.</td></tr>
                     ) : (
                       recurringList.map(r => (
                         <tr key={r.id}>
-                          <td className="px-4 py-2.5 font-sans font-semibold">{r.customerName}</td>
+                          <td className="px-4 py-2.5 font-sans font-semibold text-slate-900 dark:text-white">{r.customerName}</td>
                           <td className="px-4 py-2.5 capitalize">{r.frequency}</td>
-                          <td className="px-4 py-2.5 text-[#1f8577] font-bold dark:text-[#5ec2b3]">{r.nextDue}</td>
+                          <td className="px-4 py-2.5 text-brand-600 font-bold dark:text-brand-400">{r.nextDue}</td>
                           <td className="px-4 py-2.5 text-slate-500">{r.lastGeneratedDate || '—'}</td>
-                          <td className="px-4 py-2.5 text-right">{r.generatedCount}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{r.generatedCount}</td>
                           <td className="px-4 py-2.5 font-sans">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${r.isActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
+                            <StatusBadge tone={r.isActive ? 'success' : 'neutral'}>
                               {r.isActive ? 'Active' : 'Completed'}
-                            </span>
+                            </StatusBadge>
                           </td>
                         </tr>
                       ))
@@ -2337,23 +2306,23 @@ export const InvoicesView: React.FC = () => {
 
           {activeTab === 'collections' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
-                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 font-bold text-xs">
-                  Collections & Payment Reminders Dispatched
+              <div className="surface overflow-hidden">
+                <div className="surface-header">
+                  <span className="section-title">Collections &amp; Payment Reminders Dispatched</span>
                 </div>
                 <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                   {comms.remindersSent.length === 0 ? (
-                    <div className="p-6 text-center text-slate-400">No invoice reminders sent yet. Use Row Actions on any Open Invoice.</div>
+                    <div className="p-6 text-center text-slate-500 dark:text-slate-400">No invoice reminders sent yet. Use Row Actions on any Open Invoice.</div>
                   ) : (
                     comms.remindersSent.map(rem => (
-                      <div key={rem.id} className="p-3 flex items-center justify-between">
+                      <div key={rem.id} className="p-3.5 flex items-center justify-between gap-3">
                         <div>
                           <div className="font-bold text-slate-900 dark:text-white">{rem.invoiceNumber} · {rem.customerName}</div>
                           <div className="text-[11px] text-slate-500">To: {rem.recipient} · Sent {new Date(rem.sentAt).toLocaleString()}</div>
                         </div>
                         <div className="text-right font-mono">
-                          <div className="font-bold text-[#1f8577] dark:text-[#5ec2b3]">{formatCurrency(rem.balanceDue, currency)}</div>
-                          <span className="text-[10px] uppercase text-emerald-600 font-bold">{rem.status}</span>
+                          <div className="font-bold text-brand-600 dark:text-brand-400 tabular-nums">{formatCurrency(rem.balanceDue, currency)}</div>
+                          <span className="text-[10px] uppercase text-emerald-600 dark:text-emerald-400 font-bold">{rem.status}</span>
                         </div>
                       </div>
                     ))
@@ -2361,16 +2330,16 @@ export const InvoicesView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-[#e4ddd1] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-slate-900/70">
-                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 font-bold text-xs">
-                  Outbound Communications Audit Log
+              <div className="surface overflow-hidden">
+                <div className="surface-header">
+                  <span className="section-title">Outbound Communications Audit Log</span>
                 </div>
                 <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                   {comms.emailLog.length === 0 ? (
-                    <div className="p-6 text-center text-slate-400">No communications logged yet.</div>
+                    <div className="p-6 text-center text-slate-500 dark:text-slate-400">No communications logged yet.</div>
                   ) : (
                     comms.emailLog.map(em => (
-                      <div key={em.id} className="p-3 flex items-center justify-between gap-3">
+                      <div key={em.id} className="p-3.5 flex items-center justify-between gap-3">
                         <div>
                           <div className="font-semibold text-slate-900 dark:text-white">{em.subject}</div>
                           <div className="text-[11px] text-slate-500">
@@ -2381,355 +2350,342 @@ export const InvoicesView: React.FC = () => {
                             <div className="text-[11px] text-rose-600 dark:text-rose-400">{em.lastError}</div>
                           )}
                         </div>
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        <StatusBadge
+                          tone={
                             em.status === 'sent'
-                              ? 'bg-emerald-100 text-emerald-800'
+                              ? 'success'
                               : em.status === 'failed'
-                              ? 'bg-rose-100 text-rose-800'
+                              ? 'danger'
                               : em.status === 'skipped'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
+                              ? 'warning'
+                              : 'neutral'
+                          }
                         >
                           {em.status}
-                        </span>
+                        </StatusBadge>
                       </div>
                     ))
                   )}
                 </div>
               </div>
             </div>
-          )}
-            </>
           )}
         </>
       )}
 
-        <div className="mt-2 flex items-center justify-center gap-3.5 pb-2">
-          <div className="h-px w-10 bg-[#e4ddd1] dark:bg-white/10" />
-          <span className="text-[9px] font-extrabold uppercase tracking-[0.3px] text-[#5c6567] dark:text-slate-400">
-            Operational Neural Link
-          </span>
-          <div className="h-px w-10 bg-[#e4ddd1] dark:bg-white/10" />
-        </div>
-      </div>
-
-      {isDocModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">
-                {docMode === 'estimate' ? 'New Customer Estimate / Quote' : docMode === 'sales_receipt' ? 'New Point-of-Sale Receipt' : 'New Customer Invoice'}
-              </span>
-              <button onClick={() => setIsDocModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+      <ModalShell open={isDocModalOpen} onClose={() => setIsDocModalOpen(false)} size="3xl" titleId="ar-doc-modal-title">
+        <ModalHeader
+          titleId="ar-doc-modal-title"
+          title={docMode === 'estimate' ? 'New Customer Estimate / Quote' : docMode === 'sales_receipt' ? 'New Point-of-Sale Receipt' : 'New Customer Invoice'}
+          icon={<FileText className="h-4 w-4" />}
+          tone="brand"
+          onClose={() => setIsDocModalOpen(false)}
+        />
+        <form id="ar-doc-form" onSubmit={handleSubmitDoc} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <FormField label="Customer" required>
+                <select
+                  value={docCustomerId}
+                  onChange={e => setDocCustomerId(Number(e.target.value))}
+                  className="app-input"
+                  required
+                >
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>{c.companyName}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Date" required>
+                <input type="date" value={docDate} onChange={e => setDocDate(e.target.value)} className="app-input app-input-mono" required />
+              </FormField>
+              <FormField label="Tax Rate (%)">
+                <input type="number" step="0.01" value={docTaxRate} onChange={e => setDocTaxRate(e.target.value)} className="app-input app-input-mono" />
+              </FormField>
             </div>
-            <form onSubmit={handleSubmitDoc} className="p-5 space-y-4 overflow-y-auto text-xs">
+
+            {docMode !== 'estimate' && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Customer *</label>
+                <FormField label="Currency">
                   <select
-                    value={docCustomerId}
-                    onChange={e => setDocCustomerId(Number(e.target.value))}
-                    className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950"
-                    required
+                    value={docCurrency}
+                    onChange={e => {
+                      setDocCurrency(e.target.value);
+                      if (e.target.value === baseCurrency) setDocExchangeRate('1');
+                      else {
+                        const known = fxRateFor(e.target.value);
+                        if (known) setDocExchangeRate(String(known));
+                      }
+                    }}
+                    className="app-input"
                   >
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>{c.companyName}</option>
+                    {fxOptions.map(o => (
+                      <option key={o.code} value={o.code}>{o.label}</option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Date</label>
-                  <input type="date" value={docDate} onChange={e => setDocDate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" required />
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Tax Rate (%)</label>
-                  <input type="number" step="0.01" value={docTaxRate} onChange={e => setDocTaxRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
+                </FormField>
+                {docCurrency !== baseCurrency && (
+                  <FormField label={`FX Rate (to ${baseCurrency})`}>
+                    <input type="number" step="0.0001" value={docExchangeRate} onChange={e => setDocExchangeRate(e.target.value)} className="app-input app-input-mono" />
+                  </FormField>
+                )}
+                {docMode === 'sales_receipt' && (
+                  <FormField label="Deposit To Account">
+                    <select value={docDepositAcctId} onChange={e => setDocDepositAcctId(Number(e.target.value))} className="app-input">
+                      {bankAccounts.map(b => (
+                        <option key={b.id} value={b.id}>{b.code} - {b.name}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                )}
               </div>
+            )}
 
-              {docMode !== 'estimate' && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Currency</label>
-                    <select
-                      value={docCurrency}
-                      onChange={e => {
-                        setDocCurrency(e.target.value);
-                        if (e.target.value === baseCurrency) setDocExchangeRate('1');
-                        else {
-                          const known = fxRateFor(e.target.value);
-                          if (known) setDocExchangeRate(String(known));
-                        }
-                      }}
-                      className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950"
-                    >
-                      {fxOptions.map(o => (
-                        <option key={o.code} value={o.code}>{o.label}</option>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                <span>Line Items (Raw materials excluded from invoicing)</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDocLines(prev => [...prev, { itemId: '', description: '', quantity: '1', rate: '0', unitCost: '0', taxable: true }])}
+                  icon={<Plus className="w-3.5 h-3.5" />}
+                >
+                  Add Line
+                </Button>
+              </div>
+              {docLines.map((line, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-center p-2.5 rounded-lg bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.07]">
+                  <div className="col-span-3">
+                    <select value={line.itemId} onChange={e => handleSelectItemOnLine(idx, e.target.value)} className="app-input">
+                      <option value="">Custom / Freeform</option>
+                      {invoiceableItems.map(it => (
+                        <option key={it.id} value={it.id}>{it.name}</option>
                       ))}
                     </select>
                   </div>
-                  {docCurrency !== baseCurrency && (
-                    <div>
-                      <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">FX Rate (to {baseCurrency})</label>
-                      <input type="number" step="0.0001" value={docExchangeRate} onChange={e => setDocExchangeRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                    </div>
-                  )}
-                  {docMode === 'sales_receipt' && (
-                    <div>
-                      <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Deposit To Account</label>
-                      <select value={docDepositAcctId} onChange={e => setDocDepositAcctId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950">
-                        {bankAccounts.map(b => (
-                          <option key={b.id} value={b.id}>{b.code} - {b.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div className="col-span-4">
+                    <input type="text" placeholder="Description" value={line.description} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, description: e.target.value } : x)))} className="app-input" required />
+                  </div>
+                  <div className="col-span-2">
+                    <input type="number" step="0.01" placeholder="Qty" value={line.quantity} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, quantity: e.target.value } : x)))} className="app-input app-input-mono text-right" />
+                  </div>
+                  <div className="col-span-2">
+                    <input type="number" step="0.01" placeholder="Rate" value={line.rate} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, rate: e.target.value } : x)))} className="app-input app-input-mono text-right" />
+                  </div>
+                  <div className="col-span-1 text-center">
+                    <input type="checkbox" checked={line.taxable} title="Taxable" aria-label={`Line ${idx + 1} taxable`} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, taxable: e.target.checked } : x)))} />
+                  </div>
                 </div>
+              ))}
+            </div>
+
+            <FormField label="Memo / Notes">
+              <input type="text" value={docNotes} onChange={e => setDocNotes(e.target.value)} className="app-input" />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            onCancel={() => setIsDocModalOpen(false)}
+            form="ar-doc-form"
+            submitLabel={docMode === 'estimate' ? 'Save Quote' : 'Post to General Ledger'}
+            busy={busy}
+          />
+        </form>
+      </ModalShell>
+
+      <ModalShell open={isPaymentModalOpen} onClose={() => setIsPaymentModalOpen(false)} size="2xl" titleId="ar-payment-modal-title">
+        <ModalHeader
+          titleId="ar-payment-modal-title"
+          title="Receive Customer Payment"
+          icon={<DollarSign className="h-4 w-4" />}
+          tone="emerald"
+          onClose={() => setIsPaymentModalOpen(false)}
+        />
+        <form id="ar-payment-form" onSubmit={handleSubmitPayment} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <FormField label="Customer">
+                <select value={pmtCustomerId} onChange={e => { setPmtCustomerId(Number(e.target.value)); setPmtAllocations({}); }} className="app-input">
+                  {customers.map(c => (<option key={c.id} value={c.id}>{c.companyName}</option>))}
+                </select>
+              </FormField>
+              <FormField label="Payment Date">
+                <input type="date" value={pmtDate} onChange={e => setPmtDate(e.target.value)} className="app-input app-input-mono" />
+              </FormField>
+              <FormField label="Method">
+                <select value={pmtMethod} onChange={e => setPmtMethod(e.target.value)} className="app-input">
+                  <option value="ACH / Wire">ACH / Wire</option>
+                  <option value="Check">Check</option>
+                  <option value="Cash">Cash</option>
+                  <option value="Mobile Money">Mobile Money</option>
+                  <option value="Credit Card">Credit Card</option>
+                </select>
+              </FormField>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <FormField label="Deposit To">
+                <select value={pmtDepositAcctId} onChange={e => setPmtDepositAcctId(Number(e.target.value))} className="app-input">
+                  {bankAccounts.map(b => (<option key={b.id} value={b.id}>{b.code} - {b.name}</option>))}
+                </select>
+              </FormField>
+              <FormField label="Currency">
+                <select value={pmtCurrency} onChange={e => setPmtCurrency(e.target.value)} className="app-input">
+                  {fxOptions.map(o => (<option key={o.code} value={o.code}>{o.code}</option>))}
+                </select>
+              </FormField>
+              {pmtCurrency !== baseCurrency && (
+                <FormField label="FX Rate">
+                  <input type="number" step="0.0001" value={pmtExchangeRate} onChange={e => setPmtExchangeRate(e.target.value)} className="app-input app-input-mono" />
+                </FormField>
               )}
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between font-bold text-slate-700 dark:text-slate-300">
-                  <span>Line Items (Raw materials excluded from invoicing)</span>
-                  <button type="button" onClick={() => setDocLines(prev => [...prev, { itemId: '', description: '', quantity: '1', rate: '0', unitCost: '0', taxable: true }])} className="text-blue-600 hover:underline flex items-center gap-1">
-                    <Plus className="w-3.5 h-3.5" /> Add Line
-                  </button>
-                </div>
-                {docLines.map((line, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-center p-2 rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800">
-                    <div className="col-span-3">
-                      <select value={line.itemId} onChange={e => handleSelectItemOnLine(idx, e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 bg-white dark:bg-slate-950">
-                        <option value="">Custom / Freeform</option>
-                        {invoiceableItems.map(it => (
-                          <option key={it.id} value={it.id}>{it.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-span-4">
-                      <input type="text" placeholder="Description" value={line.description} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, description: e.target.value } : x)))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 bg-white dark:bg-slate-950" required />
-                    </div>
-                    <div className="col-span-2">
-                      <input type="number" step="0.01" placeholder="Qty" value={line.quantity} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, quantity: e.target.value } : x)))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 bg-white dark:bg-slate-950 font-mono text-right" />
-                    </div>
-                    <div className="col-span-2">
-                      <input type="number" step="0.01" placeholder="Rate" value={line.rate} onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, rate: e.target.value } : x)))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 bg-white dark:bg-slate-950 font-mono text-right" />
-                    </div>
-                    <div className="col-span-1 text-center">
-                      <input type="checkbox" checked={line.taxable} title="Taxable" onChange={e => setDocLines(prev => prev.map((x, i) => (i === idx ? { ...x, taxable: e.target.checked } : x)))} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-600 dark:text-slate-300 block mb-1">Memo / Notes</label>
-                <input type="text" value={docNotes} onChange={e => setDocNotes(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-2 bg-white dark:bg-slate-950" />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsDocModalOpen(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700">Cancel</button>
-                <button type="submit" disabled={busy} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold">{busy ? 'Posting...' : docMode === 'estimate' ? 'Save Quote' : 'Post to General Ledger'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isPaymentModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Receive Customer Payment</span>
-              <button onClick={() => setIsPaymentModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+              <FormField label={`Total Payment (${pmtCurrency})`}>
+                <input type="number" step="0.01" value={pmtAmount} onChange={e => setPmtAmount(e.target.value)} placeholder="Auto or override" className="app-input app-input-mono font-bold" />
+              </FormField>
             </div>
-            <form onSubmit={handleSubmitPayment} className="p-5 space-y-4 overflow-y-auto text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Customer</label>
-                  <select value={pmtCustomerId} onChange={e => { setPmtCustomerId(Number(e.target.value)); setPmtAllocations({}); }} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {customers.map(c => (<option key={c.id} value={c.id}>{c.companyName}</option>))}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Payment Date</label>
-                  <input type="date" value={pmtDate} onChange={e => setPmtDate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Method</label>
-                  <select value={pmtMethod} onChange={e => setPmtMethod(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    <option value="ACH / Wire">ACH / Wire</option>
-                    <option value="Check">Check</option>
-                    <option value="Cash">Cash</option>
-                    <option value="Mobile Money">Mobile Money</option>
-                    <option value="Credit Card">Credit Card</option>
-                  </select>
-                </div>
+            <div className="surface overflow-hidden">
+              <div className="surface-header !py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                Open Customer Invoices
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Deposit To</label>
-                  <select value={pmtDepositAcctId} onChange={e => setPmtDepositAcctId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {bankAccounts.map(b => (<option key={b.id} value={b.id}>{b.code} - {b.name}</option>))}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Currency</label>
-                  <select value={pmtCurrency} onChange={e => setPmtCurrency(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {fxOptions.map(o => (<option key={o.code} value={o.code}>{o.code}</option>))}
-                  </select>
-                </div>
-                {pmtCurrency !== baseCurrency && (
-                  <div>
-                    <label className="font-semibold block mb-1">FX Rate</label>
-                    <input type="number" step="0.0001" value={pmtExchangeRate} onChange={e => setPmtExchangeRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                  </div>
-                )}
-                <div>
-                  <label className="font-semibold block mb-1">Total Payment ({pmtCurrency})</label>
-                  <input type="number" step="0.01" value={pmtAmount} onChange={e => setPmtAmount(e.target.value)} placeholder="Auto or override" className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono font-bold" />
-                </div>
-              </div>
-              <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 font-bold text-[11px] uppercase">Open Customer Invoices</div>
-                <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-48 overflow-y-auto">
-                  {openInvoicesForPmtCust.length === 0 ? (
-                    <div className="p-4 text-center text-slate-400">No open invoices for this customer (amount posts as unapplied credit).</div>
-                  ) : (
-                    openInvoicesForPmtCust.map(inv => (
-                      <div key={inv.id} className="p-2.5 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="font-mono font-bold text-blue-600">{inv.invoiceNumber}</div>
-                          <div className="text-[11px] text-slate-500">Due {inv.dueDate} · Balance: {formatCurrency(inv.balanceDue, currency)}</div>
-                        </div>
-                        <input type="number" step="0.01" value={pmtAllocations[inv.id] || ''} placeholder="0.00" onChange={e => setPmtAllocations(prev => ({ ...prev, [inv.id]: e.target.value }))} className="w-32 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-right font-mono bg-white dark:bg-slate-950" />
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-48 overflow-y-auto text-xs">
+                {openInvoicesForPmtCust.length === 0 ? (
+                  <div className="p-4 text-center text-slate-500 dark:text-slate-400">No open invoices for this customer (amount posts as unapplied credit).</div>
+                ) : (
+                  openInvoicesForPmtCust.map(inv => (
+                    <div key={inv.id} className="p-2.5 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-mono font-bold text-brand-600 dark:text-brand-400">{inv.invoiceNumber}</div>
+                        <div className="text-[11px] text-slate-500">Due {inv.dueDate} · Balance: {formatCurrency(inv.balanceDue, currency)}</div>
                       </div>
-                    ))
-                  )}
-                </div>
+                      <input type="number" step="0.01" value={pmtAllocations[inv.id] || ''} placeholder="0.00" onChange={e => setPmtAllocations(prev => ({ ...prev, [inv.id]: e.target.value }))} className="app-input app-input-mono w-32 text-right" />
+                    </div>
+                  ))
+                )}
               </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsPaymentModalOpen(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700">Cancel</button>
-                <button type="submit" disabled={busy} className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold">{busy ? 'Posting...' : 'Record Payment'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isCreditMemoOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Issue Credit Memo</span>
-              <button onClick={() => setIsCreditMemoOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleCreateCreditMemo} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Customer</label>
-                <select value={cmCustomerId} onChange={e => setCmCustomerId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.companyName}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Reason / Line Description</label>
-                <input type="text" value={cmDescription} onChange={e => setCmDescription(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" required />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div><label className="font-semibold block mb-1">Qty</label><input type="number" value={cmQuantity} onChange={e => setCmQuantity(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-                <div><label className="font-semibold block mb-1">Unit Credit</label><input type="number" step="0.01" value={cmRate} onChange={e => setCmRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-                <div><label className="font-semibold block mb-1">Tax %</label><input type="number" step="0.01" value={cmTaxRate} onChange={e => setCmTaxRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Memo</label>
-                <input type="text" value={cmMemo} onChange={e => setCmMemo(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsCreditMemoOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy} className="px-4 py-2 rounded bg-blue-600 text-white font-bold">Issue Credit Memo</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+          </ModalBody>
+          <ModalFooter
+            onCancel={() => setIsPaymentModalOpen(false)}
+            form="ar-payment-form"
+            submitLabel="Record Payment"
+            tone="emerald"
+            busy={busy}
+          />
+        </form>
+      </ModalShell>
 
-      {applyCmTarget && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Apply {applyCmTarget.creditNumber}</span>
-              <button onClick={() => setApplyCmTarget(null)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+      <ModalShell open={isCreditMemoOpen} onClose={() => setIsCreditMemoOpen(false)} size="md" titleId="ar-cm-modal-title">
+        <ModalHeader
+          titleId="ar-cm-modal-title"
+          title="Issue Credit Memo"
+          icon={<Scissors className="h-4 w-4" />}
+          tone="amber"
+          onClose={() => setIsCreditMemoOpen(false)}
+        />
+        <form id="ar-cm-form" onSubmit={handleCreateCreditMemo} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody>
+            <FormField label="Customer">
+              <select value={cmCustomerId} onChange={e => setCmCustomerId(Number(e.target.value))} className="app-input">
+                {customers.map(c => <option key={c.id} value={c.id}>{c.companyName}</option>)}
+              </select>
+            </FormField>
+            <FormField label="Reason / Line Description" required>
+              <input type="text" value={cmDescription} onChange={e => setCmDescription(e.target.value)} className="app-input" required />
+            </FormField>
+            <div className="grid grid-cols-3 gap-2">
+              <FormField label="Qty"><input type="number" value={cmQuantity} onChange={e => setCmQuantity(e.target.value)} className="app-input app-input-mono" /></FormField>
+              <FormField label="Unit Credit"><input type="number" step="0.01" value={cmRate} onChange={e => setCmRate(e.target.value)} className="app-input app-input-mono" /></FormField>
+              <FormField label="Tax %"><input type="number" step="0.01" value={cmTaxRate} onChange={e => setCmTaxRate(e.target.value)} className="app-input app-input-mono" /></FormField>
             </div>
-            <form onSubmit={handleApplyCreditMemo} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Target Open Invoice</label>
-                <select value={applyCmInvoiceId} onChange={e => setApplyCmInvoiceId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" required>
-                  <option value={0}>Select invoice...</option>
-                  {invoices.filter(i => i.customerId === applyCmTarget.customerId && i.status !== 'voided' && i.balanceDue > 0).map(i => (
-                    <option key={i.id} value={i.id}>{i.invoiceNumber} (Due: {formatCurrency(i.balanceDue, currency)})</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Amount to Apply</label>
-                <input type="number" step="0.01" value={applyCmAmount} onChange={e => setApplyCmAmount(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" required />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setApplyCmTarget(null)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy || !applyCmInvoiceId} className="px-4 py-2 rounded bg-blue-600 text-white font-bold">Apply Credit</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            <FormField label="Memo">
+              <input type="text" value={cmMemo} onChange={e => setCmMemo(e.target.value)} className="app-input" />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            onCancel={() => setIsCreditMemoOpen(false)}
+            form="ar-cm-form"
+            submitLabel="Issue Credit Memo"
+            busy={busy}
+          />
+        </form>
+      </ModalShell>
 
-      {isRecurringModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">New Recurring Invoice Schedule</span>
-              <button onClick={() => setIsRecurringModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handleCreateRecurring} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Customer</label>
-                <select value={recCustomerId} onChange={e => setRecCustomerId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.companyName}</option>)}
+      <ModalShell open={Boolean(applyCmTarget)} onClose={() => setApplyCmTarget(null)} size="md" titleId="ar-apply-cm-modal-title">
+        <ModalHeader
+          titleId="ar-apply-cm-modal-title"
+          title={applyCmTarget ? `Apply ${applyCmTarget.creditNumber}` : 'Apply Credit Memo'}
+          icon={<Scissors className="h-4 w-4" />}
+          tone="brand"
+          onClose={() => setApplyCmTarget(null)}
+        />
+        <form id="ar-apply-cm-form" onSubmit={handleApplyCreditMemo} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody>
+            <FormField label="Target Open Invoice" required>
+              <select value={applyCmInvoiceId} onChange={e => setApplyCmInvoiceId(Number(e.target.value))} className="app-input" required>
+                <option value={0}>Select invoice...</option>
+                {applyCmTarget && invoices.filter(i => i.customerId === applyCmTarget.customerId && i.status !== 'voided' && i.balanceDue > 0).map(i => (
+                  <option key={i.id} value={i.id}>{i.invoiceNumber} (Due: {formatCurrency(i.balanceDue, currency)})</option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Amount to Apply" required>
+              <input type="number" step="0.01" value={applyCmAmount} onChange={e => setApplyCmAmount(e.target.value)} className="app-input app-input-mono" required />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            onCancel={() => setApplyCmTarget(null)}
+            form="ar-apply-cm-form"
+            submitLabel="Apply Credit"
+            disabled={!applyCmInvoiceId}
+            busy={busy}
+          />
+        </form>
+      </ModalShell>
+
+      <ModalShell open={isRecurringModalOpen} onClose={() => setIsRecurringModalOpen(false)} size="md" titleId="ar-recurring-modal-title">
+        <ModalHeader
+          titleId="ar-recurring-modal-title"
+          title="New Recurring Invoice Schedule"
+          icon={<Repeat className="h-4 w-4" />}
+          tone="brand"
+          onClose={() => setIsRecurringModalOpen(false)}
+        />
+        <form id="ar-recurring-form" onSubmit={handleCreateRecurring} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody>
+            <FormField label="Customer">
+              <select value={recCustomerId} onChange={e => setRecCustomerId(Number(e.target.value))} className="app-input">
+                {customers.map(c => <option key={c.id} value={c.id}>{c.companyName}</option>)}
+              </select>
+            </FormField>
+            <div className="grid grid-cols-2 gap-2">
+              <FormField label="Frequency">
+                <select value={recFreq} onChange={e => setRecFreq(e.target.value as any)} className="app-input">
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="annual">Annual</option>
                 </select>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="font-semibold block mb-1">Frequency</label>
-                  <select value={recFreq} onChange={e => setRecFreq(e.target.value as any)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    <option value="weekly">Weekly</option>
-                    <option value="biweekly">Biweekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="quarterly">Quarterly</option>
-                    <option value="annual">Annual</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Start / Next Due Date</label>
-                  <input type="date" value={recStartDate} onChange={e => setRecStartDate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Line Description</label>
-                <input type="text" value={recDesc} onChange={e => setRecDesc(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" required />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div><label className="font-semibold block mb-1">Qty</label><input type="number" value={recQty} onChange={e => setRecQty(e.target.value)} className="w-full border rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-                <div><label className="font-semibold block mb-1">Rate</label><input type="number" step="0.01" value={recRate} onChange={e => setRecRate(e.target.value)} className="w-full border rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-                <div><label className="font-semibold block mb-1">Tax %</label><input type="number" step="0.01" value={recTaxRate} onChange={e => setRecTaxRate(e.target.value)} className="w-full border rounded px-2 py-2 bg-white dark:bg-slate-950 font-mono" /></div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsRecurringModalOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy} className="px-4 py-2 rounded bg-blue-600 text-white font-bold">Save Schedule</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </FormField>
+              <FormField label="Start / Next Due Date">
+                <input type="date" value={recStartDate} onChange={e => setRecStartDate(e.target.value)} className="app-input app-input-mono" />
+              </FormField>
+            </div>
+            <FormField label="Line Description" required>
+              <input type="text" value={recDesc} onChange={e => setRecDesc(e.target.value)} className="app-input" required />
+            </FormField>
+            <div className="grid grid-cols-3 gap-2">
+              <FormField label="Qty"><input type="number" value={recQty} onChange={e => setRecQty(e.target.value)} className="app-input app-input-mono" /></FormField>
+              <FormField label="Rate"><input type="number" step="0.01" value={recRate} onChange={e => setRecRate(e.target.value)} className="app-input app-input-mono" /></FormField>
+              <FormField label="Tax %"><input type="number" step="0.01" value={recTaxRate} onChange={e => setRecTaxRate(e.target.value)} className="app-input app-input-mono" /></FormField>
+            </div>
+          </ModalBody>
+          <ModalFooter
+            onCancel={() => setIsRecurringModalOpen(false)}
+            form="ar-recurring-form"
+            submitLabel="Save Schedule"
+            busy={busy}
+          />
+        </form>
+      </ModalShell>
 
       {depositModalInvoice && (
         <ApplyCustomerDepositModal
@@ -2805,17 +2761,9 @@ export const InvoicesView: React.FC = () => {
                   let reason: string | undefined;
                   const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
                   if (confirmation) {
-                    const defaultReason = confirmation.requireReason ? '' : '';
-                    const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}${confirmation.requireReason ? '\n\nReason required.' : (confirmation.reasonLabel ? '\n\nOptional reason:' : '')}`;
-                    if (confirmation.requireReason || confirmation.destructive) {
-                      const input = window.prompt(msg, defaultReason);
-                      if (input === null) return;
-                      reason = (input || '').trim();
-                      if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
-                    } else {
-                      const ok = window.confirm(msg);
-                      if (!ok) return;
-                    }
+                    const res = await confirmActionModal(confirmation);
+                    if (!res.confirmed) return;
+                    reason = res.reason;
                   }
                   if (typeof def.execute === 'function') await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
                 } catch (err: any) {
@@ -2854,17 +2802,9 @@ export const InvoicesView: React.FC = () => {
                 let reason: string | undefined;
                 const confirmation = freshEval.evaluation.confirmation || (typeof def.confirmation === 'function' ? def.confirmation(freshCtx, def) : def.confirmation);
                 if (confirmation) {
-                  const defaultReason = confirmation.requireReason ? '' : '';
-                  const msg = `${confirmation.message}${confirmation.impactSummary ? '\n\n' + confirmation.impactSummary : ''}${confirmation.requireReason ? '\n\nReason required.' : (confirmation.reasonLabel ? '\n\nOptional reason:' : '')}`;
-                  if (confirmation.requireReason || confirmation.destructive) {
-                    const input = window.prompt(msg, defaultReason);
-                    if (input === null) return;
-                    reason = (input || '').trim();
-                    if (confirmation.requireReason && !reason) throw new Error('A reason is required to continue');
-                  } else {
-                    const ok = window.confirm(msg);
-                    if (!ok) return;
-                  }
+                  const res = await confirmActionModal(confirmation);
+                  if (!res.confirmed) return;
+                  reason = res.reason;
                 }
                 if (typeof def.execute === 'function') await def.execute(freshCtx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
               } catch (err: any) {
@@ -2878,6 +2818,6 @@ export const InvoicesView: React.FC = () => {
         ) : null;
       })()}
 
-    </div>
+    </PageShell>
   );
 };

@@ -10,6 +10,7 @@ import {
   Panel,
   StatusBadge,
 } from '../common/ui';
+import { appDialog } from '../../design-system';
 
 interface SalaryAdvance {
   id: number;
@@ -92,7 +93,13 @@ export const SalaryAdvanceModal: React.FC<{ onClose?: () => void }> = ({ onClose
   };
 
   const remove = async (advance: SalaryAdvance) => {
-    if (!confirm('Cancel this salary advance?')) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Cancel Salary Advance',
+      message: 'Cancel this salary advance? Remaining scheduled deductions will stop.',
+      confirmLabel: 'Cancel Advance',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await requestJson(`/api/payroll/advances/${advance.id}`, { method: 'DELETE' });
       triggerShortcutNotice?.('Advance cancelled');

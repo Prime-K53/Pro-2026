@@ -12,6 +12,7 @@ import {
   Panel,
   StatusBadge,
 } from '../common/ui';
+import { appDialog } from '../../design-system';
 
 interface Contact {
   id: number;
@@ -105,7 +106,13 @@ export const CustomerContactsTab: React.FC<CustomerContactsTabProps> = ({ custom
   };
 
   const remove = async (contact: Contact) => {
-    if (!confirm(`Delete contact "${contact.contactName}"?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Delete Contact',
+      message: `Delete contact "${contact.contactName}"?`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await requestJson(`/api/customers/${customerId}/contacts/${contact.id}`, {
         method: 'DELETE',

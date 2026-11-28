@@ -30,6 +30,17 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
+import {
+  Button,
+  InlineAlert,
+  ModalBody,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+  Tabs,
+} from '../common/ui';
 
 export const PayrollView: React.FC = () => {
   const {
@@ -233,135 +244,68 @@ export const PayrollView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-            Payroll Center &amp; Pay Slips
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Bi-weekly payroll execution, Malawi PAYE &amp; statutory deductions (pension), pension employer match, and pay slips.
-          </p>
-        </div>
+    <PageShell>
+      <PageHeader
+        title="Payroll Center & Pay Slips"
+        subtitle="Bi-weekly payroll execution, Malawi PAYE & statutory deductions (pension), pension employer match, and pay slips."
+        icon={<Users className="w-5 h-5" strokeWidth={1.75} />}
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsNewEmployeeOpen(true)}
+              icon={<Plus className="w-3.5 h-3.5" />}
+            >
+              Add Employee
+            </Button>
+            <Button
+              variant="emerald"
+              size="sm"
+              onClick={() => setActiveTab('wizard')}
+              icon={<Play className="w-3.5 h-3.5" />}
+            >
+              Run Payroll Wizard (Alt+P)
+            </Button>
+          </>
+        }
+      />
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsNewEmployeeOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold shadow-xs"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Employee</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('wizard')}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition-all active:scale-95"
-          >
-            <Play className="w-4 h-4" />
-            <span>Run Payroll Wizard (Alt+P)</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs text-xs font-medium w-fit">
-        <button
-          onClick={() => setActiveTab('runs')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'runs'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Payroll Runs History ({payrollRuns.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('wizard')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'wizard'
-              ? 'bg-emerald-600 text-white font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Run New Pay Period
-        </button>
-        <button
-          onClick={() => setActiveTab('employees')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'employees'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Employee Directory ({employees.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('advances')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'advances'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Salary Advances
-        </button>
-        <button
-          onClick={() => setActiveTab('deductions')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'deductions'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Deduction Rules
-        </button>
-        <button
-          onClick={() => setActiveTab('statutory')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'statutory'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Statutory Config
-        </button>
-        <button
-          onClick={() => setActiveTab('controls')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'controls'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Structures &amp; Loans
-        </button>
-        <button
-          onClick={() => setActiveTab('bank')}
-          className={`px-3.5 py-1.5 rounded-lg transition-colors ${
-            activeTab === 'bank'
-              ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          Payslips &amp; Bank File
-        </button>
-      </div>
+      <Tabs
+        ariaLabel="Payroll sections"
+        value={activeTab}
+        onChange={(id) =>
+          setActiveTab(
+            id as 'runs' | 'wizard' | 'employees' | 'advances' | 'deductions' | 'statutory' | 'controls' | 'bank'
+          )
+        }
+        tabs={[
+          { id: 'runs', label: `Payroll Runs History (${payrollRuns.length})` },
+          { id: 'wizard', label: 'Run New Pay Period' },
+          { id: 'employees', label: `Employee Directory (${employees.length})` },
+          { id: 'advances', label: 'Salary Advances' },
+          { id: 'deductions', label: 'Deduction Rules' },
+          { id: 'statutory', label: 'Statutory Config' },
+          { id: 'controls', label: 'Structures & Loans' },
+          { id: 'bank', label: 'Payslips & Bank File' },
+        ]}
+      />
 
       {/* 1. RUN PAYROLL WIZARD */}
       {activeTab === 'wizard' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs p-6 space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
+        <div className="surface p-6 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-white/[0.08] pb-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
                 Execute Bi-Weekly Pay Period
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Adjust regular and overtime hours for hourly machinists and review automated tax calculations.
               </p>
             </div>
             <div className="text-right">
-              <span className="text-[10px] uppercase font-bold text-slate-400">Payroll Checking:</span>
-              <div className="font-mono font-bold text-slate-900 dark:text-white">
+              <span className="text-[11px] uppercase font-semibold tracking-wider text-slate-500 dark:text-slate-400">Payroll Checking:</span>
+              <div className="font-mono font-bold tabular-nums text-slate-900 dark:text-white">
                 {formatCurrency(accounts.find(a => a.id === bankAccountId)?.balance || 0, currency)} Available
               </div>
             </div>
@@ -370,38 +314,38 @@ export const PayrollView: React.FC = () => {
           {/* Period dates row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
             <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Period Start Date</label>
+              <label className="app-label">Period Start Date</label>
               <input
                 type="date"
                 value={payPeriodStart}
                 onChange={e => setPayPeriodStart(e.target.value)}
-                className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
+                className="app-input app-input-mono"
               />
             </div>
             <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Period End Date</label>
+              <label className="app-label">Period End Date</label>
               <input
                 type="date"
                 value={payPeriodEnd}
                 onChange={e => setPayPeriodEnd(e.target.value)}
-                className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
+                className="app-input app-input-mono"
               />
             </div>
             <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Direct Deposit Date</label>
+              <label className="app-label">Direct Deposit Date</label>
               <input
                 type="date"
                 value={payDate}
                 onChange={e => setPayDate(e.target.value)}
-                className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
+                className="app-input app-input-mono"
               />
             </div>
             <div>
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Disbursement Bank Account</label>
+              <label className="app-label">Disbursement Bank Account</label>
               <select
                 value={bankAccountId ?? ''}
                 onChange={e => setBankAccountId(e.target.value)}
-                className="w-full mt-1 bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2 text-sm text-slate-900 dark:text-slate-100 outline-none"
+                className="app-input"
               >
                 <option value="">Select bank account…</option>
                 {accounts
@@ -416,20 +360,20 @@ export const PayrollView: React.FC = () => {
           </div>
 
           {/* Employee Hours Entry Table */}
-          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#0f3d63] text-white uppercase tracking-wider font-bold text-[10px]">
+          <div className="surface overflow-hidden">
+            <table className="data-table w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-white/[0.04] text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-white/[0.08] uppercase tracking-wider font-semibold text-[11px]">
                 <tr>
-                  <th className="px-4 py-3">EMPLOYEE</th>
-                  <th className="px-4 py-3">PAY TYPE</th>
-                  <th className="px-4 py-3 w-28 text-center">REG HOURS</th>
-                  <th className="px-4 py-3 w-28 text-center">OT HOURS</th>
-                  <th className="px-4 py-3 text-right">GROSS PAY</th>
+                  <th className="px-4 py-3">Employee</th>
+                  <th className="px-4 py-3">Pay Type</th>
+                  <th className="px-4 py-3 w-28 text-center">Reg Hours</th>
+                  <th className="px-4 py-3 w-28 text-center">OT Hours</th>
+                  <th className="px-4 py-3 text-right">Gross Pay</th>
                   <th className="px-4 py-3 text-right">PAYE</th>
-                  <th className="px-4 py-3 text-right">PENSION (5%)</th>
-                  <th className="px-4 py-3 text-right">OTHER</th>
-                  <th className="px-4 py-3 text-right">NET PAY</th>
-                  <th className="px-4 py-3 text-right">ACTIONS</th>
+                  <th className="px-4 py-3 text-right">Pension (5%)</th>
+                  <th className="px-4 py-3 text-right">Other</th>
+                  <th className="px-4 py-3 text-right">Net Pay</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
@@ -548,24 +492,19 @@ export const PayrollView: React.FC = () => {
             </div>
 
             {runError && (
-              <div
-                role="alert"
-                className="px-4 py-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2"
-              >
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{runError}</span>
-              </div>
+              <InlineAlert tone="error">{runError}</InlineAlert>
             )}
 
-            <button
+            <Button
+              variant="emerald"
               onClick={handleExecutePayroll}
-              disabled={running}
-              className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-sans text-xs shadow-md transition-all active:scale-95 disabled:opacity-60 inline-flex items-center gap-1.5"
+              loading={running}
+              loadingLabel="Posting to server…"
+              icon={<CheckCircle2 className="w-3.5 h-3.5" />}
               title="Posts the payroll journal entry and pay stubs to the server"
             >
-              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-              {running ? 'Posting to server…' : 'Authorize & Process Payroll'}
-            </button>
+              Authorize &amp; Process Payroll
+            </Button>
           </div>
           )}
         </div>
@@ -573,50 +512,50 @@ export const PayrollView: React.FC = () => {
 
       {/* 2. PAYROLL RUNS HISTORY */}
       {activeTab === 'runs' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+        <div className="surface overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+            <table className="data-table w-full text-left text-xs">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3">PAYROLL RUN #</th>
-                  <th className="px-4 py-3">PAY DATE</th>
-                  <th className="px-4 py-3">PAY PERIOD</th>
-                  <th className="px-4 py-3 text-center">HEADCOUNT</th>
-                  <th className="px-4 py-3 text-right">TOTAL GROSS</th>
-                  <th className="px-4 py-3 text-right">TAXES WITHHELD</th>
-                  <th className="px-4 py-3 text-right">NET DISBURSED</th>
-                  <th className="px-4 py-3 text-center">STATUS</th>
-                  <th className="px-4 py-3 text-right">ACTIONS</th>
+                  <th>Payroll Run #</th>
+                  <th>Pay Date</th>
+                  <th>Pay Period</th>
+                  <th className="text-center">Headcount</th>
+                  <th className="text-right">Total Gross</th>
+                  <th className="text-right">Taxes Withheld</th>
+                  <th className="text-right">Net Disbursed</th>
+                  <th className="text-center">Status</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+              <tbody className="font-mono">
                 {payrollRuns.map(run => (
-                  <tr key={run.id} className="hover:bg-slate-50 dark:hover:bg-slate-850/50">
-                    <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
+                  <tr key={run.id}>
+                    <td className="font-semibold text-slate-900 dark:text-white">
                       {run.runNumber}
                     </td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{run.payDate}</td>
-                    <td className="px-4 py-3 text-slate-500">
+                    <td className="text-slate-600 dark:text-slate-400">{run.payDate}</td>
+                    <td className="text-slate-500">
                       {run.payPeriodStart} to {run.payPeriodEnd}
                     </td>
-                    <td className="px-4 py-3 text-center font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                    <td className="text-center font-mono tabular-nums text-slate-700 dark:text-slate-300">
                       {run.items.length}
                     </td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white tabular-nums">
+                    <td className="text-right font-bold text-slate-900 dark:text-white tabular-nums">
                       {formatCurrency(run.totalGross, currency)}
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-500 tabular-nums">
+                    <td className="text-right text-slate-500 tabular-nums">
                       {formatCurrency(run.totalEmployeeTaxes, currency)}
                     </td>
-                    <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                    <td className="text-right font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
                       {formatCurrency(run.totalNet, currency)}
                     </td>
-                    <td className="px-4 py-3 text-center font-sans">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                        <CheckCircle2 className="w-3 h-3" /> Processed
-                      </span>
+                    <td className="text-center font-sans">
+                      <StatusBadge tone="success" showIcon>
+                        Processed
+                      </StatusBadge>
                     </td>
-                    <td className="px-4 py-3 text-right font-sans">
+                    <td className="text-right font-sans">
                       {renderRunActions(run)}
                     </td>
                   </tr>
@@ -629,19 +568,19 @@ export const PayrollView: React.FC = () => {
 
       {/* 3. EMPLOYEE DIRECTORY */}
       {activeTab === 'employees' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+        <div className="surface overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+            <table className="data-table w-full text-left text-xs">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3">EMPLOYEE NAME</th>
-                  <th className="px-4 py-3">JOB TITLE / DEPARTMENT</th>
-                  <th className="px-4 py-3">SSN (MASKED)</th>
-                  <th className="px-4 py-3">COMPENSATION</th>
-                  <th className="px-4 py-3">W-4 FILING STATUS</th>
-                  <th className="px-4 py-3">DIRECT DEPOSIT ACH</th>
-                  <th className="px-4 py-3">HIRE DATE</th>
-                  <th className="px-4 py-3 text-right">ACTIONS</th>
+                  <th>Employee Name</th>
+                  <th>Job Title / Department</th>
+                  <th>SSN (Masked)</th>
+                  <th>Compensation</th>
+                  <th>W-4 Filing Status</th>
+                  <th>Direct Deposit ACH</th>
+                  <th>Hire Date</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
@@ -700,36 +639,21 @@ export const PayrollView: React.FC = () => {
       {activeTab === 'bank' && <BankFileExport />}
 
       {/* Pay Stub Modal Dialog */}
-      {selectedStubRun && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-300 overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="px-5 py-3 bg-slate-900 text-white flex items-center justify-between no-print">
-              <span className="font-bold text-sm">Official Employee Pay Stub</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 text-white font-semibold text-xs"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Pay Stub</span>
-                </button>
-                <button
-                  onClick={() => setSelectedStubRun(null)}
-                  className="p-1 text-white/80 hover:text-white"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
+      <ModalShell open={!!selectedStubRun} onClose={() => setSelectedStubRun(null)} size="2xl">
+        <ModalHeader
+          title="Official Employee Pay Stub"
+          icon={<FileText className="w-4 h-4" strokeWidth={1.75} />}
+          tone="brand"
+          onClose={() => setSelectedStubRun(null)}
+        />
+        <ModalBody>
+          {selectedStubRun && (() => {
+            const emp = employees.find(e => e.id === selectedStubRun.item.employeeId);
+            const item = selectedStubRun.item;
+            const run = selectedStubRun.run;
 
-            {/* Pay Stub Document */}
-            {(() => {
-              const emp = employees.find(e => e.id === selectedStubRun.item.employeeId);
-              const item = selectedStubRun.item;
-              const run = selectedStubRun.run;
-
-              return (
-                <div className="p-8 space-y-6 overflow-y-auto text-xs bg-white text-slate-900 font-sans">
+            return (
+              <div className="space-y-6 text-xs bg-white text-slate-900 font-sans p-6 rounded-xl border border-slate-200">
                   {/* Company & Stub Header */}
                   <div className="flex justify-between items-start border-b pb-4">
                     <div>
@@ -884,9 +808,16 @@ export const PayrollView: React.FC = () => {
                 </div>
               );
             })()}
-          </div>
+        </ModalBody>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200/70 bg-slate-50/60 px-5 py-3.5 dark:border-white/[0.06] dark:bg-white/[0.02] no-print">
+          <Button variant="secondary" onClick={() => setSelectedStubRun(null)}>
+            Close
+          </Button>
+          <Button variant="primary" onClick={() => window.print()} icon={<Printer className="w-3.5 h-3.5" />}>
+            Print Pay Stub
+          </Button>
         </div>
-      )}
-    </div>
+      </ModalShell>
+    </PageShell>
   );
 };

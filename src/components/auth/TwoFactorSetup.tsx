@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, CheckCircle2, AlertTriangle, Key, Copy } from 'lucide-react';
 import { useAccounting } from '../../context/AccountingContext';
+import { appDialog } from '../../design-system';
+import { requestJsonRaw } from '../../services/http';
 
 export const TwoFactorSetup: React.FC = () => {
   const { triggerShortcutNotice } = useAccounting();
@@ -12,9 +14,8 @@ export const TwoFactorSetup: React.FC = () => {
 
   const loadStatus = async () => {
     try {
-      const res = await fetch('/api/auth/2fa/status', { credentials: 'include' });
-      const data = await res.json();
-      setStatus(data);
+      const { ok, data } = await requestJsonRaw<any>('/api/auth/2fa/status');
+      if (ok) setStatus(data);
     } catch (err) {
       console.error('Failed to load 2FA status:', err);
     }
@@ -25,9 +26,8 @@ export const TwoFactorSetup: React.FC = () => {
   const handleEnroll = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/2fa/enroll', { method: 'POST', credentials: 'include' });
-      const data = await res.json();
-      setEnrollData(data);
+      const { ok, data } = await requestJsonRaw<any>('/api/auth/2fa/enroll', { method: 'POST' });
+      if (ok) setEnrollData(data);
     } catch (err) {
       triggerShortcutNotice?.('Failed to start enrolment');
     } finally {
@@ -39,14 +39,11 @@ export const TwoFactorSetup: React.FC = () => {
     if (!verifyCode) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/2fa/verify', {
+      const { data } = await requestJsonRaw<any>('/api/auth/2fa/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ code: verifyCode }),
       });
-      const data = await res.json();
-      if (data.enabled) {
+      if (data?.enabled) {
         triggerShortcutNotice?.('2FA enabled successfully');
         setEnrollData(null);
         setVerifyCode('');
@@ -64,9 +61,8 @@ export const TwoFactorSetup: React.FC = () => {
   const handleGenerateBackupCodes = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/2fa/backup-codes', { method: 'POST', credentials: 'include' });
-      const data = await res.json();
-      setBackupCodes(data.codes || []);
+      const { ok, data } = await requestJsonRaw<any>('/api/auth/2fa/backup-codes', { method: 'POST' });
+      if (ok) setBackupCodes(data?.codes || []);
     } catch (err) {
       triggerShortcutNotice?.('Failed to generate backup codes');
     } finally {
@@ -75,17 +71,30 @@ export const TwoFactorSetup: React.FC = () => {
   };
 
   const handleDisable = async () => {
-    if (!confirm('Are you sure you want to disable 2FA?')) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Disable Two-Factor Authentication',
+      message: 'Are you sure you want to disable two-factor authentication for your account?',
+      confirmLabel: 'Continue',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    const password = await appDialog.prompt({
+      title: 'Confirm Identity',
+      message: 'Enter your account password to confirm disabling 2FA.',
+      label: 'Password',
+      inputType: 'password',
+      required: true,
+      destructive: true,
+      confirmLabel: 'Disable 2FA',
+    });
+    if (password === null) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/2fa/disable', {
+      const { data } = await requestJsonRaw<any>('/api/auth/2fa/disable', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ password: prompt('Enter your password to confirm:') }),
+        body: JSON.stringify({ password }),
       });
-      const data = await res.json();
-      if (data.disabled) {
+      if (data?.disabled) {
         triggerShortcutNotice?.('2FA disabled');
         loadStatus();
       }

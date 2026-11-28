@@ -27,6 +27,7 @@ import {
   Plug,
 } from 'lucide-react';
 import { ThemeStyle } from '../../types/accounting';
+import { appDialog } from '../../design-system';
 
 export const TopMenuToolbar: React.FC = () => {
   const {
@@ -240,10 +241,19 @@ export const TopMenuToolbar: React.FC = () => {
                 <div className="menu-separator"></div>
                 <button
                   onClick={() => {
-                    if (confirm('Reset the cached lists in this browser to the default sample data? The server ledger is not changed.')) {
-                      resetToDemoData();
-                    }
                     setActiveMenu(null);
+                    void (async () => {
+                      const confirmed = await appDialog.confirm({
+                        title: 'Reload Demo Lists in Browser?',
+                        message:
+                          'Reset the cached lists in this browser to the default sample data? The server ledger is not changed.',
+                        confirmLabel: 'Reload Demo Lists',
+                        tone: 'amber',
+                      });
+                      if (confirmed) {
+                        resetToDemoData();
+                      }
+                    })();
                   }}
                   className="menu-item menu-item-warn flex items-center gap-2"
                 >

@@ -46,15 +46,40 @@ export function getClientIp(req: Request): string {
   return req.socket?.remoteAddress || '127.0.0.1';
 }
 
+export function isHttpsRequest(req?: Request): boolean {
+  if (!req) return process.env.NODE_ENV === 'production';
+  const proto = String(req.headers?.['x-forwarded-proto'] || '').toLowerCase();
+  return Boolean(req.secure || proto.includes('https'));
+}
+
+export function setSessionCookie(
+  req: Request,
+  res: Response,
+  cookieName: string,
+  value: string,
+  maxAgeSec: number,
+  isProduction: boolean
+) {
+  const https = isHttpsRequest(req) || isProduction;
+  res.cookie(cookieName, value, {
+    httpOnly: true,
+    sameSite: https ? 'none' : 'lax',
+    secure: https,
+    ...(https ? { partitioned: true } : {}),
+    maxAge: maxAgeSec * 1000,
+    path: '/',
+  } as any);
+}
+
 export function clearSessionCookie(res: Response, cookieName: string, req?: Request) {
-  const proto = String(req?.headers?.['x-forwarded-proto'] || '').toLowerCase();
-  const https = Boolean(req?.secure || proto.includes('https') || process.env.NODE_ENV === 'production');
+  const https = isHttpsRequest(req) || process.env.NODE_ENV === 'production';
   res.clearCookie(cookieName, {
     httpOnly: true,
     sameSite: https ? 'none' : 'lax',
     secure: https,
+    ...(https ? { partitioned: true } : {}),
     path: '/',
-  });
+  } as any);
 }
 
 function isPastDate(dateStr: string | null): boolean {
@@ -91,6 +116,116 @@ interface SessionLookupRow {
 }
 
 export function createAuthMiddleware(db: ServerDatabase) {
+  const validateServerSession = async (rawToken: string) => {
+    const tokenHash = sha256Hex(rawToken);
+    return db.withSystemDb(async tx => {
+      const r = await tx.query<SessionLookupRow>(
+        `SELECT
+           s.id AS session_id,
+           u.id AS user_id,
+           u.username,
+           u.email,
+           u.display_name,
+           u.is_active AS user_active,
+           u.expires_on::text AS user_expires_on,
+           u.session_version AS current_user_session_version,
+           s.user_session_version AS session_recorded_user_version,
+           u.must_change_password,
+           c.id AS company_id,
+           c.slug AS company_slug,
+           c.name AS company_name,
+           c.is_active AS company_active,
+           m.id AS membership_id,
+           m.role,
+           m.is_active AS membership_active,
+           m.expires_on::text AS membership_expires_on,
+           m.revoked_at::text AS membership_revoked_at,
+           m.membership_version AS current_membership_version,
+           s.membership_version AS session_recorded_membership_version,
+           s.expires_at::text AS session_expires_at,
+           s.last_seen_at::text AS last_seen_at,
+           s.revoked_at::text AS session_revoked_at
+         FROM auth_sessions s
+         JOIN users u ON u.id = s.user_id
+         JOIN companies c ON c.id = s.active_company_id
+         JOIN company_memberships m ON m.id = s.membership_id AND m.company_id = s.active_company_id
+         WHERE s.session_token_hash = $1
+         LIMIT 1`,
+        [tokenHash]
+      );
+
+      if (r.rows.length === 0) {
+        return { ok: false as const, status: 401, error: 'Session not found' };
+      }
+      const row = r.rows[0];
+      const nowMs = Date.now();
+
+      if (row.session_revoked_at) {
+        return { ok: false as const, status: 401, error: 'Session has been revoked' };
+      }
+      if (new Date(row.session_expires_at).getTime() <= nowMs) {
+        await tx.query(
+          `UPDATE auth_sessions SET revoked_at = NOW(), revoke_reason = 'expired' WHERE id = $1`,
+          [row.session_id]
+        );
+        return { ok: false as const, status: 401, error: 'Session expired' };
+      }
+      const idleMs = nowMs - new Date(row.last_seen_at).getTime();
+      if (idleMs > db.config.idleTimeoutSeconds * 1000) {
+        await tx.query(
+          `UPDATE auth_sessions SET revoked_at = NOW(), revoke_reason = 'idle_timeout' WHERE id = $1`,
+          [row.session_id]
+        );
+        return { ok: false as const, status: 401, error: 'Session timed out due to inactivity' };
+      }
+      if (!row.user_active || isPastDate(row.user_expires_on)) {
+        return { ok: false as const, status: 403, error: 'User account is deactivated or expired' };
+      }
+      if (Number(row.current_user_session_version) !== Number(row.session_recorded_user_version)) {
+        return { ok: false as const, status: 401, error: 'Session invalidated by account security change' };
+      }
+      if (!row.company_active) {
+        return { ok: false as const, status: 403, error: 'Active company is disabled' };
+      }
+      if (
+        !row.membership_active ||
+        row.membership_revoked_at ||
+        isPastDate(row.membership_expires_on)
+      ) {
+        return { ok: false as const, status: 403, error: 'Company membership revoked or inactive' };
+      }
+      if (Number(row.current_membership_version) !== Number(row.session_recorded_membership_version)) {
+        return {
+          ok: false as const,
+          status: 401,
+          error: 'Session invalidated by company membership role/status change',
+        };
+      }
+
+      await tx.query(`UPDATE auth_sessions SET last_seen_at = NOW() WHERE id = $1`, [row.session_id]);
+
+      return {
+        ok: true as const,
+        auth: {
+          sessionId: Number(row.session_id),
+          authMode: 'session_cookie' as const,
+          userId: Number(row.user_id),
+          username: row.username,
+          email: row.email,
+          displayName: row.display_name,
+          mustChangePassword: Boolean(row.must_change_password),
+          companyId: Number(row.company_id),
+          companySlug: row.company_slug,
+          companyName: row.company_name,
+          membershipId: Number(row.membership_id),
+          role: row.role,
+          userSessionVersion: Number(row.current_user_session_version),
+          membershipVersion: Number(row.current_membership_version),
+        },
+      };
+    });
+  };
+
   const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const cookies = parseCookies(req.headers.cookie);
@@ -109,114 +244,7 @@ export function createAuthMiddleware(db: ServerDatabase) {
           return res.status(401).json({ error: 'Invalid session signature' });
         }
 
-        const tokenHash = sha256Hex(rawToken);
-        const validation = await db.withSystemDb(async tx => {
-          const r = await tx.query<SessionLookupRow>(
-            `SELECT
-               s.id AS session_id,
-               u.id AS user_id,
-               u.username,
-               u.email,
-               u.display_name,
-               u.is_active AS user_active,
-               u.expires_on::text AS user_expires_on,
-               u.session_version AS current_user_session_version,
-               s.user_session_version AS session_recorded_user_version,
-               u.must_change_password,
-               c.id AS company_id,
-               c.slug AS company_slug,
-               c.name AS company_name,
-               c.is_active AS company_active,
-               m.id AS membership_id,
-               m.role,
-               m.is_active AS membership_active,
-               m.expires_on::text AS membership_expires_on,
-               m.revoked_at::text AS membership_revoked_at,
-               m.membership_version AS current_membership_version,
-               s.membership_version AS session_recorded_membership_version,
-               s.expires_at::text AS session_expires_at,
-               s.last_seen_at::text AS last_seen_at,
-               s.revoked_at::text AS session_revoked_at
-             FROM auth_sessions s
-             JOIN users u ON u.id = s.user_id
-             JOIN companies c ON c.id = s.active_company_id
-             JOIN company_memberships m ON m.id = s.membership_id AND m.company_id = s.active_company_id
-             WHERE s.session_token_hash = $1
-             LIMIT 1`,
-            [tokenHash]
-          );
-
-          if (r.rows.length === 0) {
-            return { ok: false as const, status: 401, error: 'Session not found' };
-          }
-          const row = r.rows[0];
-          const nowMs = Date.now();
-
-          if (row.session_revoked_at) {
-            return { ok: false as const, status: 401, error: 'Session has been revoked' };
-          }
-          if (new Date(row.session_expires_at).getTime() <= nowMs) {
-            await tx.query(
-              `UPDATE auth_sessions SET revoked_at = NOW(), revoke_reason = 'expired' WHERE id = $1`,
-              [row.session_id]
-            );
-            return { ok: false as const, status: 401, error: 'Session expired' };
-          }
-          const idleMs = nowMs - new Date(row.last_seen_at).getTime();
-          if (idleMs > db.config.idleTimeoutSeconds * 1000) {
-            await tx.query(
-              `UPDATE auth_sessions SET revoked_at = NOW(), revoke_reason = 'idle_timeout' WHERE id = $1`,
-              [row.session_id]
-            );
-            return { ok: false as const, status: 401, error: 'Session timed out due to inactivity' };
-          }
-          if (!row.user_active || isPastDate(row.user_expires_on)) {
-            return { ok: false as const, status: 403, error: 'User account is deactivated or expired' };
-          }
-          if (Number(row.current_user_session_version) !== Number(row.session_recorded_user_version)) {
-            return { ok: false as const, status: 401, error: 'Session invalidated by account security change' };
-          }
-          if (!row.company_active) {
-            return { ok: false as const, status: 403, error: 'Active company is disabled' };
-          }
-          if (
-            !row.membership_active ||
-            row.membership_revoked_at ||
-            isPastDate(row.membership_expires_on)
-          ) {
-            return { ok: false as const, status: 403, error: 'Company membership revoked or inactive' };
-          }
-          if (Number(row.current_membership_version) !== Number(row.session_recorded_membership_version)) {
-            return {
-              ok: false as const,
-              status: 401,
-              error: 'Session invalidated by company membership role/status change',
-            };
-          }
-
-          await tx.query(`UPDATE auth_sessions SET last_seen_at = NOW() WHERE id = $1`, [row.session_id]);
-
-          return {
-            ok: true as const,
-            auth: {
-              sessionId: Number(row.session_id),
-              authMode: 'session_cookie' as const,
-              userId: Number(row.user_id),
-              username: row.username,
-              email: row.email,
-              displayName: row.display_name,
-              mustChangePassword: Boolean(row.must_change_password),
-              companyId: Number(row.company_id),
-              companySlug: row.company_slug,
-              companyName: row.company_name,
-              membershipId: Number(row.membership_id),
-              role: row.role,
-              userSessionVersion: Number(row.current_user_session_version),
-              membershipVersion: Number(row.current_membership_version),
-            },
-          };
-        });
-
+        const validation = await validateServerSession(rawToken);
         if (!validation.ok) {
           clearSessionCookie(res, db.config.cookieName, req);
           return res.status(validation.status).json({ error: validation.error });
@@ -226,7 +254,20 @@ export function createAuthMiddleware(db: ServerDatabase) {
         return next();
       }
 
-      // Path 2: Supabase Bearer JWT verified via remote ES256 JWKS
+      // Path 2: Signed server session token passed as Authorization: Bearer (iframe fallback when 3P cookies are blocked)
+      if (bearerToken) {
+        const rawServerToken = verifySignedSessionCookieValue(bearerToken, db.config.authSessionSecret);
+        if (rawServerToken) {
+          const validation = await validateServerSession(rawServerToken);
+          if (!validation.ok) {
+            return res.status(validation.status).json({ error: validation.error });
+          }
+          req.auth = validation.auth;
+          return next();
+        }
+      }
+
+      // Path 3: Supabase Bearer JWT verified via remote ES256 JWKS
       if (bearerToken) {
         let claims;
         try {

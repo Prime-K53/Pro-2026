@@ -10,6 +10,7 @@ import {
   mapLocalInvoiceToPreviewModel,
 } from '../../types/documents';
 import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
+import { appDialog } from '../../design-system';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { ExamGroupWorkflowModal } from './ExamGroupWorkflowModal';
 import { useExamGroupSelection } from '../../hooks/useExamGroupSelection';
@@ -834,13 +835,33 @@ export const ExaminationView: React.FC = () => {
     ];
     if (paper.status === 'queued') {
       defs.push({ id: 'exam.edit-paper', label: 'Edit Paper Details (before production)', icon: <FileText className="w-3.5 h-3.5 text-slate-600" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'exams:edit', execute: async () => {
-        const subjectRaw = window.prompt(`Subject name for ${paper.jobNumber}:`, paper.subjectName);
+        const subjectRaw = await appDialog.prompt({
+          title: `Edit ${paper.jobNumber}`,
+          message: 'Update the examination subject name before production starts.',
+          label: 'Subject name',
+          defaultValue: paper.subjectName,
+          required: true,
+        });
         if (subjectRaw == null) return;
-        const copiesRaw = window.prompt(`Learner copies for ${paper.jobNumber} (teacher copies stay fixed at ${paper.teacherCopies ?? 2}):`, String(paper.copies));
+        const copiesRaw = await appDialog.prompt({
+          title: `Edit ${paper.jobNumber} Copies`,
+          message: `Learner copies for ${paper.jobNumber} (teacher copies stay fixed at ${paper.teacherCopies ?? 2}).`,
+          label: 'Learner copies',
+          defaultValue: String(paper.copies),
+          inputType: 'number',
+          required: true,
+        });
         if (copiesRaw == null) return;
         const copies = Number(copiesRaw);
         if (!Number.isInteger(copies) || copies <= 0) { triggerShortcutNotice('Copies must be a positive integer.', 'error'); return; }
-        const pagesRaw = window.prompt(`Pages for ${paper.jobNumber}:`, String(paper.pages));
+        const pagesRaw = await appDialog.prompt({
+          title: `Edit ${paper.jobNumber} Pages`,
+          message: `Update the total page count for ${paper.jobNumber}.`,
+          label: 'Page count',
+          defaultValue: String(paper.pages),
+          inputType: 'number',
+          required: true,
+        });
         if (pagesRaw == null) return;
         const pages = Number(pagesRaw);
         if (!Number.isInteger(pages) || pages <= 0) { triggerShortcutNotice('Pages must be a positive integer.', 'error'); return; }
@@ -855,13 +876,55 @@ export const ExaminationView: React.FC = () => {
     }
     if (paper.status === 'printing') {
       defs.push({ id: 'exam.complete-print', label: 'Pass QC & Complete Production', icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:qc', execute: async () => { try { await updateExamPaperStatus(paper.id, 'completed'); triggerShortcutNotice(`Completed ${paper.jobNumber} and recorded QC approval`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the QC pass.', 'error'); } } });
-      defs.push({ id: 'exam.qc-hold', label: 'Place on QC Hold', icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:qc', execute: async () => { const reason = window.prompt(`Reason for QC hold on ${paper.jobNumber}:`); if (!reason?.trim()) return; try { await updateExamPaperStatus(paper.id, 'qc_hold', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} placed on QC hold.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the QC hold.', 'error'); } } });
+      defs.push({ id: 'exam.qc-hold', label: 'Place on QC Hold', icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:qc', execute: async () => {
+        const reason = await appDialog.prompt({
+          title: `QC Hold — ${paper.jobNumber}`,
+          message: `Specify the quality-control reason for holding ${paper.jobNumber}.`,
+          label: 'QC hold reason',
+          required: true,
+          destructive: true,
+          multiline: true,
+        });
+        if (!reason?.trim()) return;
+        try { await updateExamPaperStatus(paper.id, 'qc_hold', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} placed on QC hold.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the QC hold.', 'error'); }
+      } });
     }
     if (paper.status === 'qc_hold') {
-      defs.push({ id: 'exam.qc-rework', label: 'Authorise Rework (back to press)', icon: <RotateCcw className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:produce', execute: async () => { const reason = window.prompt(`Rework reason for ${paper.jobNumber}:`); if (!reason?.trim()) return; try { await updateExamPaperStatus(paper.id, 'printing', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} authorised for rework.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the rework.', 'error'); } } });
+      defs.push({ id: 'exam.qc-rework', label: 'Authorise Rework (back to press)', icon: <RotateCcw className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Quality Control', requiredPermission: 'exams:produce', execute: async () => {
+        const reason = await appDialog.prompt({
+          title: `Authorise Rework — ${paper.jobNumber}`,
+          message: `Enter the rework authorisation reason for returning ${paper.jobNumber} to press.`,
+          label: 'Rework reason',
+          required: true,
+          tone: 'amber',
+          multiline: true,
+        });
+        if (!reason?.trim()) return;
+        try { await updateExamPaperStatus(paper.id, 'printing', { reason: reason.trim() }); triggerShortcutNotice(`${paper.jobNumber} authorised for rework.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the rework.', 'error'); }
+      } });
     }
     if (paper.status === 'completed' || paper.status === 'qc_passed') {
-      defs.push({ id: 'exam.pack', label: 'Record Packing', icon: <Package className="w-3.5 h-3.5 text-indigo-600" />, group: 'process', groupLabel: 'Dispatch', requiredPermission: 'exams:dispatch', execute: async () => { const countRaw = window.prompt(`Number of packages for ${paper.jobNumber}:`, '1'); if (countRaw == null) return; const count = Number(countRaw); if (!Number.isInteger(count) || count < 0) { triggerShortcutNotice('Package count must be a non-negative integer.', 'error'); return; } const seal = window.prompt('Seal reference (optional):', ''); try { await updateExamPaperStatus(paper.id, 'packed', { packageCount: count, sealReference: seal || null }); triggerShortcutNotice(`Packed ${paper.jobNumber}.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the packing record.', 'error'); } } });
+      defs.push({ id: 'exam.pack', label: 'Record Packing', icon: <Package className="w-3.5 h-3.5 text-indigo-600" />, group: 'process', groupLabel: 'Dispatch', requiredPermission: 'exams:dispatch', execute: async () => {
+        const countRaw = await appDialog.prompt({
+          title: `Record Packing — ${paper.jobNumber}`,
+          message: `Enter the number of sealed packages for ${paper.jobNumber}.`,
+          label: 'Package count',
+          defaultValue: '1',
+          inputType: 'number',
+          required: true,
+        });
+        if (countRaw == null) return;
+        const count = Number(countRaw);
+        if (!Number.isInteger(count) || count < 0) { triggerShortcutNotice('Package count must be a non-negative integer.', 'error'); return; }
+        const seal = await appDialog.prompt({
+          title: `Seal Reference — ${paper.jobNumber}`,
+          message: 'Enter an optional tamper-evident seal reference.',
+          label: 'Seal reference (optional)',
+          defaultValue: '',
+        });
+        if (seal === null) return;
+        try { await updateExamPaperStatus(paper.id, 'packed', { packageCount: count, sealReference: seal || null }); triggerShortcutNotice(`Packed ${paper.jobNumber}.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the packing record.', 'error'); }
+      } });
     }
     if (paper.status === 'completed' || paper.status === 'qc_passed' || paper.status === 'packed') {
       defs.push({ id: 'exam.dispatch', label: 'Record Dispatch', icon: <Truck className="w-3.5 h-3.5 text-indigo-600" />, group: 'process', groupLabel: 'Dispatch', requiredPermission: 'exams:dispatch', execute: async () => { try { await updateExamPaperStatus(paper.id, 'dispatched'); triggerShortcutNotice(`Dispatched ${paper.jobNumber}.`); } catch (err: any) { triggerShortcutNotice(err?.message || 'The server rejected the dispatch.', 'error'); } } });

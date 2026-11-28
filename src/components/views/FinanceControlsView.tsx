@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { appDialog } from '../../design-system';
 import {
   AlertTriangle,
   Ban,
@@ -201,10 +202,19 @@ export const FinanceControlsView: React.FC = () => {
   };
 
   const decide = async (request: ApprovalRequest, action: 'approve' | 'reject') => {
-    const note =
-      action === 'reject'
-        ? window.prompt('Rejection note (required)') || ''
-        : window.prompt('Approval note (optional)') || '';
+    const note = await appDialog.prompt({
+      title: action === 'reject' ? `Reject Request #${request.id}` : `Approve Request #${request.id}`,
+      message:
+        action === 'reject'
+          ? 'Enter a rejection note explaining why this approval request is declined.'
+          : 'Enter an optional approval note.',
+      label: action === 'reject' ? 'Rejection note' : 'Approval note (optional)',
+      required: action === 'reject',
+      destructive: action === 'reject',
+      confirmLabel: action === 'reject' ? 'Reject Request' : 'Approve Request',
+      multiline: true,
+    });
+    if (note === null) return;
     if (action === 'reject' && !note.trim()) return;
     await run(async () => {
       if (action === 'approve') await financeControlsApi.approve(request.id, note);
@@ -215,7 +225,13 @@ export const FinanceControlsView: React.FC = () => {
   };
 
   const cancelApproval = async (request: ApprovalRequest) => {
-    if (!window.confirm(`Cancel approval request #${request.id}? The requested transaction will not proceed.`)) return;
+    const ok = await appDialog.confirm({
+      title: `Cancel Approval Request #${request.id}`,
+      message: `Cancel approval request #${request.id}? The requested transaction will not proceed.`,
+      confirmLabel: 'Cancel Request',
+      destructive: true,
+    });
+    if (!ok) return;
     await run(async () => {
       await financeControlsApi.cancelApproval(request.id);
       await loadApprovals();
@@ -233,7 +249,13 @@ export const FinanceControlsView: React.FC = () => {
   };
 
   const deleteSchedule = async (schedule: ReportSchedule) => {
-    if (!window.confirm(`Delete the scheduled report "${schedule.name}"? This cannot be undone.`)) return;
+    const ok = await appDialog.confirm({
+      title: 'Delete Scheduled Report',
+      message: `Delete the scheduled report "${schedule.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete Schedule',
+      destructive: true,
+    });
+    if (!ok) return;
     await run(async () => {
       await financeControlsApi.deleteSchedule(schedule.id);
       const data = await financeControlsApi.listSchedules();
@@ -501,16 +523,24 @@ export const FinanceControlsView: React.FC = () => {
                     <button
                       className="rounded bg-slate-900 px-3 py-1 text-xs font-semibold text-white dark:bg-slate-100 dark:text-slate-900"
                       onClick={() => {
-                        const notes = window.prompt('Completion note (required)', '') || '';
-                        if (!notes.trim()) return;
-                        void run(async () => {
-                          const updated = await financeControlsApi.completeTask(selectedPeriodId, task.task_key, notes);
-                          setChecklist({
-                            ...checklist,
-                            tasks: checklist.tasks.map(t => (t.task_key === updated.task_key ? updated : t)),
+                        void (async () => {
+                          const notes = await appDialog.prompt({
+                            title: `Complete Task — ${task.task_key}`,
+                            message: 'Provide a completion note for the period-close audit record.',
+                            label: 'Completion note',
+                            required: true,
+                            multiline: true,
                           });
-                          setNotice(`Task ${task.task_key} completed.`);
-                        });
+                          if (!notes?.trim()) return;
+                          await run(async () => {
+                            const updated = await financeControlsApi.completeTask(selectedPeriodId, task.task_key, notes);
+                            setChecklist({
+                              ...checklist,
+                              tasks: checklist.tasks.map(t => (t.task_key === updated.task_key ? updated : t)),
+                            });
+                            setNotice(`Task ${task.task_key} completed.`);
+                          });
+                        })();
                       }}
                     >
                       Complete
@@ -746,8 +776,8 @@ export const FinanceControlsView: React.FC = () => {
                 <td className="text-right space-x-1">
                   {c.status === 'draft' && <button className="text-[11px] text-brand underline" onClick={() => void run(async () => { await commercialApi.submitExpenseClaim(Number(c.id)); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim submitted'); })}>Submit</button>}
                   {c.status === 'submitted' && <button className="text-[11px] text-emerald-600 underline" onClick={() => void run(async () => { await commercialApi.approveExpenseClaim(Number(c.id)); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim approved'); })}>Approve</button>}
-                  {c.status === 'submitted' && <button className="text-[11px] text-rose-600 underline" onClick={() => void run(async () => { const reason = window.prompt('Rejection reason') || 'Rejected'; await commercialApi.rejectExpenseClaim(Number(c.id), reason); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim rejected'); })}>Reject</button>}
-                  {c.status === 'approved' && <button className="text-[11px] text-brand underline" onClick={() => void run(async () => { const bank = window.prompt('Bank account ID for reimbursement'); if (!bank) return; await commercialApi.reimburseExpenseClaim(Number(c.id), { bankAccountId: Number(bank) }); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim reimbursed'); })}>Reimburse</button>}
+                  {c.status === 'submitted' && <button type="button" className="text-[11px] font-semibold text-rose-600 underline" onClick={() => void run(async () => { const reason = await appDialog.prompt({ title: `Reject Claim ${c.claim_number || c.id}`, message: 'Provide a reason for rejecting this expense claim.', label: 'Rejection reason', defaultValue: 'Rejected', required: true, destructive: true }); if (!reason) return; await commercialApi.rejectExpenseClaim(Number(c.id), reason); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim rejected'); })}>Reject</button>}
+                  {c.status === 'approved' && <button type="button" className="text-[11px] font-semibold text-brand-600 underline" onClick={() => void run(async () => { const bank = await appDialog.prompt({ title: `Reimburse Claim ${c.claim_number || c.id}`, message: 'Enter the bank account ID used for reimbursement.', label: 'Bank account ID', inputType: 'number', required: true }); if (!bank) return; await commercialApi.reimburseExpenseClaim(Number(c.id), { bankAccountId: Number(bank) }); setExpenseClaims(await commercialApi.listExpenseClaims()); setNotice('Claim reimbursed'); })}>Reimburse</button>}
                 </td>
               </tr>
             ))}

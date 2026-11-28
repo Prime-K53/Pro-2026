@@ -6,7 +6,7 @@ import { ApiBankTransaction, commercialApi } from '../../services/commercialApi'
 import { financeControlsApi } from '../../services/financeControlsApi';
 import type { DashboardAlerts } from '../../services/financeControlsApi';
 import { MonthlyCashflowChart, ExpenseBreakdownDonut } from '../charts/FinancialCharts';
-import { StatCard } from '../common/ui';
+import { Button, EmptyState, InlineAlert, PageHeader, StatCard } from '../common/ui';
 import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
 import {
   TrendingUp,
@@ -128,46 +128,47 @@ export const DashboardView: React.FC = () => {
   const topCreditors: Array<{ vendorId: number; name: string; balance: number }> = overview?.topCreditors || [];
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
       {/* View Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
-            <span className="bg-gradient-to-r from-brand-700 to-brand-500 bg-clip-text text-transparent">Executive Financial Dashboard</span>
-            {loading && <Loader2 className="w-4 h-4 animate-spin text-brand-600" />}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Live PostgreSQL double-entry metrics · {activeCompany?.name || companyProfile.name} · Accrual Basis
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {lastUpdated && (
-            <span className="hidden sm:inline text-[11px] text-slate-400 font-mono">Updated {lastUpdated}</span>
-          )}
-          <button
-            onClick={loadDashboard}
-            disabled={loading}
-            className="btn btn-secondary !p-2"
-            title="Refresh dashboard"
-            aria-label="Refresh dashboard"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-          <button
-            onClick={() => setIsNewInvoiceOpen(true)}
-            className="btn btn-primary !text-xs"
-          >
-            + Create Invoice
-          </button>
-          <button
-            onClick={() => setIsEnterBillOpen(true)}
-            className="btn !bg-slate-900 !text-white hover:!bg-slate-800 !text-xs dark:!bg-white dark:!text-slate-900 dark:hover:!bg-slate-200"
-          >
-            + Enter Bill
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Executive Financial Dashboard"
+        subtitle={`Live PostgreSQL double-entry metrics · ${activeCompany?.name || companyProfile.name} · Accrual Basis`}
+        icon={<BarChart3 className="w-5 h-5" strokeWidth={1.75} />}
+        actions={
+          <>
+            {lastUpdated && (
+              <span className="hidden sm:inline text-[11px] font-medium text-slate-600 dark:text-slate-400 font-mono tabular-nums">
+                Updated {lastUpdated}
+              </span>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={loadDashboard}
+              disabled={loading}
+              aria-label="Refresh dashboard"
+              title="Refresh dashboard"
+              icon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setIsNewInvoiceOpen(true)}
+            >
+              + Create Invoice
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsEnterBillOpen(true)}
+            >
+              + Enter Bill
+            </Button>
+          </>
+        }
+      />
 
       {/* KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -230,51 +231,38 @@ export const DashboardView: React.FC = () => {
 
       {/* Operational alert feed from /api/dashboard/alerts */}
       {alertsError && (
-        <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start justify-between gap-2">
-          <span className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{alertsError}</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => loadDashboard()}
-            disabled={loading}
-            className="shrink-0 underline font-semibold disabled:opacity-50"
-          >
-            Retry
-          </button>
-        </div>
+        <InlineAlert
+          tone="warning"
+          action={
+            <Button variant="secondary" size="sm" onClick={() => loadDashboard()} disabled={loading}>
+              Retry
+            </Button>
+          }
+        >
+          {alertsError}
+        </InlineAlert>
       )}
 
       {overviewError && (
-        <div
-          role="alert"
-          className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start justify-between gap-2"
+        <InlineAlert
+          tone="error"
+          action={
+            <Button variant="secondary" size="sm" onClick={() => loadDashboard()} disabled={loading}>
+              Retry
+            </Button>
+          }
         >
-          <span className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>
-              {overviewError} — the figures below are shown as zero rather than a partial total.
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={() => loadDashboard()}
-            disabled={loading}
-            className="shrink-0 underline font-semibold disabled:opacity-50"
-          >
-            Retry
-          </button>
-        </div>
+          {overviewError} — the figures below are shown as zero rather than a partial total.
+        </InlineAlert>
       )}
 
       {alerts && alerts.alerts.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-              <Bell className="w-4 h-4 text-amber-600" />
+              <Bell className="w-4 h-4 text-amber-600" strokeWidth={1.75} aria-hidden="true" />
               <span>Operational Alerts</span>
-              <span className="text-[11px] font-mono text-slate-400">
+              <span className="text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-400">
                 {alerts.alerts.length} active
               </span>
             </h2>
@@ -375,7 +363,7 @@ export const DashboardView: React.FC = () => {
                 Cost &amp; Operating Expense Mix
               </h2>
             </div>
-            <span className="text-[11px] font-mono text-slate-400">YTD GL</span>
+            <span className="text-[11px] font-mono text-slate-600 dark:text-slate-400">YTD GL</span>
           </div>
 
           <ExpenseBreakdownDonut slices={expenseSlices} currency={currency} />
@@ -446,15 +434,15 @@ export const DashboardView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
             <div>
-              <div className="text-xs font-semibold text-slate-500 mb-2">Top Debtors (AR)</div>
+              <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">Top Debtors (AR)</div>
               <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                 {topDebtors.length === 0 ? (
-                  <div className="text-slate-400 py-2">No open receivables</div>
+                  <div className="text-slate-600 dark:text-slate-400 py-2">No open receivables</div>
                 ) : (
                   topDebtors.map(c => (
                     <div key={c.customerId} className="py-1.5 flex items-center justify-between gap-2">
                       <span className="truncate font-medium text-slate-800 dark:text-slate-200">{c.name}</span>
-                      <span className="font-mono font-bold text-blue-600 tabular-nums shrink-0">
+                      <span className="font-mono font-bold text-brand-700 dark:text-brand-400 tabular-nums shrink-0">
                         {formatCurrency(c.balance, currency)}
                       </span>
                     </div>
@@ -464,15 +452,15 @@ export const DashboardView: React.FC = () => {
             </div>
 
             <div>
-              <div className="text-xs font-semibold text-slate-500 mb-2">Top Creditors (AP)</div>
+              <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">Top Creditors (AP)</div>
               <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                 {topCreditors.length === 0 ? (
-                  <div className="text-slate-400 py-2">No open payables</div>
+                  <div className="text-slate-600 dark:text-slate-400 py-2">No open payables</div>
                 ) : (
                   topCreditors.map(v => (
                     <div key={v.vendorId} className="py-1.5 flex items-center justify-between gap-2">
                       <span className="truncate font-medium text-slate-800 dark:text-slate-200">{v.name}</span>
-                      <span className="font-mono font-bold text-rose-600 tabular-nums shrink-0">
+                      <span className="font-mono font-bold text-rose-700 dark:text-rose-400 tabular-nums shrink-0">
                         {formatCurrency(v.balance, currency)}
                       </span>
                     </div>
@@ -501,9 +489,11 @@ export const DashboardView: React.FC = () => {
 
             <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
               {recentBankTxns.length === 0 ? (
-                <div className="py-8 text-center text-slate-400">
-                  No posted bank transactions yet. Record checks, deposits, or payments in Banking.
-                </div>
+                <EmptyState
+                  title="No posted bank transactions yet"
+                  description="Record checks, deposits, or payments in Banking to see activity here."
+                  icon={<Landmark className="w-5 h-5" strokeWidth={1.75} />}
+                />
               ) : (
                 recentBankTxns.map(tx => (
                   <div key={tx.id} className="py-2.5 first:pt-0 flex items-center justify-between gap-3">
@@ -511,16 +501,17 @@ export const DashboardView: React.FC = () => {
                       <div
                         className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
                           tx.amount > 0
-                            ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400'
-                            : 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400'
+                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+                            : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'
                         }`}
+                        aria-hidden="true"
                       >
-                        {tx.amount > 0 ? <ArrowDownRight className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                        {tx.amount > 0 ? <ArrowDownRight className="w-4 h-4" strokeWidth={1.75} /> : <ArrowUpRight className="w-4 h-4" strokeWidth={1.75} />}
                       </div>
                       <div className="min-w-0">
                         <div className="font-semibold text-slate-800 dark:text-slate-200 truncate">{tx.payee}</div>
-                        <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                          <span className="font-mono">{tx.date}</span>
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
+                          <span className="font-mono tabular-nums">{tx.date}</span>
                           <span aria-hidden="true">·</span>
                           <span className="font-mono truncate">{tx.refNumber || tx.type}</span>
                         </div>
@@ -531,13 +522,13 @@ export const DashboardView: React.FC = () => {
                       <div
                         className={`font-mono font-bold tabular-nums ${
                           tx.amount > 0
-                            ? 'text-emerald-600 dark:text-emerald-400'
+                            ? 'text-emerald-700 dark:text-emerald-400'
                             : 'text-slate-900 dark:text-white'
                         }`}
                       >
                         {formatCurrency(tx.amount, currency, { showSign: true })}
                       </div>
-                      <div className="text-[10px] text-slate-400 font-mono">
+                      <div className="text-[11px] text-slate-600 dark:text-slate-400 font-mono">
                         {tx.cleared ? 'Cleared ✓' : 'Uncleared'}
                       </div>
                     </div>
@@ -550,16 +541,17 @@ export const DashboardView: React.FC = () => {
           <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs font-bold text-slate-800 dark:text-slate-200">Cash Accounts Summary</div>
-              <div className="text-[11px] text-slate-500 truncate">
+              <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
                 {(overview?.cashAccounts || []).length} active cash/card GL accounts tracked
               </div>
             </div>
-            <button
+            <Button
+              variant="emerald"
+              size="sm"
               onClick={() => setCurrentView('reconciliation')}
-              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-colors whitespace-nowrap shrink-0"
             >
               Reconcile Bank
-            </button>
+            </Button>
           </div>
         </div>
       </div>

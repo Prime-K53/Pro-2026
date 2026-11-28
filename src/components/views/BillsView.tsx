@@ -9,6 +9,20 @@ import { Pagination, pageSlice } from '../common/Pagination';
 import { FinancialDataNotice } from '../common/FinancialDataNotice';
 import { resolveFinancialFigureState } from '../common/financialDataState';
 import { formatCurrency } from '../../utils/currency';
+import { confirmActionModal } from '../../design-system';
+import {
+  Button,
+  FormField,
+  InlineAlert,
+  MetricTile,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+  Tabs,
+} from '../common/ui';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type {
@@ -667,19 +681,12 @@ export const BillsView: React.FC = () => {
           if (def.confirmation) {
             const conf = typeof def.confirmation === 'function' ? def.confirmation(ctx, def) : def.confirmation;
             if (conf) {
-              const msg = `${conf.message}${conf.impactSummary ? '\n\n' + conf.impactSummary : ''}`;
-              if (conf.destructive || conf.requireReason) {
-                const input = window.prompt(msg, '');
-                if (input === null) return;
-                const reason = (input || '').trim();
-                if (conf.requireReason && !reason) throw new Error('A reason is required to continue');
-                if (typeof def.execute === 'function') {
-                  await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
-                }
-                return;
+              const res = await confirmActionModal(conf);
+              if (!res.confirmed) return;
+              if (typeof def.execute === 'function') {
+                await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason: res.reason });
               }
-              const ok = window.confirm(msg);
-              if (!ok) return;
+              return;
             }
           }
           if (typeof def.execute === 'function') {
@@ -704,23 +711,16 @@ export const BillsView: React.FC = () => {
         notify={(msg, tone) => triggerShortcutNotice(msg, tone)}
         onExecuteAction={async (action) => {
           const def = action.definition;
-          // handle confirmation for void
+          // handle confirmation for void / sensitive operations
           if (def.confirmation) {
             const conf = typeof def.confirmation === 'function' ? def.confirmation(ctx, def) : def.confirmation;
             if (conf) {
-              const msg = `${conf.message}${conf.impactSummary ? '\n\n' + conf.impactSummary : ''}`;
-              if (conf.destructive || conf.requireReason) {
-                const input = window.prompt(msg, '');
-                if (input === null) return;
-                const reason = (input || '').trim();
-                if (conf.requireReason && !reason) throw new Error('A reason is required to continue');
-                if (typeof def.execute === 'function') {
-                  await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
-                }
-                return;
+              const res = await confirmActionModal(conf);
+              if (!res.confirmed) return;
+              if (typeof def.execute === 'function') {
+                await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason: res.reason });
               }
-              const ok = window.confirm(msg);
-              if (!ok) return;
+              return;
             }
           }
           if (typeof def.execute === 'function') {
@@ -964,59 +964,38 @@ export const BillsView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-            Purchasing, Bills & Accounts Payable (A/P)
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Live PostgreSQL Purchase Orders, Inventory Receipts (with Raw Material unit conversion), Vendor Bills, Check Runs & Credits.
-          </p>
-        </div>
-
-        {canWrite && (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setIsReqModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold"
-            >
-              <ClipboardList className="w-3.5 h-3.5" /> New Requisition
-            </button>
-            <button
-              onClick={() => setIsPoModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold"
-            >
-              <FilePlus className="w-3.5 h-3.5" /> New PO
-            </button>
-            <button
-              onClick={() => openPayModalForBill()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold"
-            >
-              <DollarSign className="w-3.5 h-3.5" /> Pay Bills
-            </button>
-            <button
-              onClick={() => setIsBatchPayModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-500/40 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 text-xs font-semibold"
-            >
-              <Banknote className="w-3.5 h-3.5" /> Batch Payment Run
-            </button>
-            <button
-              onClick={() => setIsBillModalOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs shadow-sm"
-            >
-              <Plus className="w-4 h-4" /> Enter Bill
-            </button>
-          </div>
-        )}
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Purchasing, Bills & Accounts Payable (A/P)"
+        subtitle="Purchase Orders, Inventory Receipts (with Raw Material unit conversion), Vendor Bills, Check Runs & Credits."
+        icon={<Receipt className="h-4.5 w-4.5" />}
+        actions={
+          canWrite ? (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setIsReqModalOpen(true)}>
+                <ClipboardList className="h-3.5 w-3.5" /> New Requisition
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsPoModalOpen(true)}>
+                <FilePlus className="h-3.5 w-3.5" /> New PO
+              </Button>
+              <Button variant="emerald" size="sm" onClick={() => openPayModalForBill()}>
+                <DollarSign className="h-3.5 w-3.5" /> Pay Bills
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsBatchPayModalOpen(true)}>
+                <Banknote className="h-3.5 w-3.5" /> Batch Payment Run
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setIsBillModalOpen(true)}>
+                <Plus className="h-3.5 w-3.5" /> Enter Bill
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
 
       {errorMsg && (
-        <div role="alert" className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between">
-          <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> {errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="underline">Dismiss</button>
-        </div>
+        <InlineAlert tone="rose" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </InlineAlert>
       )}
 
       {/* KPI Cards */}
@@ -1026,69 +1005,51 @@ export const BillsView: React.FC = () => {
         onRetry={loadData}
       />
       {(purchasingFigureState === 'ready' || purchasingFigureState === 'stale') && (
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
-          <div>
-            <div className="text-[11px] font-semibold text-slate-500 uppercase">Total Outstanding A/P</div>
-            <div className="text-xl font-bold font-mono text-rose-600 dark:text-rose-400 mt-1 tabular-nums">
-              {formatCurrency(totalAp, currency)}
-            </div>
-          </div>
-          <Receipt className="w-6 h-6 text-rose-500" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <MetricTile
+            label="Total Outstanding A/P"
+            value={formatCurrency(totalAp, currency)}
+            tone="rose"
+            icon={<Receipt className="h-4 w-4" />}
+          />
+          <MetricTile
+            label="Open Purchase Orders"
+            value={purchaseOrders.filter(p => p.status === 'open' || p.status === 'partial').length}
+            tone="amber"
+            icon={<Clock className="h-4 w-4" />}
+          />
+          <MetricTile
+            label="Active Suppliers"
+            value={vendors.length}
+            tone="blue"
+            icon={<Building2 className="h-4 w-4" />}
+          />
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
-          <div>
-            <div className="text-[11px] font-semibold text-slate-500 uppercase">Open Purchase Orders</div>
-            <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
-              {purchaseOrders.filter(p => p.status === 'open' || p.status === 'partial').length}
-            </div>
-          </div>
-          <Clock className="w-6 h-6 text-amber-500" />
-        </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
-          <div>
-            <div className="text-[11px] font-semibold text-slate-500 uppercase">Active Suppliers</div>
-            <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-1 tabular-nums">
-              {vendors.length}
-            </div>
-          </div>
-          <Building2 className="w-6 h-6 text-blue-500" />
-        </div>
-      </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-semibold">
-          {(
-            [
-              ['bills', `Bills (${bills.length})`],
-              ['purchaseOrders', `Purchase Orders (${purchaseOrders.length})`],
-              ['requisitions', `Requisitions (${requisitions.length})`],
-              ['goodsReceipts', `Goods Receipts (${goodsReceipts.length})`],
-              ['payments', `Bill Payments (${billPayments.length})`],
-              ['vendorCredits', `Vendor Credits (${vendorCredits.length})`],
-            ] as Array<[PurchasingTab, string]>
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`px-3 py-1.5 rounded-md transition-colors ${
-                activeTab === id ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs' : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+      {/* Tabs + Search */}
+      <div className="surface p-2 flex flex-wrap items-center justify-between gap-3">
+        <Tabs
+          items={[
+            { id: 'bills', label: 'Bills', count: bills.length },
+            { id: 'purchaseOrders', label: 'Purchase Orders', count: purchaseOrders.length },
+            { id: 'requisitions', label: 'Requisitions', count: requisitions.length },
+            { id: 'goodsReceipts', label: 'Goods Receipts', count: goodsReceipts.length },
+            { id: 'payments', label: 'Bill Payments', count: billPayments.length },
+            { id: 'vendorCredits', label: 'Vendor Credits', count: vendorCredits.length },
+          ]}
+          activeId={activeTab}
+          onChange={id => setActiveTab(id as PurchasingTab)}
+          ariaLabel="Purchasing sections"
+        />
         <div className="relative w-full sm:w-64">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search bills, POs, vendors..."
-            className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 text-xs outline-none"
+            className="app-input pl-9"
           />
         </div>
       </div>
@@ -1106,9 +1067,12 @@ export const BillsView: React.FC = () => {
                 {(['open', 'all', 'paid', 'voided'] as const).map(f => (
                   <button
                     key={f}
+                    type="button"
                     onClick={() => setBillFilter(f)}
-                    className={`px-3 py-1 rounded-md border text-[11px] font-semibold capitalize ${
-                      billFilter === f ? 'bg-[#0f3d63] text-white border-[#0f3d63]' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                    className={`px-3 py-1 rounded-md border text-[11px] font-semibold capitalize transition-colors ${
+                      billFilter === f
+                        ? 'bg-brand-600 text-white border-brand-600'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
                     }`}
                   >
                     {f}
@@ -1630,390 +1594,387 @@ export const BillsView: React.FC = () => {
       )}
 
       {/* ENTER BILL MODAL */}
-      {isBillModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Enter Supplier Bill (Posts to AP & Inventory/GL)</span>
-              <button onClick={() => setIsBillModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handleBillSubmit} className="p-5 space-y-4 overflow-y-auto text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="font-semibold block mb-1">Vendor *</label>
-                  <select value={billVendorId} onChange={e => setBillVendorId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
+      <ModalShell open={isBillModalOpen} onClose={() => setIsBillModalOpen(false)} size="3xl">
+        <ModalHeader
+          title="Enter Supplier Bill"
+          subtitle="Posts to Accounts Payable & Inventory / General Ledger"
+          icon={<Receipt className="h-4.5 w-4.5" />}
+          onClose={() => setIsBillModalOpen(false)}
+        />
+        <form onSubmit={handleBillSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              <div className="sm:col-span-2">
+                <FormField label="Vendor" required>
+                  <select value={billVendorId} onChange={e => setBillVendorId(Number(e.target.value))} className="app-input">
                     {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
                   </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Vendor Bill #</label>
-                  <input type="text" value={billNumberInput} onChange={e => setBillNumberInput(e.target.value)} placeholder="Auto if blank" className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Bill Date</label>
-                  <input type="date" value={billDate} onChange={e => setBillDate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
+                </FormField>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Currency</label>
-                  <select
-                    value={billCurrency}
-                    onChange={e => {
-                      setBillCurrency(e.target.value);
-                      if (e.target.value === baseCurrency) setBillFxRate('1');
-                      else {
-                        const known = fxRateFor(e.target.value);
-                        if (known) setBillFxRate(String(known));
-                      }
-                    }}
-                    className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950"
-                  >
-                    {fxOptions.map(o => (
-                      <option key={o.code} value={o.code}>{o.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {billCurrency !== baseCurrency && (
-                  <div>
-                    <label className="font-semibold block mb-1">FX Rate</label>
-                    <input type="number" step="0.0001" value={billFxRate} onChange={e => setBillFxRate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                  </div>
-                )}
-                <div>
-                  <label className="font-semibold block mb-1">Memo</label>
-                  <input type="text" value={billMemo} onChange={e => setBillMemo(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between font-bold">
-                  <span>Expense / Inventory Receipt Lines</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setBillLines(prev => [
-                        ...prev,
-                        { itemId: '', accountId: expenseAndAssetAccts[0]?.id || 0, description: '', quantity: '1', unitCost: '0', useTaxRate: '0' },
-                      ])
+              <FormField label="Vendor Bill #">
+                <input type="text" value={billNumberInput} onChange={e => setBillNumberInput(e.target.value)} placeholder="Auto if blank" className="app-input font-mono" />
+              </FormField>
+              <FormField label="Bill Date">
+                <input type="date" value={billDate} onChange={e => setBillDate(e.target.value)} className="app-input font-mono" />
+              </FormField>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <FormField label="Currency">
+                <select
+                  value={billCurrency}
+                  onChange={e => {
+                    setBillCurrency(e.target.value);
+                    if (e.target.value === baseCurrency) setBillFxRate('1');
+                    else {
+                      const known = fxRateFor(e.target.value);
+                      if (known) setBillFxRate(String(known));
                     }
-                    className="text-blue-600 hover:underline flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Add Line
-                  </button>
-                </div>
-                {billLines.map((l, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-center p-2 rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800">
-                    <div className="col-span-3">
-                      <select
-                        value={l.itemId}
-                        onChange={e => {
-                          const it = stockableItems.find(x => String(x.id) === e.target.value);
-                          setBillLines(prev =>
-                            prev.map((row, i) =>
-                              i !== idx ? row : { ...row, itemId: e.target.value, description: it ? it.name : row.description }
-                            )
-                          );
-                        }}
-                        className="w-full border rounded px-1.5 py-1.5 bg-white dark:bg-slate-950"
-                      >
-                        <option value="">Expense Account Only</option>
-                        {stockableItems.map(it => (
-                          <option key={it.id} value={it.id}>{it.name} ({it.purchase_unit})</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-span-3">
-                      <select
-                        value={l.accountId}
-                        onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, accountId: Number(e.target.value) } : r)))}
-                        className="w-full border rounded px-1.5 py-1.5 bg-white dark:bg-slate-950"
-                      >
-                        {expenseAndAssetAccts.map(a => (
-                          <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-span-2">
-                      <input type="text" placeholder="Desc" value={l.description} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, description: e.target.value } : r)))} className="w-full border rounded px-1.5 py-1.5 bg-white dark:bg-slate-950" required />
-                    </div>
-                    <div className="col-span-1">
-                      <input type="number" step="0.01" placeholder="Qty" value={l.quantity} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, quantity: e.target.value } : r)))} className="w-full border rounded px-1.5 py-1.5 bg-white dark:bg-slate-950 font-mono text-right" />
-                    </div>
-                    <div className="col-span-2">
-                      <input type="number" step="0.01" placeholder="Cost" value={l.unitCost} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, unitCost: e.target.value } : r)))} className="w-full border rounded px-1.5 py-1.5 bg-white dark:bg-slate-950 font-mono text-right" />
-                    </div>
-                    <div className="col-span-1">
-                      <input type="number" step="0.01" title="Use Tax %" placeholder="Tax%" value={l.useTaxRate} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, useTaxRate: e.target.value } : r)))} className="w-full border rounded px-1 py-1.5 bg-white dark:bg-slate-950 font-mono text-right" />
-                    </div>
+                  }}
+                  className="app-input"
+                >
+                  {fxOptions.map(o => (
+                    <option key={o.code} value={o.code}>{o.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              {billCurrency !== baseCurrency && (
+                <FormField label="FX Rate">
+                  <input type="number" step="0.0001" value={billFxRate} onChange={e => setBillFxRate(e.target.value)} className="app-input font-mono" />
+                </FormField>
+              )}
+              <FormField label="Memo">
+                <input type="text" value={billMemo} onChange={e => setBillMemo(e.target.value)} className="app-input" />
+              </FormField>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <span>Expense / Inventory Receipt Lines</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setBillLines(prev => [
+                      ...prev,
+                      { itemId: '', accountId: expenseAndAssetAccts[0]?.id || 0, description: '', quantity: '1', unitCost: '0', useTaxRate: '0' },
+                    ])
+                  }
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add Line
+                </Button>
+              </div>
+              {billLines.map((l, idx) => (
+                <div key={idx} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 p-2 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <div className="col-span-3">
+                    <select
+                      value={l.itemId}
+                      onChange={e => {
+                        const it = stockableItems.find(x => String(x.id) === e.target.value);
+                        setBillLines(prev =>
+                          prev.map((row, i) =>
+                            i !== idx ? row : { ...row, itemId: e.target.value, description: it ? it.name : row.description }
+                          )
+                        );
+                      }}
+                      className="app-input !px-2 text-xs"
+                    >
+                      <option value="">Expense Account Only</option>
+                      {stockableItems.map(it => (
+                        <option key={it.id} value={it.id}>{it.name} ({it.purchase_unit})</option>
+                      ))}
+                    </select>
                   </div>
-                ))}
-              </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsBillModalOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy} className="px-5 py-2 rounded bg-blue-600 text-white font-bold">
+                  <div className="col-span-3">
+                    <select
+                      value={l.accountId}
+                      onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, accountId: Number(e.target.value) } : r)))}
+                      className="app-input !px-2 text-xs"
+                    >
+                      {expenseAndAssetAccts.map(a => (
+                        <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-2">
+                    <input type="text" placeholder="Desc" value={l.description} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, description: e.target.value } : r)))} className="app-input !px-2 text-xs" required />
+                  </div>
+                  <div className="col-span-1">
+                    <input type="number" step="0.01" placeholder="Qty" value={l.quantity} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, quantity: e.target.value } : r)))} className="app-input !px-1.5 text-right font-mono text-xs" />
+                  </div>
+                  <div className="col-span-2">
+                    <input type="number" step="0.01" placeholder="Cost" value={l.unitCost} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, unitCost: e.target.value } : r)))} className="app-input !px-1.5 text-right font-mono text-xs" />
+                  </div>
+                  <div className="col-span-1">
+                    <input type="number" step="0.01" title="Use Tax %" placeholder="Tax%" value={l.useTaxRate} onChange={e => setBillLines(prev => prev.map((r, i) => (i === idx ? { ...r, useTaxRate: e.target.value } : r)))} className="app-input !px-1 text-right font-mono text-xs" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsBillModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="primary" disabled={busy}>
                   {busy ? 'Posting...' : 'Post Bill to AP'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                </Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
 
       {/* CREATE PO MODAL */}
-      {isPoModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Create Purchase Order</span>
-              <button onClick={() => setIsPoModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handlePoSubmit} className="p-5 space-y-4 overflow-y-auto text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Vendor</label>
-                  <select value={poVendorId} onChange={e => setPoVendorId(Number(e.target.value))} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Order Date</label>
-                  <input type="date" value={poDate} onChange={e => setPoDate(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Notes</label>
-                  <input type="text" value={poNotes} onChange={e => setPoNotes(e.target.value)} className="w-full border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 bg-white dark:bg-slate-950" />
-                </div>
-              </div>
-
-              <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[680px]">
-                    <colgroup>
-                      <col style={{ width: '5%' }} />
-                      <col style={{ width: '41%' }} />
-                      <col style={{ width: '10%' }} />
-                      <col style={{ width: '15%' }} />
-                      <col style={{ width: '19%' }} />
-                      <col style={{ width: '10%' }} />
-                    </colgroup>
-                    <thead>
-                      <tr className="bg-slate-100 dark:bg-slate-800/60 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                        <th className="px-2 py-2 text-center">Sn</th>
-                        <th className="px-3 py-2 text-left">Description</th>
-                        <th className="px-2 py-2 text-center">Qty</th>
-                        <th className="px-2 py-2 text-right">Unit Cost</th>
-                        <th className="px-3 py-2 text-right">Amount</th>
-                        <th className="px-2 py-2 text-center"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {poLines.map((l, idx) => (
-                        <tr key={idx} className="align-top hover:bg-slate-50 dark:hover:bg-slate-850/50 transition-colors">
-                          <td className="px-2 py-2 text-center font-mono text-[11px] text-slate-400">{idx + 1}</td>
-                          <td className="px-3 py-2">
-                            <select
-                              value={l.itemId}
-                              onChange={e => {
-                                const it = stockableItems.find(x => String(x.id) === e.target.value);
-                                setPoLines(prev =>
-                                  prev.map((row, i) =>
-                                    i === idx ? { ...row, itemId: e.target.value, description: it ? it.name : row.description } : row
-                                  )
-                                );
-                              }}
-                              className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100"
-                            >
-                              <option value="">-- Custom Item --</option>
-                              {stockableItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </select>
-                            <input
-                              type="text"
-                              value={l.description}
-                              onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, description: e.target.value } : row)))}
-                              placeholder="Line description"
-                              className="mt-1 w-full bg-transparent border-0 border-b border-transparent px-1 py-1 text-[11px] text-slate-600 dark:text-slate-300 outline-none focus:border-blue-500"
-                              required
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input type="number" min="1" step="0.01" value={l.quantity} onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, quantity: e.target.value } : row)))} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-1.5 text-xs font-mono text-center tabular-nums" />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input type="number" min="0" step="0.01" value={l.rate} onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, rate: e.target.value } : row)))} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-1.5 text-xs font-mono text-right tabular-nums" />
-                          </td>
-                          <td className="px-3 py-2 text-right font-mono text-xs font-semibold tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
-                            {formatCurrency((Number(l.quantity) || 0) * (Number(l.rate) || 0), currency)}
-                          </td>
-                          <td className="px-2 py-2 text-center">
-                            {poLines.length > 1 && (
-                              <button type="button" onClick={() => setPoLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors" title="Remove line">
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800">
-                  <button type="button" onClick={() => setPoLines(prev => [...prev, { itemId: '', description: '', quantity: '1', rate: '0' }])} className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 px-2 py-1">
-                    <Plus className="w-3.5 h-3.5" /><span>Add Line</span>
-                  </button>
-                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                    Total: <span className="font-bold text-slate-900 dark:text-white">{formatCurrency(poLines.reduce((sum, l) => sum + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0), currency)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsPoModalOpen(false)} className="px-4 py-2 rounded border border-slate-300 dark:border-slate-700">Cancel</button>
-                <button type="submit" disabled={busy} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold disabled:opacity-50">Save PO</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* PAY BILLS MODAL */}
-      {isPayModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Pay Supplier Bills</span>
-              <button onClick={() => setIsPayModalOpen(false)} className="p-1 text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handlePayBillsSubmit} className="p-5 space-y-4 overflow-y-auto text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Vendor</label>
-                  <select value={payVendorId} onChange={e => { setPayVendorId(Number(e.target.value)); setPayAllocs({}); }} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Pay From Bank Account</label>
-                  <select value={payBankAcctId} onChange={e => setPayBankAcctId(Number(e.target.value))} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950">
-                    {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Payment Date</label>
-                  <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Check # (optional)</label>
-                  <input type="text" value={payCheckNum} onChange={e => setPayCheckNum(e.target.value)} placeholder="Auto-sequence if blank" className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Currency</label>
-                  <select
-                    value={payCurrency}
-                    onChange={e => {
-                      setPayCurrency(e.target.value);
-                      if (e.target.value === baseCurrency) setPayFxRate('1');
-                      else {
-                        const known = fxRateFor(e.target.value);
-                        if (known) setPayFxRate(String(known));
-                      }
-                    }}
-                    className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950"
-                  >
-                    {fxOptions.map(o => (
-                      <option key={o.code} value={o.code}>{o.code}</option>
-                    ))}
-                  </select>
-                </div>
-                {payCurrency !== baseCurrency && (
-                  <div>
-                    <label className="font-semibold block mb-1">FX Rate</label>
-                    <input type="number" step="0.0001" value={payFxRate} onChange={e => setPayFxRate(e.target.value)} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" />
-                  </div>
-                )}
-              </div>
-
-              <div className="border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 font-bold text-[11px] uppercase">Open Bills for Vendor</div>
-                <div className="divide-y max-h-48 overflow-y-auto">
-                  {openBillsForPayVendor.length === 0 ? (
-                    <div className="p-4 text-center text-slate-400">No open bills for selected vendor.</div>
-                  ) : (
-                    openBillsForPayVendor.map(b => (
-                      <div key={b.id} className="p-2.5 flex items-center justify-between">
-                        <div>
-                          <div className="font-mono font-bold">{b.billNumber}</div>
-                          <div className="text-[11px] text-slate-500">Due {b.dueDate} · Balance: {formatCurrency(b.balanceDue, currency)}</div>
-                        </div>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={payAllocs[b.id] || ''}
-                          placeholder="0.00"
-                          onChange={e => setPayAllocs(prev => ({ ...prev, [b.id]: e.target.value }))}
-                          className="w-32 border rounded px-2 py-1 text-right font-mono bg-white dark:bg-slate-950"
-                        />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t">
-                <button type="button" onClick={() => setIsPayModalOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy} className="px-5 py-2 rounded bg-emerald-600 text-white font-bold">
-                  {busy ? 'Disbursing...' : 'Post Payment & Check'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* VENDOR CREDIT & APPLY MODALS */}
-      {isVcModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Record Vendor Credit</span>
-              <button onClick={() => setIsVcModalOpen(false)}><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handleCreateVc} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Vendor</label>
-                <select value={vcVendorId} onChange={e => setVcVendorId(Number(e.target.value))} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950">
+      <ModalShell open={isPoModalOpen} onClose={() => setIsPoModalOpen(false)} size="3xl">
+        <ModalHeader
+          title="Create Purchase Order"
+          icon={<FilePlus className="h-4.5 w-4.5" />}
+          onClose={() => setIsPoModalOpen(false)}
+        />
+        <form onSubmit={handlePoSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <FormField label="Vendor">
+                <select value={poVendorId} onChange={e => setPoVendorId(Number(e.target.value))} className="app-input">
                   {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
                 </select>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Description</label>
-                <input type="text" value={vcDesc} onChange={e => setVcDesc(e.target.value)} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950" required />
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Credit Amount</label>
-                <input type="number" step="0.01" value={vcAmount} onChange={e => setVcAmount(e.target.value)} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" required />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t">
-                <button type="button" onClick={() => setIsVcModalOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy} className="px-4 py-2 rounded bg-blue-600 text-white font-bold">Post Vendor Credit</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {applyVcTarget && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Apply {applyVcTarget.creditNumber} to Bill</span>
-              <button onClick={() => setApplyVcTarget(null)}><X className="w-5 h-5" /></button>
+              </FormField>
+              <FormField label="Order Date">
+                <input type="date" value={poDate} onChange={e => setPoDate(e.target.value)} className="app-input font-mono" />
+              </FormField>
+              <FormField label="Notes">
+                <input type="text" value={poNotes} onChange={e => setPoNotes(e.target.value)} className="app-input" />
+              </FormField>
             </div>
-            <form onSubmit={handleApplyVc} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Open Vendor Bill</label>
-                <select value={applyVcBillId} onChange={e => setApplyVcBillId(Number(e.target.value))} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950" required>
+
+            <div className="surface overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="data-table min-w-[680px]">
+                  <colgroup>
+                    <col style={{ width: '5%' }} />
+                    <col style={{ width: '41%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '15%' }} />
+                    <col style={{ width: '19%' }} />
+                    <col style={{ width: '10%' }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th className="text-center">Sn</th>
+                      <th>Description</th>
+                      <th className="text-center">Qty</th>
+                      <th className="text-right">Unit Cost</th>
+                      <th className="text-right">Amount</th>
+                      <th className="text-center"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {poLines.map((l, idx) => (
+                      <tr key={idx} className="align-top">
+                        <td className="text-center font-mono text-[11px] text-slate-400">{idx + 1}</td>
+                        <td>
+                          <select
+                            value={l.itemId}
+                            onChange={e => {
+                              const it = stockableItems.find(x => String(x.id) === e.target.value);
+                              setPoLines(prev =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, itemId: e.target.value, description: it ? it.name : row.description } : row
+                                )
+                              );
+                            }}
+                            className="app-input"
+                          >
+                            <option value="">-- Custom Item --</option>
+                            {stockableItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                          </select>
+                          <input
+                            type="text"
+                            value={l.description}
+                            onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, description: e.target.value } : row)))}
+                            placeholder="Line description"
+                            className="mt-1 w-full bg-transparent border-0 border-b border-transparent px-1 py-1 text-[11px] text-slate-600 dark:text-slate-300 outline-none focus:border-brand-500"
+                            required
+                          />
+                        </td>
+                        <td>
+                          <input type="number" min="1" step="0.01" value={l.quantity} onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, quantity: e.target.value } : row)))} className="app-input text-center font-mono tabular-nums" />
+                        </td>
+                        <td>
+                          <input type="number" min="0" step="0.01" value={l.rate} onChange={e => setPoLines(prev => prev.map((row, i) => (i === idx ? { ...row, rate: e.target.value } : row)))} className="app-input text-right font-mono tabular-nums" />
+                        </td>
+                        <td className="text-right font-mono text-xs font-semibold tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                          {formatCurrency((Number(l.quantity) || 0) * (Number(l.rate) || 0), currency)}
+                        </td>
+                        <td className="text-center">
+                          {poLines.length > 1 && (
+                            <button type="button" onClick={() => setPoLines(prev => prev.filter((_, i) => i !== idx))} className="p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors" title="Remove line">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-white/[0.03] border-t border-slate-200 dark:border-white/[0.08]">
+                <Button variant="ghost" size="sm" onClick={() => setPoLines(prev => [...prev, { itemId: '', description: '', quantity: '1', rate: '0' }])}>
+                  <Plus className="h-3.5 w-3.5" /> Add Line
+                </Button>
+                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  Total: <span className="font-bold text-slate-900 dark:text-white">{formatCurrency(poLines.reduce((sum, l) => sum + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0), currency)}</span>
+                </div>
+              </div>
+            </div>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsPoModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="primary" disabled={busy}>Save PO</Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
+
+      {/* PAY BILLS MODAL */}
+      <ModalShell open={isPayModalOpen} onClose={() => setIsPayModalOpen(false)} size="2xl">
+        <ModalHeader
+          title="Pay Supplier Bills"
+          icon={<DollarSign className="h-4.5 w-4.5" />}
+          tone="emerald"
+          onClose={() => setIsPayModalOpen(false)}
+        />
+        <form onSubmit={handlePayBillsSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <FormField label="Vendor">
+                <select value={payVendorId} onChange={e => { setPayVendorId(Number(e.target.value)); setPayAllocs({}); }} className="app-input">
+                  {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
+                </select>
+              </FormField>
+              <FormField label="Pay From Bank Account">
+                <select value={payBankAcctId} onChange={e => setPayBankAcctId(Number(e.target.value))} className="app-input">
+                  {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+                </select>
+              </FormField>
+              <FormField label="Payment Date">
+                <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} className="app-input font-mono" />
+              </FormField>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <FormField label="Check # (optional)">
+                <input type="text" value={payCheckNum} onChange={e => setPayCheckNum(e.target.value)} placeholder="Auto-sequence if blank" className="app-input font-mono" />
+              </FormField>
+              <FormField label="Currency">
+                <select
+                  value={payCurrency}
+                  onChange={e => {
+                    setPayCurrency(e.target.value);
+                    if (e.target.value === baseCurrency) setPayFxRate('1');
+                    else {
+                      const known = fxRateFor(e.target.value);
+                      if (known) setPayFxRate(String(known));
+                    }
+                  }}
+                  className="app-input"
+                >
+                  {fxOptions.map(o => (
+                    <option key={o.code} value={o.code}>{o.code}</option>
+                  ))}
+                </select>
+              </FormField>
+              {payCurrency !== baseCurrency && (
+                <FormField label="FX Rate">
+                  <input type="number" step="0.0001" value={payFxRate} onChange={e => setPayFxRate(e.target.value)} className="app-input font-mono" />
+                </FormField>
+              )}
+            </div>
+
+            <div className="surface overflow-hidden">
+              <div className="surface-header text-[11px] font-bold uppercase tracking-wider text-slate-500">Open Bills for Vendor</div>
+              <div className="divide-y divide-slate-200/80 dark:divide-white/[0.06] max-h-48 overflow-y-auto">
+                {openBillsForPayVendor.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-slate-400">No open bills for selected vendor.</div>
+                ) : (
+                  openBillsForPayVendor.map(b => (
+                    <div key={b.id} className="p-2.5 flex items-center justify-between">
+                      <div>
+                        <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">{b.billNumber}</div>
+                        <div className="text-[11px] text-slate-500">Due {b.dueDate} · Balance: {formatCurrency(b.balanceDue, currency)}</div>
+                      </div>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={payAllocs[b.id] || ''}
+                        placeholder="0.00"
+                        onChange={e => setPayAllocs(prev => ({ ...prev, [b.id]: e.target.value }))}
+                        className="app-input !w-32 text-right font-mono tabular-nums"
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsPayModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="emerald" disabled={busy}>
+                  {busy ? 'Disbursing...' : 'Post Payment & Check'}
+                </Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
+
+      {/* VENDOR CREDIT & APPLY MODALS */}
+      <ModalShell open={isVcModalOpen} onClose={() => setIsVcModalOpen(false)} size="md">
+        <ModalHeader
+          title="Record Vendor Credit"
+          icon={<Receipt className="h-4.5 w-4.5" />}
+          onClose={() => setIsVcModalOpen(false)}
+        />
+        <form onSubmit={handleCreateVc} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <FormField label="Vendor">
+              <select value={vcVendorId} onChange={e => setVcVendorId(Number(e.target.value))} className="app-input">
+                {vendors.map(v => <option key={v.id} value={v.id}>{v.companyName}</option>)}
+              </select>
+            </FormField>
+            <FormField label="Description" required>
+              <input type="text" value={vcDesc} onChange={e => setVcDesc(e.target.value)} className="app-input" required />
+            </FormField>
+            <FormField label="Credit Amount" required>
+              <input type="number" step="0.01" value={vcAmount} onChange={e => setVcAmount(e.target.value)} className="app-input font-mono tabular-nums" required />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsVcModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="primary" disabled={busy}>Post Vendor Credit</Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
+
+      <ModalShell open={Boolean(applyVcTarget)} onClose={() => setApplyVcTarget(null)} size="md">
+        <ModalHeader
+          title={`Apply ${applyVcTarget?.creditNumber ?? ''} to Bill`}
+          icon={<Receipt className="h-4.5 w-4.5" />}
+          onClose={() => setApplyVcTarget(null)}
+        />
+        {applyVcTarget && (
+          <form onSubmit={handleApplyVc} className="flex min-h-0 flex-1 flex-col">
+            <ModalBody className="space-y-4">
+              <FormField label="Open Vendor Bill" required>
+                <select value={applyVcBillId} onChange={e => setApplyVcBillId(Number(e.target.value))} className="app-input" required>
                   <option value={0}>Select bill...</option>
                   {bills
                     .filter(b => b.vendorId === applyVcTarget.vendorId && b.status !== 'voided' && b.balanceDue > 0)
@@ -2021,168 +1982,167 @@ export const BillsView: React.FC = () => {
                       <option key={b.id} value={b.id}>{b.billNumber} (Due: {formatCurrency(b.balanceDue, currency)})</option>
                     ))}
                 </select>
-              </div>
-              <div>
-                <label className="font-semibold block mb-1">Amount</label>
-                <input type="number" step="0.01" value={applyVcAmt} onChange={e => setApplyVcAmt(e.target.value)} className="w-full border rounded px-2.5 py-2 bg-white dark:bg-slate-950 font-mono" required />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t">
-                <button type="button" onClick={() => setApplyVcTarget(null)} className="px-4 py-2 rounded border">Cancel</button>
-                <button type="submit" disabled={busy || !applyVcBillId} className="px-4 py-2 rounded bg-blue-600 text-white font-bold">Apply Credit</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </FormField>
+              <FormField label="Amount" required>
+                <input type="number" step="0.01" value={applyVcAmt} onChange={e => setApplyVcAmt(e.target.value)} className="app-input font-mono tabular-nums" required />
+              </FormField>
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setApplyVcTarget(null)}>Cancel</Button>
+                  <Button type="submit" variant="primary" disabled={busy || !applyVcBillId}>Apply Credit</Button>
+                </>
+              }
+            />
+          </form>
+        )}
+      </ModalShell>
 
       {/* NEW REQUISITION MODAL */}
-      {isReqModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">New Purchase Requisition</span>
-              <button onClick={() => setIsReqModalOpen(false)} className="p-1 text-white/80 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+      <ModalShell open={isReqModalOpen} onClose={() => setIsReqModalOpen(false)} size="md">
+        <ModalHeader
+          title="New Purchase Requisition"
+          icon={<ClipboardList className="h-4.5 w-4.5" />}
+          onClose={() => setIsReqModalOpen(false)}
+        />
+        <form onSubmit={handleRequisitionSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <FormField label="Preferred Vendor (optional)">
+              <select value={reqVendorId} onChange={e => setReqVendorId(Number(e.target.value))} className="app-input">
+                <option value={0}>No preference</option>
+                {vendors.map(v => (
+                  <option key={v.id} value={v.id}>{v.companyName}</option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Stock Item (optional)">
+              <select
+                value={reqItemId}
+                onChange={e => {
+                  const it = stockableItems.find(x => String(x.id) === e.target.value);
+                  setReqItemId(e.target.value);
+                  if (it) {
+                    setReqDesc(it.name);
+                    setReqCost(String(Number(it.unit_cost || 0)));
+                  }
+                }}
+                className="app-input"
+              >
+                <option value="">Custom line</option>
+                {stockableItems.map(it => (
+                  <option key={it.id} value={it.id}>{it.name}</option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Description" required>
+              <input type="text" value={reqDesc} onChange={e => setReqDesc(e.target.value)} className="app-input" required />
+            </FormField>
+            <div className="grid grid-cols-3 gap-2">
+              <FormField label="Quantity" required>
+                <input type="number" step="0.001" value={reqQty} onChange={e => setReqQty(e.target.value)} className="app-input app-input-mono" required />
+              </FormField>
+              <FormField label="Est. Unit Cost">
+                <input type="number" step="0.01" value={reqCost} onChange={e => setReqCost(e.target.value)} className="app-input app-input-mono" />
+              </FormField>
+              <FormField label="Needed By">
+                <input type="date" value={reqNeededBy} onChange={e => setReqNeededBy(e.target.value)} className="app-input app-input-mono" />
+              </FormField>
             </div>
-            <form onSubmit={handleRequisitionSubmit} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="app-label">Preferred Vendor (optional)</label>
-                <select value={reqVendorId} onChange={e => setReqVendorId(Number(e.target.value))} className="app-input">
-                  <option value={0}>No preference</option>
-                  {vendors.map(v => (
-                    <option key={v.id} value={v.id}>{v.companyName}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="app-label">Stock Item (optional)</label>
-                <select
-                  value={reqItemId}
-                  onChange={e => {
-                    const it = stockableItems.find(x => String(x.id) === e.target.value);
-                    setReqItemId(e.target.value);
-                    if (it) {
-                      setReqDesc(it.name);
-                      setReqCost(String(Number(it.unit_cost || 0)));
-                    }
-                  }}
-                  className="app-input"
-                >
-                  <option value="">Custom line</option>
-                  {stockableItems.map(it => (
-                    <option key={it.id} value={it.id}>{it.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="app-label">Description</label>
-                <input type="text" value={reqDesc} onChange={e => setReqDesc(e.target.value)} className="app-input" required />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="app-label">Quantity</label>
-                  <input type="number" step="0.001" value={reqQty} onChange={e => setReqQty(e.target.value)} className="app-input app-input-mono" required />
-                </div>
-                <div>
-                  <label className="app-label">Est. Unit Cost</label>
-                  <input type="number" step="0.01" value={reqCost} onChange={e => setReqCost(e.target.value)} className="app-input app-input-mono" />
-                </div>
-                <div>
-                  <label className="app-label">Needed By</label>
-                  <input type="date" value={reqNeededBy} onChange={e => setReqNeededBy(e.target.value)} className="app-input app-input-mono" />
-                </div>
-              </div>
-              <div>
-                <label className="app-label">Justification / Notes</label>
-                <input type="text" value={reqNotes} onChange={e => setReqNotes(e.target.value)} className="app-input" />
-              </div>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsReqModalOpen(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" disabled={busy} className="btn btn-primary">
+            <FormField label="Justification / Notes">
+              <input type="text" value={reqNotes} onChange={e => setReqNotes(e.target.value)} className="app-input" />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsReqModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="primary" disabled={busy}>
                   {busy ? 'Submitting…' : 'Submit Requisition'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                </Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
 
       {/* CONVERT REQUISITION TO PO */}
-      {convertTarget && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Convert {convertTarget.requisitionNumber} to Purchase Order</span>
-              <button onClick={() => setConvertTarget(null)} className="p-1 text-white/80 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleConvertRequisition} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="app-label">Supplier</label>
+      <ModalShell open={Boolean(convertTarget)} onClose={() => setConvertTarget(null)} size="md">
+        <ModalHeader
+          title={`Convert ${convertTarget?.requisitionNumber ?? ''} to Purchase Order`}
+          icon={<FilePlus className="h-4.5 w-4.5" />}
+          onClose={() => setConvertTarget(null)}
+        />
+        {convertTarget && (
+          <form onSubmit={handleConvertRequisition} className="flex min-h-0 flex-1 flex-col">
+            <ModalBody className="space-y-4">
+              <FormField label="Supplier" required>
                 <select value={convertVendorId} onChange={e => setConvertVendorId(Number(e.target.value))} className="app-input" required>
                   <option value={0}>Select supplier…</option>
                   {vendors.map(v => (
                     <option key={v.id} value={v.id}>{v.companyName}</option>
                   ))}
                 </select>
-              </div>
+              </FormField>
               <p className="text-[11px] text-slate-500">
-                The approved requisition lines are copied onto a new open purchase order. Rates fall back to each line's estimated unit cost.
+                The approved requisition lines are copied onto a new open purchase order. Rates fall back to each line&apos;s estimated unit cost.
               </p>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setConvertTarget(null)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" disabled={busy || !convertVendorId} className="btn btn-primary">
-                  {busy ? 'Converting…' : 'Create Purchase Order'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setConvertTarget(null)}>Cancel</Button>
+                  <Button type="submit" variant="primary" disabled={busy || !convertVendorId}>
+                    {busy ? 'Converting…' : 'Create Purchase Order'}
+                  </Button>
+                </>
+              }
+            />
+          </form>
+        )}
+      </ModalShell>
 
       {/* RECORD GOODS RECEIPT */}
-      {isGrModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Record Goods Receipt</span>
-              <button onClick={() => setIsGrModalOpen(false)} className="p-1 text-white/80 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleGoodsReceiptSubmit} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="app-label">Open Purchase Order</label>
-                <select value={grPoId} onChange={e => setGrPoId(Number(e.target.value))} className="app-input" required>
-                  <option value={0}>Select purchase order…</option>
-                  {purchaseOrders
-                    .filter(p => p.status !== 'closed' && p.status !== 'cancelled')
-                    .map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.poNumber} · {p.vendorName} · {formatCurrency(p.total, currency)}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="app-label">Receipt Notes</label>
-                <input type="text" value={grNotes} onChange={e => setGrNotes(e.target.value)} className="app-input" placeholder="Delivery note, condition, short-shipped lines…" />
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Remaining open quantities are received into stock with no journal entry. The supplier bill is posted separately.
-              </p>
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button type="button" onClick={() => setIsGrModalOpen(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" disabled={busy || !grPoId} className="btn btn-emerald">
+      <ModalShell open={isGrModalOpen} onClose={() => setIsGrModalOpen(false)} size="md">
+        <ModalHeader
+          title="Record Goods Receipt"
+          icon={<PackageCheck className="h-4.5 w-4.5" />}
+          tone="emerald"
+          onClose={() => setIsGrModalOpen(false)}
+        />
+        <form onSubmit={handleGoodsReceiptSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <FormField label="Open Purchase Order" required>
+              <select value={grPoId} onChange={e => setGrPoId(Number(e.target.value))} className="app-input" required>
+                <option value={0}>Select purchase order…</option>
+                {purchaseOrders
+                  .filter(p => p.status !== 'closed' && p.status !== 'cancelled')
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.poNumber} · {p.vendorName} · {formatCurrency(p.total, currency)}
+                    </option>
+                  ))}
+              </select>
+            </FormField>
+            <FormField label="Receipt Notes">
+              <input type="text" value={grNotes} onChange={e => setGrNotes(e.target.value)} className="app-input" placeholder="Delivery note, condition, short-shipped lines…" />
+            </FormField>
+            <p className="text-[11px] text-slate-500">
+              Remaining open quantities are received into stock with no journal entry. The supplier bill is posted separately.
+            </p>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setIsGrModalOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="emerald" disabled={busy || !grPoId}>
                   {busy ? 'Recording…' : 'Post Receipt'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                </Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
 
       {matchModalBill && (
         <ThreeWayMatchInspectionModal
@@ -2270,19 +2230,12 @@ export const BillsView: React.FC = () => {
             if (def.confirmation) {
               const conf = typeof def.confirmation === 'function' ? def.confirmation(ctx, def) : def.confirmation;
               if (conf) {
-                const msg = `${conf.message}${conf.impactSummary ? '\n\n' + conf.impactSummary : ''}`;
-                if (conf.destructive || conf.requireReason) {
-                  const input = window.prompt(msg, '');
-                  if (input === null) return;
-                  const reason = (input || '').trim();
-                  if (conf.requireReason && !reason) throw new Error('A reason is required to continue');
-                  if (typeof def.execute === 'function') {
-                    await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason });
-                  }
-                  return;
+                const res = await confirmActionModal(conf);
+                if (!res.confirmed) return;
+                if (typeof def.execute === 'function') {
+                  await def.execute(ctx, { notify: (m, t) => triggerShortcutNotice(m, t), reason: res.reason });
                 }
-                const ok = window.confirm(msg);
-                if (!ok) return;
+                return;
               }
             }
             if (typeof def.execute === 'function') {
@@ -2291,6 +2244,6 @@ export const BillsView: React.FC = () => {
           }}
         />
       )}
-    </div>
+    </PageShell>
   );
 };

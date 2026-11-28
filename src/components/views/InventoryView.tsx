@@ -11,6 +11,7 @@ import {
   STOCKED_ITEM_TYPES,
 } from '../../types/accounting';
 import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
+import { appDialog } from '../../design-system';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
@@ -371,9 +372,12 @@ export const InventoryView: React.FC = () => {
       triggerShortcutNotice('This item is not linked to a server record yet.', 'error');
       return;
     }
-    const confirmed = window.confirm(
-      `Deactivate ${item.sku} — ${item.name}?\n\nThe item will no longer appear in the active catalog. This cannot be undone from the UI.`
-    );
+    const confirmed = await appDialog.confirm({
+      title: `Deactivate ${item.sku}`,
+      message: `Deactivate ${item.sku} — ${item.name}?\n\nThe item will no longer appear in the active catalog. This cannot be undone from the UI.`,
+      confirmLabel: 'Deactivate Item',
+      destructive: true,
+    });
     if (!confirmed) return;
     try {
       const result = await commercialApi.deactivateInventoryItem(backendId);
@@ -526,9 +530,23 @@ export const InventoryView: React.FC = () => {
         groupLabel: 'Stock',
         requiredPermission: 'inventory:damage',
         execute: async () => {
-          const qty = window.prompt(`Scrap quantity for ${item.sku} (${item.name})`, '1');
+          const qty = await appDialog.prompt({
+            title: `Scrap Write-Off — ${item.sku}`,
+            message: `Enter the scrap quantity for ${item.sku} (${item.name}).`,
+            label: 'Scrap quantity',
+            defaultValue: '1',
+            inputType: 'number',
+            required: true,
+          });
           if (qty === null) return;
-          const reason = window.prompt('Scrap reason / job reference (required)', 'Production spoilage');
+          const reason = await appDialog.prompt({
+            title: `Scrap Reason — ${item.sku}`,
+            message: 'Provide the scrap reason or job reference.',
+            label: 'Scrap reason / job reference',
+            defaultValue: 'Production spoilage',
+            required: true,
+            destructive: true,
+          });
           if (reason === null) return;
           if (!reason.trim()) throw new Error('Reason is required');
           await commercialApi.recordScrapWriteOff(Number(item.id), { quantity: Number(qty), reason: reason.trim(), reasonCode: 'scrap', jobReference: reason.trim() });

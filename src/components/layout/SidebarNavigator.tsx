@@ -334,11 +334,11 @@ export const SidebarNavigator: React.FC = () => {
                 {activeCompany?.name || 'Authenticated company'}
               </span>
             </span>
-            <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-[10px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+            <span className="shrink-0 rounded-md bg-emerald-50 px-2 py-0.5 font-mono text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200/70 ring-inset dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20">
               Verified
             </span>
           </div>
-          <div className="text-[10px] text-slate-400 dark:text-slate-500">
+          <div className="text-[11px] text-slate-600 dark:text-slate-400">
             {activeCompany ? `${activeCompany.role} · Server-verified access` : 'Server-verified access'}
           </div>
         </div>

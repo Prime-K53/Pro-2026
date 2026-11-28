@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
@@ -7,31 +7,32 @@
    surface, control and chrome element shares one visual language.
    --------------------------------------------------------------------------- */
 @theme {
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: 'DM Serif Display', Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Legacy aliases still referenced by a few screens */
   --color-slate-750: #293548;
   --color-slate-850: #161f33;
 
-  /* Brand — Zoho blue (ported from Prime-PWA) */
+  /* Brand — Prime Blue (AA-safe primary fill on #0068c9 with #ffffff text) */
   --color-brand-50: #ebf5ff;
   --color-brand-100: #d6e9ff;
   --color-brand-200: #a9d5ff;
   --color-brand-300: #7ab8ff;
   --color-brand-400: #3d9dff;
   --color-brand-500: #0086ff;
-  --color-brand-600: #0070d6;
-  --color-brand-700: #0060b8;
-  --color-brand-800: #004e99;
-  --color-brand-900: #003f7d;
-  --color-brand-950: #002a55;
+  --color-brand-600: #0068c9;
+  --color-brand-700: #0055a6;
+  --color-brand-800: #004282;
+  --color-brand-900: #003263;
+  --color-brand-950: #002145;
 
   /* Elevation */
   --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 12px 28px -18px rgb(15 23 42 / 0.22);
   --shadow-card-hover: 0 2px 4px 0 rgb(15 23 42 / 0.05), 0 22px 44px -24px rgb(15 23 42 / 0.28);
   --shadow-pop: 0 8px 16px -8px rgb(15 23 42 / 0.10), 0 28px 56px -20px rgb(15 23 42 / 0.30);
-  --shadow-glow: 0 10px 22px -10px rgb(0 134 255 / 0.55);
+  --shadow-glow: 0 10px 22px -10px rgb(0 104 201 / 0.55);
 
   /* Radius */
   --radius-4xl: 2rem;
@@ -60,6 +61,33 @@
     -moz-osx-font-smoothing: grayscale;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
     background-color: transparent;
+  }
+
+  /* Optical compensation for light-on-dark typography */
+  html.dark body {
+    letter-spacing: 0.005em;
+  }
+
+  h1, h2, h3, .text-display {
+    text-wrap: balance;
+  }
+
+  .skip-link {
+    position: fixed;
+    top: -9999px;
+    left: 12px;
+    z-index: 11000;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--color-brand-600);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .skip-link:focus {
+    top: 12px;
   }
 
   ::selection {
@@ -106,11 +134,11 @@
   }
 
   .app-label {
-    @apply mb-1 block text-[10px] font-semibold uppercase tracking-tight text-slate-600 dark:text-slate-400;
+    @apply mb-1.5 block text-[11px] font-semibold tracking-[0.02em] text-slate-700 dark:text-slate-300;
   }
 
   .app-input {
-    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-700 shadow-[0_1px_2px_0_rgb(15_23_42/0.03)] outline-none transition-all duration-150 placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100 dark:hover:border-white/20 dark:focus:border-brand-400 dark:focus:ring-brand-500/20;
+    @apply min-h-[36px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 shadow-[0_1px_2px_0_rgb(15_23_42/0.03)] outline-none transition-all duration-150 placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 aria-[invalid=true]:border-rose-500 aria-[invalid=true]:focus:ring-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100 dark:hover:border-white/20 dark:focus:border-brand-400 dark:focus:ring-brand-500/20;
   }
 
   .app-input-mono {
@@ -118,23 +146,35 @@
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-[7px] text-[13px] font-semibold leading-none whitespace-nowrap transition-all duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-[36px] items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-[13px] font-semibold leading-none whitespace-nowrap transition-all duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-sm {
+    @apply min-h-[32px] px-2.5 py-1.5 text-[12px];
+  }
+
+  .btn-lg {
+    @apply min-h-[42px] px-4 py-2.5 text-[14px];
   }
 
   .btn-primary {
-    @apply bg-brand-500 text-white shadow-sm hover:bg-brand-600;
+    @apply bg-brand-600 text-white shadow-sm hover:bg-brand-700 dark:bg-brand-600 dark:hover:bg-brand-500;
   }
 
   .btn-secondary {
-    @apply border border-slate-200 bg-white text-slate-600 shadow-sm hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:border-brand-500/30 dark:hover:bg-white/[0.07];
+    @apply border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:border-brand-500/30 dark:hover:bg-white/[0.07];
   }
 
   .btn-emerald {
-    @apply bg-gradient-to-b from-emerald-500 to-emerald-600 text-white shadow-[0_10px_22px_-10px_rgb(5_150_105/0.6)] hover:from-emerald-500 hover:to-emerald-500;
+    @apply bg-emerald-600 text-white shadow-sm hover:bg-emerald-700;
   }
 
   .btn-danger {
     @apply border border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20;
+  }
+
+  .btn-ghost {
+    @apply text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-white/[0.06] dark:hover:text-white;
   }
 
   .data-table {
@@ -142,11 +182,11 @@
   }
 
   .data-table thead {
-    @apply border-b border-slate-200 bg-slate-100 text-[10px] font-semibold tracking-tight text-slate-600 uppercase select-none dark:border-white/[0.06] dark:bg-white/[0.03] dark:text-slate-400;
+    @apply border-b border-slate-200 bg-slate-100 text-[11px] font-semibold tracking-[0.03em] text-slate-600 uppercase select-none dark:border-white/[0.06] dark:bg-white/[0.03] dark:text-slate-300;
   }
 
   .data-table th {
-    @apply px-2.5 py-2 whitespace-nowrap;
+    @apply px-3 py-2.5 whitespace-nowrap;
   }
 
   .data-table tbody {
@@ -154,7 +194,7 @@
   }
 
   .data-table td {
-    @apply px-2.5 py-2 align-middle;
+    @apply px-3 py-2.5 align-middle;
   }
 
   .data-table tbody tr {
@@ -162,7 +202,7 @@
   }
 
   .badge {
-    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ring-1 ring-black/[0.04] ring-inset dark:ring-white/[0.06];
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ring-1 ring-black/[0.06] ring-inset dark:ring-white/[0.08];
   }
 
   .skeleton {
@@ -1721,21 +1761,41 @@
   background-image: radial-gradient(rgba(71, 85, 105, 0.3) 1px, transparent 1px);
 }
 
+@media (pointer: coarse) {
+  .btn,
+  .app-input,
+  .hdr-icon-btn,
+  .hdr-nav-trigger,
+  .hdr-menu-item,
+  .nav-item {
+    min-height: 44px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-modal-enter,
   .animate-toast-enter,
   .animate-pop-enter,
   .animate-drawer-enter,
   .flow-connector-animated,
-  .skeleton {
+  .skeleton,
+  .animate-pulse,
+  .hdr-company-loading .hdr-company-name,
+  .hdr-menu-panel {
     animation: none !important;
   }
 
+  .surface,
+  .surface-hover,
   .btn,
   .ribbon-btn,
   .ribbon-cta,
-  .ribbon-cta-emerald {
+  .ribbon-cta-emerald,
+  .nav-item,
+  .hdr-nav-trigger,
+  .hdr-quick-btn {
     transition: none !important;
+    transform: none !important;
   }
 }
 
@@ -1817,18 +1877,18 @@
   border-color: rgb(255 255 255 / 0.07) !important;
 }
 
-/* Primary buttons: solid blue/brand -> solid Zoho blue */
+/* Primary buttons: solid blue/brand -> WCAG AA solid brand-600 */
 .bg-blue-600.text-white,
 .bg-brand-600.text-white {
-  background: var(--color-brand-500) !important;
+  background: var(--color-brand-600) !important;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
 }
 .bg-blue-600.text-white:hover,
 .bg-brand-600.text-white:hover {
-  background: var(--color-brand-600) !important;
+  background: var(--color-brand-700) !important;
 }
 
-/* Dark/secondary buttons: solid slate -> gradient slate with card shadow */
+/* Dark/secondary buttons: solid slate -> crisp slate surface */
 .bg-slate-900.text-white,
 .bg-slate-800.text-white,
 .bg-slate-900.dark\:text-slate-900 {
@@ -1836,11 +1896,11 @@
   box-shadow: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 12px 28px -18px rgb(15 23 42 / 0.22) !important;
 }
 
-/* Legacy navy active tabs/filters -> solid Zoho blue */
+/* Legacy navy active tabs/filters -> AA-safe solid brand-600 */
 .bg-\[\#0f3d63\].text-white,
 .bg-\[\#0f3d63\],
 .bg-\[\#0f3d63\].text-white.border-\[\#0f3d63\] {
-  background: var(--color-brand-500) !important;
+  background: var(--color-brand-600) !important;
   color: #fff !important;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
 }

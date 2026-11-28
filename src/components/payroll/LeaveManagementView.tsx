@@ -16,6 +16,7 @@ import {
 import { leaveApi } from '../../services/v2Api';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
+import { appDialog, StatusBadge } from '../../design-system';
 
 interface LeaveType {
   id: number;
@@ -171,7 +172,13 @@ export const LeaveManagementView: React.FC = () => {
   };
 
   const handleApprove = async (req: LeaveRequest) => {
-    if (!window.confirm(`Approve leave request for ${req.employeeName} (${req.daysRequested} days)?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Approve Leave Request',
+      message: `Approve leave request for ${req.employeeName || getEmpName(req.employeeId)} (${req.daysRequested} days)?`,
+      confirmLabel: 'Approve Leave',
+      tone: 'emerald',
+    });
+    if (!confirmed) return;
     try {
       await leaveApi.approveRequest(req.id);
       triggerShortcutNotice(`Leave request #${req.id} approved`);
@@ -196,7 +203,13 @@ export const LeaveManagementView: React.FC = () => {
   };
 
   const handleCancel = async (req: LeaveRequest) => {
-    if (!window.confirm(`Cancel leave request #${req.id}?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Cancel Leave Request',
+      message: `Cancel leave request #${req.id}?`,
+      confirmLabel: 'Cancel Request',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await leaveApi.cancelRequest(req.id);
       triggerShortcutNotice(`Leave request #${req.id} cancelled`);
@@ -223,15 +236,15 @@ export const LeaveManagementView: React.FC = () => {
   const renderBadge = (status: string) => {
     switch (status) {
       case 'pending':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-400 animate-pulse">Pending Review</span>;
+        return <StatusBadge tone="warning" showIcon>Pending Review</StatusBadge>;
       case 'approved':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400">Approved</span>;
+        return <StatusBadge tone="success" showIcon>Approved</StatusBadge>;
       case 'rejected':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-400">Rejected</span>;
+        return <StatusBadge tone="danger" showIcon>Rejected</StatusBadge>;
       case 'cancelled':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">Cancelled</span>;
+        return <StatusBadge tone="neutral">Cancelled</StatusBadge>;
       default:
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800">{status}</span>;
+        return <StatusBadge tone="neutral">{status}</StatusBadge>;
     }
   };
 

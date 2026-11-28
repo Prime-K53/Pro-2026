@@ -25,6 +25,7 @@ import {
 import { useAccounting } from '../../../context/AccountingContext';
 import { formatCurrency } from '../../../utils/currency';
 import { EmptyState, FormField, InlineAlert, Panel, StatCard } from '../../common/ui';
+import { appDialog } from '../../../design-system';
 
 interface ReferralsTabProps {
   onDataChanged?: () => void;
@@ -316,8 +317,16 @@ export const ReferralsTab: React.FC<ReferralsTabProps> = ({ onDataChanged }) => 
   };
 
   const handleReverse = async (eventId: number) => {
-    const reason = window.prompt('Reason for reward reversal:', 'Customer refunded');
-    if (reason == null) return;
+    const reason = await appDialog.prompt({
+      title: 'Reverse Referral Reward',
+      message: 'Provide the reason for reversing this referral reward.',
+      label: 'Reversal reason',
+      defaultValue: 'Customer refunded',
+      required: true,
+      destructive: true,
+      confirmLabel: 'Reverse Reward',
+    });
+    if (reason === null) return;
     setBusyKey(`rev-${eventId}`);
     try {
       const res = await smartOpsApi.reverseReferralReward(eventId, reason);
@@ -441,7 +450,18 @@ export const ReferralsTab: React.FC<ReferralsTabProps> = ({ onDataChanged }) => 
   };
 
   const handleLifecycle = async (id: number, status: string) => {
-    const reason = status === 'suspended' ? window.prompt('Suspension reason:', '') || '' : undefined;
+    let reason: string | undefined;
+    if (status === 'suspended') {
+      const input = await appDialog.prompt({
+        title: 'Suspend Referral Campaign',
+        message: 'Provide a reason for suspending this referral campaign.',
+        label: 'Suspension reason',
+        destructive: true,
+        confirmLabel: 'Suspend Campaign',
+      });
+      if (input === null) return;
+      reason = input;
+    }
     setBusyKey(`lc-${id}`);
     try {
       await smartOpsApi.setCampaignLifecycle(id, status, reason);
@@ -495,9 +515,22 @@ export const ReferralsTab: React.FC<ReferralsTabProps> = ({ onDataChanged }) => 
   };
 
   const handleDecideCase = async (c: ApiReferralCase) => {
-    const decision = window.prompt('Decision (confirmed / dismissed):', 'dismissed');
+    const decision = await appDialog.prompt({
+      title: `Decide Referral Case #${c.id}`,
+      message: 'Enter decision: "confirmed" (uphold fraud) or "dismissed" (clear case).',
+      label: 'Decision (confirmed / dismissed)',
+      defaultValue: 'dismissed',
+      required: true,
+    });
     if (!decision) return;
-    const reason = window.prompt('Decision reason:', '') || '';
+    const reasonInput = await appDialog.prompt({
+      title: 'Decision Rationale',
+      message: 'Document the reason for this decision.',
+      label: 'Decision reason',
+      multiline: true,
+    });
+    if (reasonInput === null) return;
+    const reason = reasonInput || '';
     setBusyKey(`dec-${c.id}`);
     try {
       await smartOpsApi.decideReferralCase(c.id, { decision: decision.trim().toLowerCase(), reason });
@@ -511,11 +544,30 @@ export const ReferralsTab: React.FC<ReferralsTabProps> = ({ onDataChanged }) => 
   };
 
   const handleReviewCase = async (c: ApiReferralCase) => {
-    const reviewer = window.prompt('Independent reviewer user id:', '');
+    const reviewer = await appDialog.prompt({
+      title: `Independent Review — Case #${c.id}`,
+      message: 'Enter the independent reviewer user ID.',
+      label: 'Reviewer user ID',
+      inputType: 'number',
+      required: true,
+    });
     if (!reviewer) return;
-    const outcome = window.prompt('Outcome (uphold / overturn):', 'overturn');
+    const outcome = await appDialog.prompt({
+      title: 'Independent Review Outcome',
+      message: 'Enter the review outcome: "uphold" or "overturn".',
+      label: 'Outcome (uphold / overturn)',
+      defaultValue: 'overturn',
+      required: true,
+    });
     if (!outcome) return;
-    const reason = window.prompt('Review reason:', '') || '';
+    const reasonInput = await appDialog.prompt({
+      title: 'Review Notes',
+      message: 'Provide notes explaining the independent review decision.',
+      label: 'Review reason',
+      multiline: true,
+    });
+    if (reasonInput === null) return;
+    const reason = reasonInput || '';
     setBusyKey(`rev-${c.id}`);
     try {
       await smartOpsApi.reviewReferralCase(c.id, {

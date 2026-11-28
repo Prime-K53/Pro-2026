@@ -10,6 +10,16 @@ import {
   commercialApi,
 } from '../../services/commercialApi';
 import { formatCurrency } from '../../utils/currency';
+import {
+  Button,
+  InlineAlert,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+} from '../common/ui';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
@@ -411,61 +421,46 @@ export const VendorsView: React.FC = () => {
     formatCurrency(Number(value || 0), vendorCurrency);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-            <span>Vendor &amp; Supplier Center</span>
-            {(loading || profileLoading) && <Loader2 className="w-4 h-4 animate-spin text-amber-600" />}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Supplier master, AP exposure, payment holds, aging and reconciled statements.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {selectedVendor && (
-            <button
-              onClick={handleOpenStatement}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold disabled:opacity-50"
-            >
-              <FileText className="w-4 h-4 text-amber-600" />
-              <span>Supplier Statement</span>
-            </button>
-          )}
-          {canWrite && (
-            <button
-              onClick={() => setIsNewVendorOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Vendor</span>
-            </button>
-          )}
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Vendor & Supplier Center"
+        subtitle="Supplier master, AP exposure, payment holds, aging and reconciled statements."
+        icon={(loading || profileLoading) ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Building2 className="h-4.5 w-4.5" />}
+        actions={
+          <>
+            {selectedVendor && (
+              <Button variant="secondary" size="sm" onClick={handleOpenStatement} disabled={busy}>
+                <FileText className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />
+                Supplier Statement
+              </Button>
+            )}
+            {canWrite && (
+              <Button variant="primary" size="sm" onClick={() => setIsNewVendorOpen(true)}>
+                <Plus className="h-3.5 w-3.5" />
+                Add Vendor
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {errorMsg && (
-        <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex justify-between">
-          <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="font-bold">
-            ×
-          </button>
-        </div>
+        <InlineAlert tone="rose" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </InlineAlert>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden flex flex-col">
-          <div className="p-3 border-b border-slate-200 dark:border-slate-800">
+        <div className="lg:col-span-4 surface overflow-hidden flex flex-col">
+          <div className="p-3 border-b border-slate-200 dark:border-white/[0.08]">
             <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Filter by name, code or tax ID..."
-                className="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 text-xs outline-none"
+                className="app-input pl-8"
               />
             </div>
           </div>
@@ -1090,33 +1085,19 @@ export const VendorsView: React.FC = () => {
         </div>
       </div>
 
-      {statementData && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white text-slate-900 rounded-xl shadow-2xl border overflow-hidden max-h-[90vh] flex flex-col">
-            <div className="px-5 py-3 bg-slate-900 text-white flex items-center justify-between">
-              <div>
-                <span className="font-bold text-sm">Supplier Statement — {statementData.vendorName}</span>
-                {statementData.vendorCode && (
-                  <span className="ml-2 font-mono text-[11px] text-slate-300">{statementData.vendorCode}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handlePrintStatement}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 text-white font-semibold text-[11px]"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Download PDF</span>
-                </button>
-                <button onClick={() => setStatementData(null)}>
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="p-6 space-y-4 overflow-y-auto text-xs">
-              <div className="flex justify-between font-mono border-b pb-3">
+      <ModalShell open={Boolean(statementData)} onClose={() => setStatementData(null)} size="3xl">
+        <ModalHeader
+          title={`Supplier Statement — ${statementData?.vendorName ?? ''}`}
+          subtitle={statementData?.vendorCode ? `Code: ${statementData.vendorCode}` : undefined}
+          icon={<FileText className="h-4.5 w-4.5" />}
+          onClose={() => setStatementData(null)}
+        />
+        {statementData && (
+          <>
+            <ModalBody className="space-y-4">
+              <div className="flex justify-between font-mono border-b border-slate-200 dark:border-white/[0.08] pb-3 text-xs">
                 <div>
-                  <div className="font-bold text-sm font-sans">{statementData.vendorName}</div>
+                  <div className="font-bold text-sm font-sans text-slate-900 dark:text-white">{statementData.vendorName}</div>
                   <div className="text-slate-500">
                     Period: {statementData.periodStart} to {statementData.periodEnd}
                   </div>
@@ -1127,48 +1108,50 @@ export const VendorsView: React.FC = () => {
                   )}
                 </div>
                 <div className="text-right">
-                  <div>
+                  <div className="text-slate-600 dark:text-slate-300">
                     Opening AP: {formatCurrency(statementData.openingBalance, statementData.currencyCode || currency)}
                   </div>
-                  <div className="font-bold text-sm text-rose-700">
+                  <div className="font-bold text-sm text-rose-600 dark:text-rose-400">
                     Closing AP: {formatCurrency(statementData.closingBalance, statementData.currencyCode || currency)}
                   </div>
                 </div>
               </div>
-              <table className="w-full text-left border-collapse border border-slate-200 font-mono">
-                <thead className="bg-slate-100 text-[10px] uppercase">
-                  <tr>
-                    <th className="p-2 border-b">Date</th>
-                    <th className="p-2 border-b">Type</th>
-                    <th className="p-2 border-b">Doc #</th>
-                    <th className="p-2 border-b text-right">Bills</th>
-                    <th className="p-2 border-b text-right">Payments/Credits</th>
-                    <th className="p-2 border-b text-right">Balance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {(statementData.lines || []).map((l: any, idx: number) => (
-                    <tr key={idx}>
-                      <td className="p-2">{l.date}</td>
-                      <td className="p-2 font-sans">{l.type}</td>
-                      <td className="p-2 font-bold">{l.number}</td>
-                      <td className="p-2 text-right">
-                        {l.charge > 0
-                          ? formatCurrency(l.charge, statementData.currencyCode || currency)
-                          : '—'}
-                      </td>
-                      <td className="p-2 text-right text-emerald-700">
-                        {l.credit > 0
-                          ? `-${formatCurrency(l.credit, statementData.currencyCode || currency)}`
-                          : '—'}
-                      </td>
-                      <td className="p-2 text-right font-bold">
-                        {formatCurrency(l.runningBalance, statementData.currencyCode || currency)}
-                      </td>
+              <div className="surface overflow-hidden">
+                <table className="data-table font-mono">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Doc #</th>
+                      <th className="text-right">Bills</th>
+                      <th className="text-right">Payments/Credits</th>
+                      <th className="text-right">Balance</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(statementData.lines || []).map((l: any, idx: number) => (
+                      <tr key={idx}>
+                        <td>{l.date}</td>
+                        <td className="font-sans">{l.type}</td>
+                        <td className="font-bold">{l.number}</td>
+                        <td className="text-right">
+                          {l.charge > 0
+                            ? formatCurrency(l.charge, statementData.currencyCode || currency)
+                            : '—'}
+                        </td>
+                        <td className="text-right text-emerald-600 dark:text-emerald-400">
+                          {l.credit > 0
+                            ? `-${formatCurrency(l.credit, statementData.currencyCode || currency)}`
+                            : '—'}
+                        </td>
+                        <td className="text-right font-bold">
+                          {formatCurrency(l.runningBalance, statementData.currencyCode || currency)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {statementData.aging && (
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <AgingCell label="Current" value={money(statementData.aging.current)} />
@@ -1178,11 +1161,22 @@ export const VendorsView: React.FC = () => {
                   <AgingCell label="90+" value={money(statementData.aging.daysOver90)} danger />
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setStatementData(null)}>Close</Button>
+                  <Button variant="primary" onClick={handlePrintStatement}>
+                    <Printer className="h-3.5 w-3.5" />
+                    Download PDF
+                  </Button>
+                </>
+              }
+            />
+          </>
+        )}
+      </ModalShell>
+    </PageShell>
   );
 };
 

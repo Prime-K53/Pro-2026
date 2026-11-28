@@ -37,6 +37,7 @@ import {
   ExternalLink,
   X,
 } from 'lucide-react';
+import { appDialog } from '../../design-system';
 
 const KIND_LABELS: Record<DocumentPreviewKind, string> = {
   invoice: 'Invoice',
@@ -732,7 +733,12 @@ export const AllDocumentsView: React.FC = () => {
         groupLabel: 'Controls',
         requiredPermission: 'documents:control:write',
         execute: async () => {
-          const date = window.prompt('Retention until (YYYY-MM-DD), blank to clear', '');
+          const date = await appDialog.prompt({
+            title: 'Set Document Retention Date',
+            message: 'Choose a retention expiry date, or leave blank to clear retention.',
+            label: 'Retention until',
+            inputType: 'date',
+          });
           if (date === null) return;
           await commercialApi.setDocumentRetention(doc.fileInfo!.attachmentId, date || null);
           triggerShortcutNotice('Document retention updated');

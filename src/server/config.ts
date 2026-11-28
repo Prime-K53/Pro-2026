@@ -39,16 +39,18 @@ export function loadServerConfig(): ServerConfig {
   const nodeEnv = (process.env.NODE_ENV || 'development').trim();
   const isProduction = nodeEnv === 'production';
 
-  // Fail fast in production if critical secrets are not explicitly provided.
+  // Fail fast in production if critical session secret is not explicitly provided.
   if (isProduction) {
     const missing: string[] = [];
     if (!process.env.AUTH_SESSION_SECRET?.trim()) missing.push('AUTH_SESSION_SECRET');
-    if (!process.env.TOTP_ENC_KEY?.trim()) missing.push('TOTP_ENC_KEY');
     if (missing.length > 0) {
       throw new Error(
         `[config] Refusing to start in production without: ${missing.join(', ')}. ` +
           'Set these environment variables to strong random values.'
       );
+    }
+    if (!process.env.TOTP_ENC_KEY?.trim()) {
+      console.warn('[config] TOTP_ENC_KEY is not set; secretCrypto will derive its key from AUTH_SESSION_SECRET.');
     }
   }
 

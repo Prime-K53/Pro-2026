@@ -3,8 +3,17 @@ import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { commercialApi, ApiBill, ApiVendor } from '../../services/commercialApi';
 import { accountingApi, ApiAccount } from '../../services/accountingApi';
-import { RowActionMenu } from '../common/RowActionMenu';
-import { X, CheckCircle2, DollarSign, AlertCircle, Building2, CheckSquare, Square, Landmark, Copy, Loader2 } from 'lucide-react';
+import { CheckCircle2, DollarSign, CheckSquare, Square } from 'lucide-react';
+import {
+  Button,
+  DataTableShell,
+  EmptyState,
+  FormField,
+  InlineAlert,
+  LoadingState,
+  ModalHeader,
+  ModalShell,
+} from '../common/ui';
 
 export const PayBillsModal: React.FC = () => {
   const { isPayBillsOpen, setIsPayBillsOpen, companyProfile, triggerShortcutNotice } = useAccounting();
@@ -97,99 +106,136 @@ export const PayBillsModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="pay-bills-title"
-        className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]"
-      >
-        <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <DollarSign className="w-5 h-5 text-amber-300" />
-            <h2 id="pay-bills-title" className="font-bold text-base tracking-tight">Pay Bills (Batch Disbursement)</h2>
-          </div>
-          <button onClick={() => setIsPayBillsOpen(false)} aria-label="Close pay bills dialog" className="p-1 rounded hover:bg-white/10 text-white/80 hover:text-white">
-            <X className="w-5 h-5" />
-          </button>
+    <ModalShell
+      open={isPayBillsOpen}
+      onClose={() => setIsPayBillsOpen(false)}
+      titleId="pay-bills-title"
+      size="4xl"
+    >
+      <ModalHeader
+        title="Pay Bills (Batch Disbursement)"
+        subtitle="Select open vendor bills to settle from a bank or cash account"
+        icon={<DollarSign className="w-5 h-5" strokeWidth={1.75} />}
+        tone="amber"
+        titleId="pay-bills-title"
+        onClose={() => setIsPayBillsOpen(false)}
+      />
+      <form onSubmit={handlePaySelectedBills} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+        {loading && <LoadingState label="Loading unpaid vendor bills…" rows={3} />}
+        {error && (
+          <InlineAlert tone="error" onDismiss={() => setError(null)}>
+            {error}
+          </InlineAlert>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.08]">
+          <FormField label="Payment Account" required>
+            <select value={selectedBankId} onChange={e => setSelectedBankId(e.target.value)} className="app-input" required>
+              {bankAccountsList.map(b => (
+                <option key={b.id} value={b.id}>{b.code} - {b.name}</option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="Payment Date" required>
+            <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="app-input app-input-mono" required />
+          </FormField>
+          <FormField label="Method">
+            <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)} className="app-input">
+              <option value="Check">Check</option>
+              <option value="ACH">ACH / Electronic Transfer</option>
+              <option value="Credit Card">Credit Card</option>
+            </select>
+          </FormField>
         </div>
-        <form onSubmit={handlePaySelectedBills} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-          {loading && <div className="text-slate-500">Loading...</div>}
-          {error && <div className="text-rose-600">{error}</div>}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 items-center">
-            <div className="space-y-1">
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Payment Account</label>
-              <select value={selectedBankId} onChange={e => setSelectedBankId(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-1.5 text-xs" required>
-                {bankAccountsList.map(b => (
-                  <option key={b.id} value={b.id}>{b.code} - {b.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Payment Date</label>
-              <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-1.5 text-xs" required />
-            </div>
-            <div className="space-y-1">
-              <label className="font-semibold text-slate-700 dark:text-slate-300">Method</label>
-              <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)} className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-2.5 py-1.5 text-xs">
-                <option value="Check">Check</option>
-                <option value="ACH">ACH / Electronic Transfer</option>
-                <option value="Credit Card">Credit Card</option>
-              </select>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={selectAll} className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-[11px]">Select All ({unpaidBills.length})</button>
-            <button type="button" onClick={clearAll} className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-[11px]">Clear Selection</button>
-          </div>
-          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#0f3d63] text-white uppercase tracking-wider font-bold text-[10px]">
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={selectAll}>
+            Select All ({unpaidBills.length})
+          </Button>
+          <Button variant="secondary" size="sm" onClick={clearAll}>
+            Clear Selection
+          </Button>
+        </div>
+
+        <DataTableShell className="border border-slate-200 dark:border-white/[0.08] rounded-xl">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-white/[0.04] uppercase tracking-wider font-bold text-[11px] text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-white/[0.08]">
+              <tr>
+                <th className="px-3 py-2.5 w-14 text-center">Pay</th>
+                <th className="px-3 py-2.5">Bill #</th>
+                <th className="px-3 py-2.5">Vendor</th>
+                <th className="px-3 py-2.5">Due Date</th>
+                <th className="px-3 py-2.5 text-right">Balance Due</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06] font-mono">
+              {unpaidBills.length === 0 ? (
                 <tr>
-                  <th className="px-3 py-2.5 w-12 text-center">PAY</th>
-                  <th className="px-3 py-2.5">BILL #</th>
-                  <th className="px-3 py-2.5">VENDOR</th>
-                  <th className="px-3 py-2.5">DUE DATE</th>
-                  <th className="px-3 py-2.5 text-right">BALANCE DUE</th>
+                  <td colSpan={5} className="p-4">
+                    <EmptyState
+                      title="All vendor bills are paid in full"
+                      description="There are no open accounts payable balances remaining."
+                      icon={<CheckCircle2 className="w-5 h-5 text-emerald-600" strokeWidth={1.75} />}
+                    />
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
-                {unpaidBills.length === 0 ? (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500 font-sans">All vendor bills are paid in full!</td></tr>
-                ) : (
-                  unpaidBills.map(b => {
-                    const vendor = vendors.find(v => v.id === b.vendorId);
-                    const isSelected = selectedBillIds.includes(String(b.id));
-                    return (
-                      <tr key={b.id} onClick={() => toggleBill(String(b.id))} className={`cursor-pointer transition-colors ${isSelected ? 'bg-blue-50/50 dark:bg-blue-950/30' : 'hover:bg-slate-50 dark:hover:bg-slate-850/50'}`}>
-                        <td className="px-3 py-2.5 text-center">
-                          {isSelected ? <CheckSquare className="w-4 h-4 text-emerald-600 mx-auto" /> : <Square className="w-4 h-4 text-slate-300 dark:text-slate-600 mx-auto" />}
-                        </td>
-                        <td className="px-3 py-2.5 font-bold text-slate-900 dark:text-white">{b.billNumber}</td>
-                        <td className="px-3 py-2.5 font-sans font-semibold text-slate-900 dark:text-white">{vendor?.companyName}</td>
-                        <td className="px-3 py-2.5 text-slate-500">{b.dueDate}</td>
-                        <td className="px-3 py-2.5 text-right font-bold tabular-nums text-rose-600 dark:text-rose-400">{formatCurrency(b.balanceDue, currency)}</td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="text-right font-mono">
-            <div className="text-xs text-slate-500">Total Selected to Disburse:</div>
-            <div className="text-2xl font-black text-rose-600 dark:text-rose-400 tabular-nums">{formatCurrency(totalPaymentAmount, currency)}</div>
-          </div>
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-            <button type="button" onClick={() => setIsPayBillsOpen(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium">Cancel</button>
-            <button type="submit" disabled={submitting || selectedBills.length === 0} className="flex items-center gap-2 px-5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold shadow-md transition-all active:scale-95 disabled:opacity-50">
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              <span>Pay Selected Bills ({selectedBills.length})</span>
-            </button>
-          </div>
-          {error && <div className="text-rose-600">{error}</div>}
-        </form>
-      </div>
-    </div>
+              ) : (
+                unpaidBills.map(b => {
+                  const vendor = vendors.find(v => v.id === b.vendorId);
+                  const isSelected = selectedBillIds.includes(String(b.id));
+                  return (
+                    <tr
+                      key={b.id}
+                      onClick={() => toggleBill(String(b.id))}
+                      className={`cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/70 dark:bg-brand-500/10' : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]'}`}
+                    >
+                      <td className="px-3 py-2.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleBill(String(b.id))}
+                          onClick={e => e.stopPropagation()}
+                          aria-label={`Select bill ${b.billNumber}`}
+                          className="sr-only"
+                        />
+                        {isSelected ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mx-auto" strokeWidth={1.75} aria-hidden="true" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400 dark:text-slate-600 mx-auto" strokeWidth={1.75} aria-hidden="true" />
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 font-bold text-slate-900 dark:text-white">{b.billNumber}</td>
+                      <td className="px-3 py-2.5 font-sans font-semibold text-slate-900 dark:text-white">{vendor?.companyName}</td>
+                      <td className="px-3 py-2.5 text-slate-600 dark:text-slate-400 tabular-nums">{b.dueDate}</td>
+                      <td className="px-3 py-2.5 text-right font-bold tabular-nums text-rose-700 dark:text-rose-400">{formatCurrency(b.balanceDue, currency)}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </DataTableShell>
+
+        <div className="text-right font-mono">
+          <div className="text-xs font-sans text-slate-600 dark:text-slate-400">Total Selected to Disburse:</div>
+          <div className="text-2xl font-black text-rose-700 dark:text-rose-400 tabular-nums">{formatCurrency(totalPaymentAmount, currency)}</div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-white/[0.08]">
+          <Button variant="secondary" onClick={() => setIsPayBillsOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="danger"
+            loading={submitting}
+            loadingLabel="Processing…"
+            disabled={selectedBills.length === 0}
+          >
+            Pay Selected Bills ({selectedBills.length})
+          </Button>
+        </div>
+      </form>
+    </ModalShell>
   );
 };

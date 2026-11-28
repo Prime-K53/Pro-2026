@@ -38,7 +38,8 @@ type ChatMessage = AiMessage & {
   asOf?: string;
   domain?: string;
 };
-import { InlineAlert, Panel, StatCard, StatusBadge } from '../common/ui';
+import { Button, InlineAlert, PageHeader, PageShell, Panel, StatCard, StatusBadge, Tabs } from '../common/ui';
+import { appDialog } from '../../design-system';
 
 type Tab = 'chat' | 'anomalies' | 'actions' | 'settings';
 
@@ -55,67 +56,40 @@ export const AiAgentView: React.FC = () => {
   const [tab, setTab] = useState<Tab>('chat');
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-7">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600 ring-1 ring-brand-100 ring-inset dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-500/20">
-              <Sparkles className="h-5 w-5" />
-            </span>
-            <h1 className="text-[22px] font-bold leading-tight tracking-tight text-slate-900 dark:text-white">
-              AI Assistant
-            </h1>
-          </div>
-          <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
-            Record-grounded answers over your own tenant data, with role-aware retrieval, source
-            citations, anomaly detection, and maker-checker approval before any action posts to the
-            ledger.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setIsOcrScannerOpen(true)}
-          className="btn btn-secondary"
-        >
-          <Receipt className="h-4 w-4" />
-          Launch Receipt OCR Scanner
-        </button>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="AI Assistant"
+        subtitle="Record-grounded answers over your own tenant data, with role-aware retrieval, source citations, anomaly detection, and maker-checker approval before any action posts to the ledger."
+        icon={<Sparkles className="h-5 w-5" strokeWidth={1.75} />}
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsOcrScannerOpen(true)}
+            icon={<Receipt className="h-3.5 w-3.5" />}
+          >
+            Launch Receipt OCR Scanner
+          </Button>
+        }
+      />
 
-      <div className="flex w-fit flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 text-xs font-semibold shadow-xs dark:border-slate-800 dark:bg-slate-900">
-        {(
-          [
-            { id: 'chat', label: 'Chat', icon: MessageSquare },
-            { id: 'anomalies', label: 'Anomaly Alerts', icon: ShieldAlert },
-            { id: 'actions', label: 'Proposed Actions', icon: ListChecks },
-            { id: 'settings', label: 'Configuration', icon: Settings },
-          ] as Array<{ id: Tab; label: string; icon: React.ElementType }>
-        ).map(item => {
-          const Icon = item.icon;
-          const active = tab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 transition-colors ${
-                active
-                  ? 'bg-[#0f3d63] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        ariaLabel="AI assistant sections"
+        value={tab}
+        onChange={(id) => setTab(id as Tab)}
+        tabs={[
+          { id: 'chat', label: 'Chat', icon: <MessageSquare className="h-3.5 w-3.5" /> },
+          { id: 'anomalies', label: 'Anomaly Alerts', icon: <ShieldAlert className="h-3.5 w-3.5" /> },
+          { id: 'actions', label: 'Proposed Actions', icon: <ListChecks className="h-3.5 w-3.5" /> },
+          { id: 'settings', label: 'Configuration', icon: <Settings className="h-3.5 w-3.5" /> },
+        ]}
+      />
 
       {tab === 'chat' && <ChatTab onNotice={triggerShortcutNotice} onConfigure={() => setTab('settings')} />}
       {tab === 'anomalies' && <AnomaliesTab onNotice={triggerShortcutNotice} />}
       {tab === 'actions' && <ActionsTab onNotice={triggerShortcutNotice} />}
       {tab === 'settings' && <SettingsTab onNotice={triggerShortcutNotice} />}
-    </div>
+    </PageShell>
   );
 };
 
@@ -192,7 +166,13 @@ const ChatTab: React.FC<{
   };
 
   const removeConversation = async (id: number) => {
-    if (!confirm('Delete this conversation and its messages?')) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Delete Conversation',
+      message: 'Delete this conversation and all its messages?',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await aiApi.deleteConversation(id);
       if (activeId === id) {
@@ -391,7 +371,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
       <div
         className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
           isUser
-            ? 'bg-[#0f3d63] text-white'
+            ? 'bg-brand-600 text-white'
             : 'border border-slate-200 bg-slate-50 text-slate-800 dark:border-white/[0.07] dark:bg-slate-900 dark:text-slate-200'
         }`}
       >
@@ -627,7 +607,13 @@ const ActionsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onNo
         await aiApi.setActionStatus(id, 'rejected');
         onNotice('Action rejected');
       } else {
-        if (!confirm('Execute this action? It will post to the general ledger.')) return;
+        const confirmed = await appDialog.confirm({
+          title: 'Execute Approved Action',
+          message: 'Execute this action? It will post directly to the general ledger.',
+          confirmLabel: 'Execute & Post',
+          tone: 'amber',
+        });
+        if (!confirmed) return;
         await aiApi.executeAction(id);
         onNotice('Action executed and posted');
       }
@@ -838,7 +824,13 @@ const SettingsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onN
   };
 
   const purge = async () => {
-    if (!confirm(`Permanently delete conversations older than ${purgeDays} days?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Purge Old Conversations',
+      message: `Permanently delete AI conversations older than ${purgeDays} days?`,
+      confirmLabel: 'Purge Conversations',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       const res = await aiApi.purge(Number(purgeDays));
       onNotice(`Purged ${res.purged} conversation(s)`);

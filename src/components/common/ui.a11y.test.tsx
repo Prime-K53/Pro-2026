@@ -1,7 +1,17 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { FormField, ModalHeader, ModalShell } from './ui';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  FormField,
+  LoadingState,
+  ModalHeader,
+  ModalShell,
+  StatusBadge,
+  Tabs,
+} from './ui';
 import { DamageQuantityControl } from '../inventory/StockDamageModal';
 import { AmountControl } from '../modals/WriteCheckModal';
 
@@ -174,5 +184,78 @@ describe('dialog accessible names (composition level)', () => {
       </ModalShell>
     );
     expect(screen.getByRole('dialog')).not.toHaveAttribute('aria-labelledby');
+  });
+});
+
+describe('UI component & state primitives', () => {
+  it('Button exposes aria-busy and disabled during loading state', () => {
+    render(
+      <Button loading loadingLabel="Saving invoice…">
+        Save Invoice
+      </Button>
+    );
+    const btn = screen.getByRole('button', { name: 'Saving invoice…' });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('StatusBadge renders semantic icon with aria-hidden and readable text', () => {
+    const { container } = render(
+      <StatusBadge tone="success" showIcon>
+        Paid
+      </StatusBadge>
+    );
+    expect(screen.getByText('Paid')).toBeInTheDocument();
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('Tabs wires tablist, tab roles, aria-selected, and onChange', () => {
+    const onChange = vi.fn();
+    render(
+      <Tabs
+        ariaLabel="Report views"
+        value="summary"
+        onChange={onChange}
+        tabs={[
+          { id: 'summary', label: 'Summary', badge: 2 },
+          { id: 'ledger', label: 'Ledger' },
+        ]}
+      />
+    );
+    expect(screen.getByRole('tablist', { name: 'Report views' })).toBeInTheDocument();
+    const summaryTab = screen.getByRole('tab', { name: /Summary/ });
+    const ledgerTab = screen.getByRole('tab', { name: 'Ledger' });
+    expect(summaryTab).toHaveAttribute('aria-selected', 'true');
+    expect(ledgerTab).toHaveAttribute('aria-selected', 'false');
+    fireEvent.click(ledgerTab);
+    expect(onChange).toHaveBeenCalledWith('ledger');
+  });
+
+  it('LoadingState, EmptyState, and ErrorState expose accessible roles and actions', () => {
+    const onRetry = vi.fn();
+    const onAction = vi.fn();
+    render(
+      <>
+        <LoadingState label="Fetching ledger…" rows={2} />
+        <EmptyState
+          title="No receipts yet"
+          description="Record a receipt to get started."
+          action={<Button onClick={onAction}>New Receipt</Button>}
+        />
+        <ErrorState title="Sync failed" message="Network timeout" onRetry={onRetry} />
+      </>
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Fetching ledger…');
+    fireEvent.click(screen.getByRole('button', { name: 'New Receipt' }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Sync failed');
+    expect(alert).toHaveTextContent('Network timeout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

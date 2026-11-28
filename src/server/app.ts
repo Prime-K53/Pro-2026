@@ -51,15 +51,20 @@ import { validateTwilioSignature, twilioRequestUrl } from './services/twilioSign
 export function createApiExpressApp(db: ServerDatabase): Express {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
 
   const isProduction = process.env.NODE_ENV === 'production';
 
-  // Security headers (HSTS, X-Frame-Options, nosniff, etc.). CSP is enabled in
-  // production (bundled assets) and disabled in dev to avoid blocking Vite.
+  // Security headers (HSTS, nosniff, etc.). Frameguard/COOP/CORP are disabled
+  // so the app can run embedded inside the AI Studio preview iframe. CSP is
+  // enabled in production (bundled assets) and disabled in dev for Vite.
   app.use(
     helmet({
       contentSecurityPolicy: isProduction ? undefined : false,
       crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
+      frameguard: false,
     })
   );
 

@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { commercialApi } from '../../services/commercialApi';
-import { Loader2, Package, AlertTriangle } from 'lucide-react';
+import { Loader2, Package } from 'lucide-react';
+import { Button, InlineAlert, PageHeader, PageShell, Tabs } from '../common/ui';
 
 type Tab = 'movements' | 'ledger' | 'bom' | 'consumption' | 'suppliers' | 'actions';
 
@@ -126,43 +127,41 @@ export const InventoryOperationsView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">Inventory Operations</h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Movement audit, stock ledger, BOM, consumption and write actions for every stocked item.
-        </p>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Inventory Operations"
+        subtitle="Movement audit, stock ledger, BOM, consumption and write actions for every stocked item."
+        icon={<Package className="w-5 h-5" strokeWidth={1.75} />}
+      />
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
+        <InlineAlert tone="error" onDismiss={() => setError(null)}>
+          {error}
+        </InlineAlert>
       )}
 
       {/* Reorder levels */}
       {reorder && Array.isArray(reorder.items) && reorder.items.length > 0 && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Below Reorder Point</h3>
+        <div className="surface overflow-hidden">
+          <div className="surface-header">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Below Reorder Point</h3>
           </div>
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-800/60 text-[10px] uppercase font-bold text-slate-500">
+          <table className="data-table w-full text-left text-xs">
+            <thead>
               <tr>
-                <th className="px-4 py-2">SKU</th>
-                <th className="px-4 py-2">Item</th>
-                <th className="px-4 py-2 text-right">On Hand</th>
-                <th className="px-4 py-2 text-right">Reorder Point</th>
+                <th>SKU</th>
+                <th>Item</th>
+                <th className="text-right">On Hand</th>
+                <th className="text-right">Reorder Point</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody>
               {reorder.items.slice(0, 10).map((r: any, i: number) => (
                 <tr key={i}>
-                  <td className="px-4 py-2 font-mono font-bold">{r.sku}</td>
-                  <td className="px-4 py-2">{r.name}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(r.on_hand ?? 0)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(r.reorder_point ?? 0)}</td>
+                  <td className="font-mono font-semibold">{r.sku}</td>
+                  <td>{r.name}</td>
+                  <td className="text-right font-mono tabular-nums">{Number(r.on_hand ?? 0)}</td>
+                  <td className="text-right font-mono tabular-nums">{Number(r.reorder_point ?? 0)}</td>
                 </tr>
               ))}
             </tbody>
@@ -171,47 +170,42 @@ export const InventoryOperationsView: React.FC = () => {
       )}
 
       {/* Item selector + tabs */}
-      <div className="flex flex-wrap items-center gap-3">
-        <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Item:</label>
-        <select
-          value={selectedId}
-          onChange={e => setSelectedId(e.target.value)}
-          className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-1.5 text-xs font-semibold"
-        >
-          {inventoryItems.length === 0 && <option value="">(no inventory items)</option>}
-          {inventoryItems.map(i => (
-            <option key={i.id} value={i.id}>
-              {i.sku} — {i.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold w-fit">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              tab === t.id ? 'bg-[#0f3d63] text-white shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-            }`}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="inv-ops-item" className="text-xs font-semibold text-slate-600 dark:text-slate-300">Item:</label>
+          <select
+            id="inv-ops-item"
+            value={selectedId}
+            onChange={e => setSelectedId(e.target.value)}
+            className="app-input !w-auto text-xs font-semibold"
           >
-            {t.label}
-          </button>
-        ))}
+            {inventoryItems.length === 0 && <option value="">(no inventory items)</option>}
+            {inventoryItems.map(i => (
+              <option key={i.id} value={i.id}>
+                {i.sku} — {i.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <Tabs
+          ariaLabel="Inventory operation views"
+          value={tab}
+          onChange={(id) => setTab(id as Tab)}
+          tabs={TABS}
+        />
       </div>
 
       {loading ? (
-        <div className="p-10 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2 text-xs text-slate-500">
+        <div className="surface p-10 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading…
         </div>
       ) : tab === 'actions' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <form onSubmit={handleDamage} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3 text-xs">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Record Damage / Spoilage</h3>
+          <form onSubmit={handleDamage} className="surface p-5 space-y-3 text-xs">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Record Damage / Spoilage</h3>
             <label className="block space-y-1">
-              <span className="font-semibold text-slate-600 dark:text-slate-300">Quantity</span>
+              <span className="app-label">Quantity</span>
               <input
                 type="number"
                 min="0"
@@ -219,24 +213,24 @@ export const InventoryOperationsView: React.FC = () => {
                 value={dmgQty}
                 onChange={e => setDmgQty(e.target.value)}
                 required
-                className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                className="app-input app-input-mono"
               />
             </label>
             <label className="block space-y-1">
-              <span className="font-semibold text-slate-600 dark:text-slate-300">Reason</span>
+              <span className="app-label">Reason</span>
               <input
                 value={dmgReason}
                 onChange={e => setDmgReason(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                className="app-input"
               />
             </label>
-            <button type="submit" className="btn btn-danger w-full">Write Off Damaged Stock</button>
+            <Button type="submit" variant="danger" className="w-full">Write Off Damaged Stock</Button>
           </form>
 
-          <form onSubmit={handleTransfer} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3 text-xs">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Transfer Stock Between Locations</h3>
+          <form onSubmit={handleTransfer} className="surface p-5 space-y-3 text-xs">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Transfer Stock Between Locations</h3>
             <label className="block space-y-1">
-              <span className="font-semibold text-slate-600 dark:text-slate-300">Quantity</span>
+              <span className="app-label">Quantity</span>
               <input
                 type="number"
                 min="0"
@@ -244,123 +238,123 @@ export const InventoryOperationsView: React.FC = () => {
                 value={xferQty}
                 onChange={e => setXferQty(e.target.value)}
                 required
-                className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                className="app-input app-input-mono"
               />
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="space-y-1">
-                <span className="font-semibold text-slate-600 dark:text-slate-300">From location</span>
+                <span className="app-label">From location</span>
                 <input
                   value={xferFrom}
                   onChange={e => setXferFrom(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                  className="app-input"
                 />
               </label>
               <label className="space-y-1">
-                <span className="font-semibold text-slate-600 dark:text-slate-300">To location</span>
+                <span className="app-label">To location</span>
                 <input
                   value={xferTo}
                   onChange={e => setXferTo(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                  className="app-input"
                 />
               </label>
             </div>
-            <button type="submit" className="btn btn-primary w-full">Transfer Stock</button>
+            <Button type="submit" variant="primary" className="w-full">Transfer Stock</Button>
           </form>
         </div>
       ) : (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-800/60 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200 dark:border-slate-800">
+        <div className="surface overflow-hidden">
+          <table className="data-table w-full text-left text-xs">
+            <thead>
               {tab === 'movements' && (
                 <tr>
-                  <th className="px-4 py-2.5">Date</th>
-                  <th className="px-4 py-2.5">Type</th>
-                  <th className="px-4 py-2.5 text-right">Qty Δ</th>
-                  <th className="px-4 py-2.5 text-right">Unit Cost</th>
-                  <th className="px-4 py-2.5 text-right">Balance</th>
-                  <th className="px-4 py-2.5">Source</th>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th className="text-right">Qty Δ</th>
+                  <th className="text-right">Unit Cost</th>
+                  <th className="text-right">Balance</th>
+                  <th>Source</th>
                 </tr>
               )}
               {tab === 'ledger' && (
                 <tr>
-                  <th className="px-4 py-2.5">Date</th>
-                  <th className="px-4 py-2.5">Type</th>
-                  <th className="px-4 py-2.5 text-right">Qty Δ</th>
-                  <th className="px-4 py-2.5 text-right">Balance</th>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th className="text-right">Qty Δ</th>
+                  <th className="text-right">Balance</th>
                 </tr>
               )}
               {tab === 'bom' && (
                 <tr>
-                  <th className="px-4 py-2.5">SKU</th>
-                  <th className="px-4 py-2.5">Component</th>
-                  <th className="px-4 py-2.5 text-right">Qty</th>
-                  <th className="px-4 py-2.5 text-right">Unit Cost</th>
+                  <th>SKU</th>
+                  <th>Component</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Unit Cost</th>
                 </tr>
               )}
               {tab === 'consumption' && (
                 <tr>
-                  <th className="px-4 py-2.5">Job</th>
-                  <th className="px-4 py-2.5">Title</th>
-                  <th className="px-4 py-2.5 text-right">Qty Used</th>
-                  <th className="px-4 py-2.5">Date</th>
+                  <th>Job</th>
+                  <th>Title</th>
+                  <th className="text-right">Qty Used</th>
+                  <th>Date</th>
                 </tr>
               )}
               {tab === 'suppliers' && (
                 <tr>
-                  <th className="px-4 py-2.5">Vendor</th>
-                  <th className="px-4 py-2.5 text-right">Purchases</th>
-                  <th className="px-4 py-2.5 text-right">Qty</th>
-                  <th className="px-4 py-2.5">Last Purchase</th>
+                  <th>Vendor</th>
+                  <th className="text-right">Purchases</th>
+                  <th className="text-right">Qty</th>
+                  <th>Last Purchase</th>
                 </tr>
               )}
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody>
               {tab === 'movements' &&
                 (data?.movements || []).map((m: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2">{String(m.created_at ?? m.date ?? '').slice(0, 10)}</td>
-                    <td className="px-4 py-2">{m.movement_type ?? m.type}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(m.quantity_delta ?? 0)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCurrency(Number(m.unit_cost ?? 0), currency)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(m.balance_qty ?? 0)}</td>
-                    <td className="px-4 py-2 text-slate-500">{m.source_type ?? ''}</td>
+                    <td className="font-mono">{String(m.created_at ?? m.date ?? '').slice(0, 10)}</td>
+                    <td>{m.movement_type ?? m.type}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(m.quantity_delta ?? 0)}</td>
+                    <td className="text-right font-mono tabular-nums">{formatCurrency(Number(m.unit_cost ?? 0), currency)}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(m.balance_qty ?? 0)}</td>
+                    <td className="text-slate-500">{m.source_type ?? ''}</td>
                   </tr>
                 ))}
               {tab === 'ledger' &&
                 (data?.ledger || []).map((m: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2">{String(m.created_at ?? m.date ?? '').slice(0, 10)}</td>
-                    <td className="px-4 py-2">{m.movement_type ?? m.type}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(m.quantity_delta ?? 0)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(m.balance_qty ?? 0)}</td>
+                    <td className="font-mono">{String(m.created_at ?? m.date ?? '').slice(0, 10)}</td>
+                    <td>{m.movement_type ?? m.type}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(m.quantity_delta ?? 0)}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(m.balance_qty ?? 0)}</td>
                   </tr>
                 ))}
               {tab === 'bom' &&
                 (data?.components || []).map((c: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2 font-mono font-bold">{c.sku ?? c.component_sku}</td>
-                    <td className="px-4 py-2">{c.name ?? c.component_name}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(c.quantity ?? 0)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCurrency(Number(c.unit_cost ?? 0), currency)}</td>
+                    <td className="font-mono font-semibold">{c.sku ?? c.component_sku}</td>
+                    <td>{c.name ?? c.component_name}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(c.quantity ?? 0)}</td>
+                    <td className="text-right font-mono tabular-nums">{formatCurrency(Number(c.unit_cost ?? 0), currency)}</td>
                   </tr>
                 ))}
               {tab === 'consumption' &&
                 (data?.jobs || []).map((j: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2 font-mono font-bold">{j.job_number ?? j.jobNumber}</td>
-                    <td className="px-4 py-2">{j.title ?? j.name}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(j.quantity ?? j.qty_used ?? 0)}</td>
-                    <td className="px-4 py-2">{String(j.date ?? j.created_at ?? '').slice(0, 10)}</td>
+                    <td className="font-mono font-semibold">{j.job_number ?? j.jobNumber}</td>
+                    <td>{j.title ?? j.name}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(j.quantity ?? j.qty_used ?? 0)}</td>
+                    <td className="font-mono">{String(j.date ?? j.created_at ?? '').slice(0, 10)}</td>
                   </tr>
                 ))}
               {tab === 'suppliers' &&
                 (data?.vendors || []).map((v: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2">{v.name ?? v.vendor_name}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCurrency(Number(v.total ?? 0), currency)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{Number(v.quantity ?? 0)}</td>
-                    <td className="px-4 py-2">{String(v.last_purchase ?? v.lastDate ?? '').slice(0, 10)}</td>
+                    <td>{v.name ?? v.vendor_name}</td>
+                    <td className="text-right font-mono tabular-nums">{formatCurrency(Number(v.total ?? 0), currency)}</td>
+                    <td className="text-right font-mono tabular-nums">{Number(v.quantity ?? 0)}</td>
+                    <td className="font-mono">{String(v.last_purchase ?? v.lastDate ?? '').slice(0, 10)}</td>
                   </tr>
                 ))}
               {((tab === 'movements' && (data?.movements || []).length === 0) ||
@@ -378,12 +372,12 @@ export const InventoryOperationsView: React.FC = () => {
             </tbody>
           </table>
           {tab === 'bom' && data?.computedUnitCost != null && (
-            <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 text-xs">
-              Rolled-up unit cost: <strong className="font-mono">{formatCurrency(Number(data.computedUnitCost), currency)}</strong>
+            <div className="px-4 py-2 border-t border-slate-200 dark:border-white/[0.08] text-xs">
+              Rolled-up unit cost: <strong className="font-mono tabular-nums">{formatCurrency(Number(data.computedUnitCost), currency)}</strong>
             </div>
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 };

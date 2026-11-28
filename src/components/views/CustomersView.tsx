@@ -6,11 +6,23 @@ import { ApiCustomer, ApiInvoice, commercialApi } from '../../services/commercia
 import { documentsApi } from '../../services/documentsApi';
 import { DocumentPreviewKind, mapApiPreviewToModel } from '../../types/documents';
 import { formatCurrency } from '../../utils/currency';
+import { appDialog } from '../../design-system';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions, isActionExecutable } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
 import { CustomerContactsTab } from '../customers/CustomerContactsTab';
 import { CustomerBranchesTab } from '../customers/CustomerBranchesTab';
+import {
+  Button,
+  FormField,
+  InlineAlert,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+} from '../common/ui';
 
 import {
   Plus,
@@ -25,6 +37,7 @@ import {
   ArrowUpRight,
   X,
   Loader2,
+  Users,
 } from 'lucide-react';
 
 export const CustomersView: React.FC = () => {
@@ -196,10 +209,13 @@ export const CustomersView: React.FC = () => {
 
   const handleChangeLimit = async () => {
     if (!selectedCustomer) return;
-    const raw = window.prompt(
-      `New credit limit for ${selectedCustomer.companyName} (leave blank for no limit):`,
-      selectedCustomer.creditLimit === null ? '' : String(selectedCustomer.creditLimit)
-    );
+    const raw = await appDialog.prompt({
+      title: `Credit Limit — ${selectedCustomer.companyName}`,
+      message: 'Set a new credit limit, or leave blank for no limit.',
+      label: 'Credit limit',
+      defaultValue: selectedCustomer.creditLimit === null ? '' : String(selectedCustomer.creditLimit),
+      inputType: 'number',
+    });
     if (raw === null) return;
     const value = raw.trim();
     try {
@@ -402,65 +418,53 @@ export const CustomersView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-            <span>Customer Center</span>
-            {loading && <Loader2 className="w-4 h-4 animate-spin text-blue-600" />}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Live AR sub-ledger, credit limits, tax-exemption reseller permits, and customer statements.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {selectedCustomer && (
-            <button
-              onClick={() => handleOpenStatement(selectedCustomer.id)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs shadow-xs"
-            >
-              <FileText className="w-4 h-4 text-blue-600" />
-              <span>Customer Statement</span>
-            </button>
-          )}
-          {canWrite && (
-            <button
-              onClick={() => setIsNewCustomerOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Customer</span>
-            </button>
-          )}
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Customer Center"
+        subtitle="Live AR sub-ledger, credit limits, tax-exemption reseller permits, and customer statements."
+        icon={loading ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Users className="h-4.5 w-4.5" />}
+        actions={
+          <>
+            {selectedCustomer && (
+              <Button variant="secondary" size="sm" onClick={() => handleOpenStatement(selectedCustomer.id)}>
+                <FileText className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />
+                Customer Statement
+              </Button>
+            )}
+            {canWrite && (
+              <Button variant="primary" size="sm" onClick={() => setIsNewCustomerOpen(true)}>
+                <Plus className="h-3.5 w-3.5" />
+                Add Customer
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {errorMsg && (
-        <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex justify-between">
-          <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="font-bold">×</button>
-        </div>
+        <InlineAlert tone="rose" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </InlineAlert>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden flex flex-col">
-          <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2">
+        <div className="lg:col-span-4 surface overflow-hidden flex flex-col">
+          <div className="p-3 border-b border-slate-200 dark:border-white/[0.08] space-y-2">
             <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Filter customers..."
-                className="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 text-xs text-slate-900 dark:text-slate-100 outline-none"
+                className="app-input pl-8"
               />
             </div>
             <div className="flex justify-between text-[11px] font-mono text-slate-500 pt-1">
               <span>{customers.length} Customers</span>
               <span>
                 Total A/R:{' '}
-                <strong className="text-blue-600 dark:text-blue-400 tabular-nums">
+                <strong className="text-brand-600 dark:text-brand-400 tabular-nums">
                   {formatCurrency(totalOutstanding, currency)}
                 </strong>
               </span>
@@ -1036,112 +1040,111 @@ export const CustomersView: React.FC = () => {
       </div>
 
       {/* Add Permit Modal */}
-      {showAddPermit && selectedCustomer && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-slate-900 text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Add Reseller / Exemption Permit</span>
-              <button onClick={() => setShowAddPermit(false)}><X className="w-4 h-4" /></button>
-            </div>
-            <form onSubmit={handleCreatePermit} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="font-semibold block mb-1">Permit / Certificate Number *</label>
+      <ModalShell open={Boolean(showAddPermit && selectedCustomer)} onClose={() => setShowAddPermit(false)} size="md">
+        <ModalHeader
+          title="Add Reseller / Exemption Permit"
+          icon={<ShieldCheck className="h-4.5 w-4.5" />}
+          onClose={() => setShowAddPermit(false)}
+        />
+        <form onSubmit={handleCreatePermit} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <FormField label="Permit / Certificate Number" required>
+              <input
+                required
+                value={newPermit.permitNumber}
+                onChange={e => setNewPermit(p => ({ ...p, permitNumber: e.target.value }))}
+                className="app-input font-mono"
+              />
+            </FormField>
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Jurisdiction">
                 <input
-                  required
-                  value={newPermit.permitNumber}
-                  onChange={e => setNewPermit(p => ({ ...p, permitNumber: e.target.value }))}
-                  className="w-full border rounded px-2.5 py-1.5 font-mono dark:bg-slate-850 dark:border-slate-700"
+                  value={newPermit.state}
+                  onChange={e => setNewPermit(p => ({ ...p, state: e.target.value }))}
+                  className="app-input"
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold block mb-1">Jurisdiction</label>
-                  <input
-                    value={newPermit.state}
-                    onChange={e => setNewPermit(p => ({ ...p, state: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold block mb-1">Expiry Date</label>
-                  <input
-                    type="date"
-                    value={newPermit.expiresAt}
-                    onChange={e => setNewPermit(p => ({ ...p, expiresAt: e.target.value }))}
-                    className="w-full border rounded px-2.5 py-1.5 dark:bg-slate-850 dark:border-slate-700"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowAddPermit(false)} className="px-3 py-1.5 border rounded">
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-1.5 bg-emerald-600 text-white rounded font-bold">
-                  Save Permit
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </FormField>
+              <FormField label="Expiry Date">
+                <input
+                  type="date"
+                  value={newPermit.expiresAt}
+                  onChange={e => setNewPermit(p => ({ ...p, expiresAt: e.target.value }))}
+                  className="app-input font-mono"
+                />
+              </FormField>
+            </div>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setShowAddPermit(false)}>Cancel</Button>
+                <Button type="submit" variant="emerald">Save Permit</Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
 
       {/* Statement Preview Modal */}
-      {statementData && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-3xl bg-white text-slate-900 rounded-xl shadow-2xl border overflow-hidden max-h-[90vh] flex flex-col">
-            <div className="px-5 py-3 bg-slate-900 text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Customer Statement — {statementData.customerName}</span>
-              <button onClick={() => setStatementData(null)}><X className="w-4 h-4" /></button>
-            </div>
-            <div className="p-6 space-y-4 overflow-y-auto text-xs">
-              <div className="flex flex-wrap items-end gap-2 p-2 rounded bg-slate-50 border border-slate-200">
+      <ModalShell open={Boolean(statementData)} onClose={() => setStatementData(null)} size="3xl">
+        <ModalHeader
+          title={`Customer Statement — ${statementData?.customerName ?? ''}`}
+          icon={<FileText className="h-4.5 w-4.5" />}
+          onClose={() => setStatementData(null)}
+        />
+        {statementData && (
+          <>
+            <ModalBody className="space-y-4">
+              <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <div>
-                  <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-500">From</label>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-500">From</label>
                   <input
                     type="date"
                     value={statementPeriod.start}
                     onChange={e => setStatementPeriod(p => ({ ...p, start: e.target.value }))}
-                    className="border rounded px-2 py-1"
+                    className="app-input font-mono"
                   />
                 </div>
                 <div>
-                  <label className="font-semibold block mb-1 text-[10px] uppercase text-slate-500">To</label>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase text-slate-500">To</label>
                   <input
                     type="date"
                     value={statementPeriod.end}
                     onChange={e => setStatementPeriod(p => ({ ...p, end: e.target.value }))}
-                    className="border rounded px-2 py-1"
+                    className="app-input font-mono"
                   />
                 </div>
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() =>
                     statementData &&
                     handleOpenStatement(statementData.customerId, statementPeriod.start, statementPeriod.end)
                   }
-                  className="px-3 py-1 rounded border bg-white font-bold"
                 >
                   Rebuild
-                </button>
+                </Button>
                 {canSendStatements && (
-                  <button
+                  <Button
+                    variant="primary"
+                    size="sm"
                     disabled={busy}
                     onClick={() => statementData && handleEmailStatement(statementData.customerId)}
-                    className="px-3 py-1 rounded bg-blue-600 text-white font-bold disabled:opacity-50"
                   >
                     {busy ? 'Queueing…' : 'Email Statement'}
-                  </button>
+                  </Button>
                 )}
               </div>
-              <div className="flex justify-between font-mono border-b pb-3">
+              <div className="flex justify-between font-mono border-b border-slate-200 dark:border-white/[0.08] pb-3 text-xs">
                 <div>
-                  <div className="font-bold text-sm font-sans">{statementData.customerName}</div>
+                  <div className="font-bold text-sm font-sans text-slate-900 dark:text-white">{statementData.customerName}</div>
                   <div className="text-slate-500">
                     Period: {statementData.periodStart} to {statementData.periodEnd}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div>Opening Balance: {formatCurrency(statementData.openingBalance, currency)}</div>
-                  <div className="font-bold text-sm text-blue-700">
+                  <div className="text-slate-600 dark:text-slate-300">Opening Balance: {formatCurrency(statementData.openingBalance, currency)}</div>
+                  <div className="font-bold text-sm text-brand-600 dark:text-brand-400">
                     Closing Balance: {formatCurrency(statementData.closingBalance, currency)}
                   </div>
                 </div>
@@ -1155,43 +1158,46 @@ export const CustomersView: React.FC = () => {
                     ['61–90', statementData.aging.days61To90],
                     ['90+', statementData.aging.daysOver90],
                   ].map(([label, value]) => (
-                    <div key={String(label)} className="p-2 rounded border bg-slate-50">
+                    <div key={String(label)} className="surface p-2">
                       <div className="text-[9px] uppercase text-slate-500 font-bold">{label}</div>
-                      <div className="font-bold">{formatCurrency(Number(value), statementData.currencyCode || currency)}</div>
+                      <div className="font-bold text-slate-900 dark:text-white">{formatCurrency(Number(value), statementData.currencyCode || currency)}</div>
                     </div>
                   ))}
                 </div>
               )}
-              <table className="w-full text-left border-collapse border border-slate-200 font-mono">
-                <thead className="bg-slate-100 text-[10px] uppercase">
-                  <tr>
-                    <th className="p-2 border-b">Date</th>
-                    <th className="p-2 border-b">Type</th>
-                    <th className="p-2 border-b">Doc #</th>
-                    <th className="p-2 border-b text-right">Charges</th>
-                    <th className="p-2 border-b text-right">Credits/Pmts</th>
-                    <th className="p-2 border-b text-right">Balance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {statementData.lines.map((l: any, idx: number) => (
-                    <tr key={idx}>
-                      <td className="p-2">{l.date}</td>
-                      <td className="p-2 font-sans">{l.type}</td>
-                      <td className="p-2 font-bold">{l.number}</td>
-                      <td className="p-2 text-right">{l.charge > 0 ? formatCurrency(l.charge, currency) : '—'}</td>
-                      <td className="p-2 text-right text-emerald-700">
-                        {l.credit > 0 ? `-${formatCurrency(l.credit, currency)}` : '—'}
-                      </td>
-                      <td className="p-2 text-right font-bold">{formatCurrency(l.runningBalance, currency)}</td>
+              <div className="surface overflow-hidden">
+                <table className="data-table font-mono">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Doc #</th>
+                      <th className="text-right">Charges</th>
+                      <th className="text-right">Credits/Pmts</th>
+                      <th className="text-right">Balance</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+                  </thead>
+                  <tbody>
+                    {statementData.lines.map((l: any, idx: number) => (
+                      <tr key={idx}>
+                        <td>{l.date}</td>
+                        <td className="font-sans">{l.type}</td>
+                        <td className="font-bold">{l.number}</td>
+                        <td className="text-right">{l.charge > 0 ? formatCurrency(l.charge, currency) : '—'}</td>
+                        <td className="text-right text-emerald-600 dark:text-emerald-400">
+                          {l.credit > 0 ? `-${formatCurrency(l.credit, currency)}` : '—'}
+                        </td>
+                        <td className="text-right font-bold">{formatCurrency(l.runningBalance, currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </ModalBody>
+            <ModalFooter right={<Button variant="secondary" onClick={() => setStatementData(null)}>Close</Button>} />
+          </>
+        )}
+      </ModalShell>
+    </PageShell>
   );
 };

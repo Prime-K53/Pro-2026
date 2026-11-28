@@ -1,5 +1,5 @@
 import { emitAccountingUpdated } from './accountingApi';
-import { buildQuery, downloadBlob, requestBlob, requestJson } from './http';
+import { buildQuery, downloadBlob, getAuthHeaders, requestBlob, requestJson } from './http';
 import type { ApiInvoice } from './commercialApi';
 import type {
   DocumentPreviewKind,
@@ -131,6 +131,7 @@ export const documentsApi = {
   async fetchAttachmentPreviewBlob(attachmentId: number): Promise<{ objectUrl: string; contentType: string }> {
     const res = await fetch(`/api/attachments/${attachmentId}/preview`, {
       credentials: 'include',
+      headers: getAuthHeaders('GET'),
     });
     if (!res.ok) {
       throw new Error(`Failed to load file preview (${res.status})`);

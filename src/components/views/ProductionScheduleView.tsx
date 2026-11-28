@@ -4,6 +4,7 @@ import { commercialApi } from '../../services/commercialApi';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { Loader2, Printer, Wrench, X, TrendingUp } from 'lucide-react';
+import { appDialog } from '../../design-system';
 
 /** Preferred left-to-right column order; any other statuses append in alpha order. */
 const STATUS_ORDER = [
@@ -134,9 +135,102 @@ export const ProductionScheduleView: React.FC = () => {
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-3">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1"><Wrench className="w-3.5 h-3.5" />Machine Ops</span>
-          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const jobId = Number(window.prompt('Job ID')); const machineId = Number(window.prompt('Machine ID')); if (!jobId || !machineId) return; try { await commercialApi.assignJobMachine(jobId, { machineId }); alert('Machine assigned'); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Assign Machine</button>
-          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const jobId = Number(window.prompt('Job ID')); const toStatus = window.prompt('New status (e.g. in_production, completed)', 'in_production'); if (!jobId || !toStatus) return; try { await commercialApi.moveJobStage(jobId, { toStatus }); alert('Job stage moved'); load(); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Move Stage</button>
-          <button className="px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-50" onClick={async () => { const machineId = Number(window.prompt('Machine ID')); if (!machineId) return; const reason = window.prompt('Downtime reason', 'Maintenance') || 'Maintenance'; try { await commercialApi.logMachineDowntime(machineId, { reason, startTime: new Date().toISOString() }); alert('Downtime logged'); } catch (e: any) { alert(e?.message || 'Failed'); } }}>Log Downtime</button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={async () => {
+              const jobRaw = await appDialog.prompt({
+                title: 'Assign Machine to Job',
+                message: 'Enter the printing job ID to assign.',
+                label: 'Job ID',
+                inputType: 'number',
+                required: true,
+              });
+              if (!jobRaw) return;
+              const machineRaw = await appDialog.prompt({
+                title: 'Select Machine',
+                message: 'Enter the machine ID to assign to this job.',
+                label: 'Machine ID',
+                inputType: 'number',
+                required: true,
+              });
+              const jobId = Number(jobRaw);
+              const machineId = Number(machineRaw);
+              if (!jobId || !machineId) return;
+              try {
+                await commercialApi.assignJobMachine(jobId, { machineId });
+                await appDialog.alert({ title: 'Machine Assigned', message: `Machine #${machineId} assigned to Job #${jobId}.`, tone: 'emerald' });
+              } catch (e: any) {
+                await appDialog.alert({ title: 'Assignment Failed', message: e?.message || 'Failed to assign machine.', tone: 'rose' });
+              }
+            }}
+          >
+            Assign Machine
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={async () => {
+              const jobRaw = await appDialog.prompt({
+                title: 'Move Job Stage',
+                message: 'Enter the printing job ID to update.',
+                label: 'Job ID',
+                inputType: 'number',
+                required: true,
+              });
+              if (!jobRaw) return;
+              const toStatus = await appDialog.prompt({
+                title: 'Target Production Stage',
+                message: 'Specify the new status (e.g. in_production, qc_hold, completed).',
+                label: 'New status',
+                defaultValue: 'in_production',
+                required: true,
+              });
+              const jobId = Number(jobRaw);
+              if (!jobId || !toStatus) return;
+              try {
+                await commercialApi.moveJobStage(jobId, { toStatus });
+                await appDialog.alert({ title: 'Stage Updated', message: `Job #${jobId} moved to ${toStatus}.`, tone: 'emerald' });
+                load();
+              } catch (e: any) {
+                await appDialog.alert({ title: 'Stage Update Failed', message: e?.message || 'Failed to move job stage.', tone: 'rose' });
+              }
+            }}
+          >
+            Move Stage
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={async () => {
+              const machineRaw = await appDialog.prompt({
+                title: 'Log Machine Downtime',
+                message: 'Enter the machine ID experiencing downtime.',
+                label: 'Machine ID',
+                inputType: 'number',
+                required: true,
+              });
+              const machineId = Number(machineRaw);
+              if (!machineId) return;
+              const reasonInput = await appDialog.prompt({
+                title: 'Downtime Reason',
+                message: 'Describe the cause of downtime.',
+                label: 'Reason',
+                defaultValue: 'Maintenance',
+                required: true,
+              });
+              if (reasonInput === null) return;
+              const reason = reasonInput.trim() || 'Maintenance';
+              try {
+                await commercialApi.logMachineDowntime(machineId, { reason, startTime: new Date().toISOString() });
+                await appDialog.alert({ title: 'Downtime Logged', message: `Recorded downtime for Machine #${machineId}.`, tone: 'emerald' });
+              } catch (e: any) {
+                await appDialog.alert({ title: 'Log Failed', message: e?.message || 'Failed to log downtime.', tone: 'rose' });
+              }
+            }}
+          >
+            Log Downtime
+          </button>
         </div>
       </div>
 

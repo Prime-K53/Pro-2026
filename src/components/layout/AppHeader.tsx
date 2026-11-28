@@ -10,6 +10,7 @@ import { GlobalSearch } from './header/GlobalSearch';
 import { PrimaryNavigation } from './header/PrimaryNavigation';
 import { QuickActionsBar } from './header/QuickActionsBar';
 import { UserProfileMenu } from './header/UserProfileMenu';
+import { appDialog } from '../../design-system';
 
 /**
  * Application header.
@@ -101,13 +102,18 @@ export const AppHeader: React.FC = () => {
         handlePrint();
         return;
       case 'file.reset':
-        if (
-          confirm(
-            'Reset the cached lists in this browser to the default sample data? The server ledger is not changed.'
-          )
-        ) {
-          resetToDemoData();
-        }
+        void (async () => {
+          const confirmed = await appDialog.confirm({
+            title: 'Reset cached browser lists?',
+            message:
+              'Reset the cached lists in this browser to the default sample data? The server ledger is not changed.',
+            confirmLabel: 'Reset browser cache',
+            tone: 'amber',
+          });
+          if (confirmed) {
+            resetToDemoData();
+          }
+        })();
         return;
       case 'edit.settings':
         setCurrentView('settings');

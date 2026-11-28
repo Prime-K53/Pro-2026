@@ -17,6 +17,7 @@ import { deliveryApi, Driver, Vehicle } from '../../services/v2Api';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatCurrency } from '../../utils/currency';
+import { appDialog, StatusBadge } from '../../design-system';
 
 interface DeliveryNoteLine {
   id?: number;
@@ -133,7 +134,13 @@ export const DeliveryNotesView: React.FC = () => {
   };
 
   const handleDispatch = async (note: DeliveryNote) => {
-    if (!window.confirm(`Dispatch delivery note ${note.deliveryNumber}?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Dispatch Delivery Note',
+      message: `Dispatch delivery note ${note.deliveryNumber} and mark it in transit?`,
+      confirmLabel: 'Dispatch',
+      tone: 'brand',
+    });
+    if (!confirmed) return;
     try {
       await deliveryApi.dispatchNote(note.id);
       triggerShortcutNotice(`Delivery note ${note.deliveryNumber} marked in transit`);
@@ -162,7 +169,13 @@ export const DeliveryNotesView: React.FC = () => {
   };
 
   const handleCancelNote = async (note: DeliveryNote) => {
-    if (!window.confirm(`Cancel delivery note ${note.deliveryNumber}?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Cancel Delivery Note',
+      message: `Cancel delivery note ${note.deliveryNumber}?`,
+      confirmLabel: 'Cancel Note',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await deliveryApi.cancelNote(note.id);
       triggerShortcutNotice(`Delivery note ${note.deliveryNumber} cancelled`);
@@ -212,15 +225,15 @@ export const DeliveryNotesView: React.FC = () => {
   const renderStatusBadge = (status: string) => {
     switch (status) {
       case 'prepared':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-400">Prepared</span>;
+        return <StatusBadge tone="warning" showIcon>Prepared</StatusBadge>;
       case 'in_transit':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-400 animate-pulse">In Transit</span>;
+        return <StatusBadge tone="info" showIcon>In Transit</StatusBadge>;
       case 'delivered':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400">Delivered</span>;
+        return <StatusBadge tone="success" showIcon>Delivered</StatusBadge>;
       case 'cancelled':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">Cancelled</span>;
+        return <StatusBadge tone="neutral">Cancelled</StatusBadge>;
       default:
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800">{status}</span>;
+        return <StatusBadge tone="neutral">{status}</StatusBadge>;
     }
   };
 

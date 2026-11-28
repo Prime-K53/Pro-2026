@@ -9,6 +9,7 @@ import {
   Panel,
   StatusBadge,
 } from '../common/ui';
+import { appDialog } from '../../design-system';
 
 interface DeductionRule {
   id: number;
@@ -81,7 +82,13 @@ export const DeductionRulesView: React.FC = () => {
   };
 
   const remove = async (rule: DeductionRule) => {
-    if (!confirm(`Delete deduction rule "${rule.name}"?`)) return;
+    const confirmed = await appDialog.confirm({
+      title: 'Delete Deduction Rule',
+      message: `Delete deduction rule "${rule.name}"?`,
+      confirmLabel: 'Delete Rule',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await requestJson(`/api/payroll/deduction-rules/${rule.id}`, { method: 'DELETE' });
       triggerShortcutNotice?.('Rule deleted');

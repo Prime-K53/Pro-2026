@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { ServerDatabase, createCompanyInTx } from '../db.ts';
-import { createAuthMiddleware, clearSessionCookie, getClientIp } from '../middleware/auth.ts';
+import { createAuthMiddleware, clearSessionCookie, setSessionCookie, getClientIp } from '../middleware/auth.ts';
 import { csrfProtection, generateCsrfToken } from '../middleware/csrf.ts';
 import { getRolePermissions, CompanyRole } from '../permissions.ts';
 import {
@@ -17,31 +17,8 @@ import { recordLoginAttempt, writeAuditLog } from '../audit.ts';
 import { getTwoFactorStatus, verifyTwoFactorLogin } from '../services/twoFactorService.ts';
 import { SqlExecutor } from '../../../db/migrator.ts';
 
-function isHttpsRequest(req: Request): boolean {
-  const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
-  return req.secure || proto.includes('https');
-}
-
 /** In-memory failed-login tracker for a lightweight per-account lockout. */
 const failedLogins = new Map<string, { count: number; first: number }>();
-
-function setCookie(
-  req: Request,
-  res: Response,
-  name: string,
-  value: string,
-  maxAgeSec: number,
-  isProduction: boolean
-) {
-  const https = isHttpsRequest(req) || isProduction;
-  res.cookie(name, value, {
-    httpOnly: true,
-    sameSite: https ? 'none' : 'lax',
-    secure: https,
-    maxAge: maxAgeSec * 1000,
-    path: '/',
-  });
-}
 
 async function issueServerSession(
   tx: SqlExecutor,
@@ -86,8 +63,8 @@ async function issueServerSession(
   );
 
   const signedCookie = signSessionCookieValue(rawToken, db.config.authSessionSecret);
-  setCookie(req, res, db.config.cookieName, signedCookie, ttlSec, db.config.isProduction);
-  return Number(sessionRes.rows[0].id);
+  setSessionCookie(req, res, db.config.cookieName, signedCookie, ttlSec, db.config.isProduction);
+  return { sessionId: Number(sessionRes.rows[0].id), sessionToken: signedCookie };
 }
 
 async function listUserAuthorizedCompanies(tx: SqlExecutor, userId: number) {
@@ -224,7 +201,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
           makeDefault: true,
         });
 
-        await issueServerSession(tx, db, req, res, {
+        const issued = await issueServerSession(tx, db, req, res, {
           userId,
           companyId: comp.companyId,
           membershipId: comp.membershipId,
@@ -247,6 +224,8 @@ export function createAuthRouter(db: ServerDatabase): Router {
 
         return {
           conflict: false as const,
+          sessionToken: issued.sessionToken,
+          csrfToken: generateCsrfToken(String(issued.sessionId)),
           userId,
           companyId: comp.companyId,
           companySlug: comp.slug,
@@ -261,6 +240,8 @@ export function createAuthRouter(db: ServerDatabase): Router {
 
       return res.status(201).json({
         authenticated: true,
+        sessionToken: created.sessionToken,
+        csrfToken: created.csrfToken,
         user: { id: created.userId, username, email, displayName, mustChangePassword: false },
         activeCompany: {
           id: created.companyId,
@@ -489,7 +470,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
       // account deactivation) to invalidate all sessions at once — not on
       // routine login, so multiple concurrent client sessions for the same
       // user remain valid until an explicit security change occurs.
-      const sessionId = await issueServerSession(tx, db, req, res, {
+      const issued = await issueServerSession(tx, db, req, res, {
         userId: Number(u.id),
         companyId: Number(m.company_id),
         membershipId: Number(m.membership_id),
@@ -504,7 +485,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
         actorUsername: u.username,
         action: 'LOGIN_SUCCESS',
         tableName: 'auth_sessions',
-        recordId: sessionId,
+        recordId: issued.sessionId,
         newValues: { role: m.role, ipAddress: ip, sessionVersion: Number(u.session_version) },
       });
 
@@ -512,7 +493,8 @@ export function createAuthRouter(db: ServerDatabase): Router {
 
       return {
         ok: true as const,
-        csrfToken: generateCsrfToken(String(sessionId)),
+        sessionToken: issued.sessionToken,
+        csrfToken: generateCsrfToken(String(issued.sessionId)),
         user: {
           id: Number(u.id),
           username: u.username,
@@ -544,7 +526,8 @@ export function createAuthRouter(db: ServerDatabase): Router {
 
     return res.json({
       authenticated: true,
-      csrfToken: (result as any).csrfToken ?? null,
+      sessionToken: result.sessionToken,
+      csrfToken: result.csrfToken ?? null,
       user: result.user,
       activeCompany: result.activeCompany,
       permissions: result.permissions,
@@ -618,7 +601,7 @@ export function createAuthRouter(db: ServerDatabase): Router {
         return { ok: false as const, status: 403, error: 'No active company membership assigned' };
       }
       const m = memRes.rows[0];
-      const sid = await issueServerSession(tx, db, req, res, {
+      const issued = await issueServerSession(tx, db, req, res, {
         userId: Number(u.id),
         companyId: Number(m.company_id),
         membershipId: Number(m.membership_id),
@@ -633,14 +616,15 @@ export function createAuthRouter(db: ServerDatabase): Router {
         actorUsername: u.username,
         action: 'SUPABASE_SESSION_EXCHANGED',
         tableName: 'auth_sessions',
-        recordId: sid,
+        recordId: issued.sessionId,
         newValues: { supabaseSub: claims.sub },
       });
 
       const companies = await listUserAuthorizedCompanies(tx, Number(u.id));
       return {
         ok: true as const,
-        csrfToken: generateCsrfToken(String(sid)),
+        sessionToken: issued.sessionToken,
+        csrfToken: generateCsrfToken(String(issued.sessionId)),
         user: {
           id: Number(u.id),
           username: u.username,

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { formatCurrency } from '../../utils/currency';
 import { fixedAssetApi, ApiFixedAsset, ApiFixedAssetType, ApiRollForward } from '../../services/fixedAssetApi';
+import { appDialog } from '../../design-system';
 import { Loader2, Plus, PlayCircle, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 /**
@@ -138,10 +139,15 @@ export const FixedAssetsView: React.FC = () => {
   };
 
   const handleDispose = async (asset: ApiFixedAsset) => {
-    const proceedsRaw = window.prompt(
-      `Dispose "${asset.asset_number} — ${asset.name}"\nNet book value: ${formatCurrency(Number(asset.net_book_value), currency)}\nEnter disposal proceeds (0 if scrapped):`,
-      '0'
-    );
+    const proceedsRaw = await appDialog.prompt({
+      title: `Dispose Asset ${asset.asset_number}`,
+      message: `Dispose "${asset.asset_number} — ${asset.name}"\nNet book value: ${formatCurrency(Number(asset.net_book_value), currency)}\nEnter disposal proceeds (0 if scrapped).`,
+      label: 'Disposal proceeds',
+      defaultValue: '0',
+      inputType: 'number',
+      confirmLabel: 'Dispose Asset',
+      destructive: true,
+    });
     if (proceedsRaw === null) return;
     const proceeds = Number(proceedsRaw) || 0;
     setBusy(true);

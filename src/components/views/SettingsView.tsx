@@ -4,15 +4,27 @@ import { useAuth } from '../../context/AuthContext';
 import { companyApi } from '../../services/companyApi';
 import type { CompanySettings } from '../../services/companyApi';
 import { accountingApi, type ApiAccount } from '../../services/accountingApi';
-import { InlineAlert } from '../common/ui';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  InlineAlert,
+  LoadingState,
+  PageHeader,
+  StatusBadge,
+  Tabs,
+} from '../common/ui';
+import { appDialog, DESIGN_TOKENS } from '../../design-system';
 import {
   AlertTriangle,
   Building2,
   CalendarRange,
+  CheckCircle2,
   Download,
   FileText,
   Image as ImageIcon,
   Landmark,
+  Layers,
   Loader2,
   Lock,
   Palette,
@@ -22,6 +34,7 @@ import {
   Server,
   ShieldCheck,
   Trash2,
+  Type,
   Upload,
 } from 'lucide-react';
 
@@ -32,7 +45,7 @@ const MONTHS = [
 
 const PAYMENT_TERMS_OPTIONS = ['Due on Receipt', 'Net 15', 'Net 30', 'Net 60'];
 
-type TabKey = 'legal' | 'branding' | 'financial' | 'documents' | 'data';
+type TabKey = 'legal' | 'branding' | 'financial' | 'documents' | 'data' | 'design';
 
 const TABS: Array<{ key: TabKey; label: string; icon: React.ElementType }> = [
   { key: 'legal', label: 'Legal Entity', icon: Building2 },
@@ -40,6 +53,7 @@ const TABS: Array<{ key: TabKey; label: string; icon: React.ElementType }> = [
   { key: 'financial', label: 'Financial', icon: Landmark },
   { key: 'documents', label: 'Documents', icon: FileText },
   { key: 'data', label: 'Data', icon: Server },
+  { key: 'design', label: 'Design System', icon: Layers },
 ];
 
 export const SettingsView: React.FC = () => {
@@ -368,16 +382,12 @@ export const SettingsView: React.FC = () => {
   const disabled = !canEdit;
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto text-xs">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-          Company Settings
-        </h1>
-        <p className="text-slate-500 mt-0.5">
-          Legal identity, branding, financial defaults and document preferences. Changes are written to the
-          server company record and captured in the audit trail.
-        </p>
-      </div>
+    <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto text-xs">
+      <PageHeader
+        title="Company Settings"
+        subtitle="Legal identity, branding, financial defaults, document preferences, and unified design system standards. Changes are written to the server company record and captured in the audit trail."
+        icon={<Building2 className="w-5 h-5" strokeWidth={1.75} />}
+      />
 
       {loadError && (
         <InlineAlert tone="warning" onDismiss={() => setLoadError(null)}>
@@ -413,7 +423,7 @@ export const SettingsView: React.FC = () => {
       <input type="file" ref={signatureInputRef} onChange={handleSignatureUpload} accept="image/png,image/jpeg" className="hidden" />
 
       {/* Tab navigation */}
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
+      <div role="tablist" aria-label="Company settings sections" className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
         {TABS.map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
@@ -421,14 +431,16 @@ export const SettingsView: React.FC = () => {
             <button
               key={tab.key}
               type="button"
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setActiveTab(tab.key)}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg font-semibold transition-colors ${
                 isActive
-                  ? 'text-blue-700 dark:text-blue-300 border-b-2 border-blue-600 bg-blue-50/50 dark:bg-blue-950/20'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  ? 'text-brand-700 dark:text-brand-300 border-b-2 border-brand-600 bg-brand-50/50 dark:bg-brand-950/20'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
               <span>{tab.label}</span>
             </button>
           );
@@ -753,10 +765,22 @@ export const SettingsView: React.FC = () => {
               </button>
 
               {import.meta.env.DEV && (
-                <button type="button" onClick={() => { if (confirm('Reload the demonstration dataset into this browser cache? The server ledger is not changed.')) { resetToDemoData(); } }} className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-amber-500 hover:bg-slate-50 dark:hover:bg-slate-850 flex flex-col items-center gap-2 text-center transition-colors">
-                  <RefreshCw className="w-6 h-6 text-amber-600" />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await appDialog.confirm({
+                      title: 'Reload Demo Data',
+                      message: 'Reload the demonstration dataset into this browser cache? The server ledger is not changed.',
+                      confirmLabel: 'Reload Demo Data',
+                      tone: 'amber',
+                    });
+                    if (ok) resetToDemoData();
+                  }}
+                  className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-amber-500 hover:bg-slate-50 dark:hover:bg-slate-850 flex flex-col items-center gap-2 text-center transition-colors"
+                >
+                  <RefreshCw className="w-6 h-6 text-amber-600" strokeWidth={1.75} />
                   <span className="font-bold text-slate-900 dark:text-white">Reload demo data</span>
-                  <span className="text-[11px] text-slate-500">Populate demo lists in this browser only (dev-only)</span>
+                  <span className="text-[11px] text-slate-600 dark:text-slate-400">Populate demo lists in this browser only (dev-only)</span>
                 </button>
               )}
             </div>
@@ -764,19 +788,139 @@ export const SettingsView: React.FC = () => {
             <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="font-bold text-rose-600 flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <AlertTriangle className="w-3.5 h-3.5" strokeWidth={1.75} />
                   Clear browser working copy
                 </div>
-                <div className="text-[11px] text-slate-500">
+                <div className="text-[11px] text-slate-600 dark:text-slate-400">
                   Removes cached lists and preferences from this browser. Server records, journals and attachments are untouched.
                 </div>
               </div>
-              <button type="button" onClick={() => { if (confirm('Clear the browser working copy? Server ledger data will not be deleted.')) { clearAllData(); } }} className="btn btn-danger">
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Clear working copy</span>
-              </button>
+              <Button
+                type="button"
+                variant="danger"
+                icon={<Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} />}
+                onClick={async () => {
+                  const ok = await appDialog.confirm({
+                    title: 'Clear Browser Working Copy',
+                    message: 'Clear the browser working copy? Server ledger data will not be deleted.',
+                    confirmLabel: 'Clear Working Copy',
+                    destructive: true,
+                  });
+                  if (ok) clearAllData();
+                }}
+              >
+                Clear working copy
+              </Button>
             </div>
           </>
+        )}
+
+        {/* ===== DESIGN SYSTEM & STANDARDS (01-10) ===== */}
+        {activeTab === 'design' && (
+          <div className="space-y-6">
+            <div className="border-b border-slate-200 dark:border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="section-title flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-brand-600" strokeWidth={1.75} />
+                  <span>Design System &amp; UI Standards (v{DESIGN_TOKENS.version})</span>
+                </h2>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                  Unified visual consistency, typographic hierarchy, AA color contrast, 4px spacing scale,
+                  standardized components, Lucide iconography, responsive adaptation, accessibility, UI states, and tokens.
+                </p>
+              </div>
+              <StatusBadge tone="info" showIcon>10 Standards Active</StatusBadge>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {[
+                { num: '01', name: 'Visual Consistency', detail: 'Unified surfaces, chrome & 3 themes' },
+                { num: '02', name: 'Typography', detail: 'Plus Jakarta Sans · DM Serif · JetBrains Mono' },
+                { num: '03', name: 'Color', detail: 'AA >=4.9:1 brand & icon-paired semantics' },
+                { num: '04', name: 'Spacing & Layout', detail: '4px base grid & flat 1px borders' },
+                { num: '05', name: 'Components', detail: 'Standard Buttons, Inputs, Tabs & Dialogs' },
+                { num: '06', name: 'Iconography', detail: 'Lucide 1.75px stroke, xs–xl scale' },
+                { num: '07', name: 'Responsive UI', detail: 'Mobile drawer, scroll tables & 44px touch' },
+                { num: '08', name: 'Accessibility', detail: 'Skip link, focus trap & reduced motion' },
+                { num: '09', name: 'UI States', detail: 'Loading, Empty, Error, Success & Disabled' },
+                { num: '10', name: 'Design System', detail: 'Canonical DESIGN_TOKENS & primitives' },
+              ].map(std => (
+                <div key={std.num} className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-slate-50/60 dark:bg-white/[0.02]">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-mono text-[11px] font-bold text-brand-700 dark:text-brand-300">{std.num}</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} aria-hidden="true" />
+                  </div>
+                  <div className="mt-1 font-semibold text-slate-900 dark:text-white">{std.name}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400 leading-snug">{std.detail}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+                <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
+                  <Type className="w-4 h-4 text-brand-600" strokeWidth={1.75} />
+                  <span>Typography &amp; Tabular Numerals</span>
+                </div>
+                <div className="space-y-1.5">
+                  <div style={{ fontFamily: DESIGN_TOKENS.typography.fontFamily.display }} className="text-xl text-slate-900 dark:text-white">
+                    Display Serif Headline
+                  </div>
+                  <div className="page-title">Page Title — 22px Semibold/Bold</div>
+                  <div className="section-title">Section Title — 15px Bold</div>
+                  <div className="text-[13px] text-slate-700 dark:text-slate-300">Body Copy — 13px Plus Jakarta Sans for dense operational tables.</div>
+                  <div className="font-mono tabular-nums text-[13px] font-semibold text-slate-900 dark:text-white">
+                    {companyProfile.currency} 1,248,500.00 · INV-2026-0042
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+                <div className="font-semibold text-slate-900 dark:text-white">Semantic Status &amp; Button Hierarchy</div>
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge tone="neutral">Draft</StatusBadge>
+                  <StatusBadge tone="info" showIcon>In Transit</StatusBadge>
+                  <StatusBadge tone="success" showIcon>Posted / Paid</StatusBadge>
+                  <StatusBadge tone="warning" showIcon>Pending Review</StatusBadge>
+                  <StatusBadge tone="danger" showIcon>Overdue</StatusBadge>
+                  <StatusBadge tone="purple" showIcon>Approved</StatusBadge>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button variant="primary" size="sm">Primary</Button>
+                  <Button variant="secondary" size="sm">Secondary</Button>
+                  <Button variant="emerald" size="sm">Confirm</Button>
+                  <Button variant="danger" size="sm">Void</Button>
+                  <Button variant="ghost" size="sm">Ghost</Button>
+                  <Button variant="primary" size="sm" disabled>Disabled</Button>
+                </div>
+                <div className="pt-1">
+                  <Tabs
+                    ariaLabel="Preview tabs"
+                    value="loading"
+                    onChange={() => {}}
+                    tabs={[
+                      { id: 'loading', label: 'Interactive Tab', badge: 3 },
+                      { id: 'empty', label: 'Secondary Tab' },
+                    ]}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800">
+                <LoadingState label="Standardized loading state" rows={2} />
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800">
+                <EmptyState title="Empty state" description="Clear next step guidance when no records match." />
+              </div>
+              <ErrorState
+                title="Recoverable error state"
+                message="Non-blocking error feedback with retry action."
+                onRetry={() => triggerShortcutNotice('Retry action triggered')}
+              />
+            </div>
+          </div>
         )}
       </form>
 

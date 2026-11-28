@@ -5,16 +5,11 @@ import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
 import { RowActionMenu } from '../common/RowActionMenu';
 import {
   FileText,
-  X,
   Printer,
-  Mail,
-  Download,
-  Calendar,
-  Building2,
-  DollarSign,
   Copy,
   ExternalLink,
 } from 'lucide-react';
+import { Button, DataTableShell, EmptyState, ModalHeader, ModalShell } from '../common/ui';
 
 interface CustomerStatementModalProps {
   isOpen?: boolean;
@@ -77,73 +72,28 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="customer-statement-title"
-        className="w-full max-w-3xl bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-300 overflow-hidden flex flex-col max-h-[92vh]"
-      >
-        {/* Header */}
-        <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between no-print">
-          <div className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-amber-300" />
-            <h2 id="customer-statement-title" className="font-bold text-base tracking-tight">Customer Billing Statement</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                const totalDebit = customerInvoices.reduce((s, i) => s + (i.total || 0), 0);
-                const totalCredit = customerInvoices.reduce((s, i) => s + (i.amountPaid || 0), 0);
-                openPrimePreview(
-                  'ACCOUNT_STATEMENT',
-                  {
-                    number: `STMT-${customer?.id || '0'}`,
-                    statementNumber: `STMT-${customer?.id || '0'}`,
-                    date: statementDate,
-                    clientName: customer?.companyName || '',
-                    customerName: customer?.companyName || '',
-                    address: customer?.billingAddress || companyProfile.address || '',
-                    phone: customer?.phone || companyProfile.phone || '',
-                    openingBalance: 0,
-                    closingBalance: totalBalance,
-                    finalBalance: totalBalance,
-                    startDate: (customerInvoices.map(i => i.date).filter(Boolean).sort()[0]) || statementDate,
-                    endDate: statementDate,
-                    totalDebit,
-                    totalCredit,
-                    currency: currency,
-                    transactions: customerInvoices.map(inv => ({
-                      date: inv.date,
-                      reference: inv.invoiceNumber,
-                      description: inv.notes || 'Invoice',
-                      debit: inv.total || 0,
-                      credit: inv.amountPaid || 0,
-                      balance: inv.balanceDue || 0,
-                    })),
-                  },
-                  `Statement — ${customer?.companyName || ''}`
-                );
-              }}
-              className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 text-white font-semibold text-xs shadow-xs"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Print Statement</span>
-            </button>
-            <button onClick={onClose} aria-label="Close customer statement dialog" className="p-1 rounded text-white/80 hover:text-white">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
+    <ModalShell open={isOpen} onClose={onClose} titleId="customer-statement-title" size="3xl">
+      <ModalHeader
+        title="Customer Billing Statement"
+        subtitle="Account activity, invoice aging, and printable remittance slip"
+        icon={<FileText className="w-5 h-5" strokeWidth={1.75} />}
+        tone="brand"
+        titleId="customer-statement-title"
+        onClose={onClose}
+      />
 
-        {/* Options Toolbar (no-print) */}
-        <div className="p-3 bg-slate-100 border-b flex items-center justify-between gap-4 text-xs no-print">
+      {/* Options Toolbar (no-print) */}
+      <div className="px-5 py-3 bg-slate-50 dark:bg-slate-900/80 border-b border-slate-200 dark:border-white/[0.07] flex flex-wrap items-center justify-between gap-4 text-xs no-print">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
-            <label className="font-semibold text-slate-700">Customer:</label>
+            <label htmlFor="statement-customer-select" className="font-semibold text-slate-700 dark:text-slate-300">
+              Customer:
+            </label>
             <select
+              id="statement-customer-select"
               value={selectedCustId}
               onChange={e => setSelectedCustId(e.target.value)}
-              className="bg-white border border-slate-300 rounded px-2.5 py-1 font-semibold text-slate-900 outline-none"
+              className="app-input w-auto min-w-[220px]"
             >
               {customers.map(c => (
                 <option key={c.id} value={c.id}>
@@ -154,18 +104,72 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
           </div>
 
           <div className="flex items-center gap-2">
-            <label className="font-semibold text-slate-700">Statement Date:</label>
+            <label htmlFor="statement-date-input" className="font-semibold text-slate-700 dark:text-slate-300">
+              Statement Date:
+            </label>
             <input
+              id="statement-date-input"
               type="date"
               value={statementDate}
               onChange={e => setStatementDate(e.target.value)}
-              className="bg-white border border-slate-300 rounded px-2 py-1 outline-none text-xs"
+              className="app-input app-input-mono w-auto"
             />
           </div>
         </div>
 
-        {/* Printable Document Body */}
-        <div className="p-8 space-y-6 overflow-y-auto text-xs bg-white text-slate-900 font-sans">
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!customer}
+          icon={<Printer className="w-3.5 h-3.5" strokeWidth={1.75} />}
+          onClick={() => {
+            const totalDebit = customerInvoices.reduce((s, i) => s + (i.total || 0), 0);
+            const totalCredit = customerInvoices.reduce((s, i) => s + (i.amountPaid || 0), 0);
+            openPrimePreview(
+              'ACCOUNT_STATEMENT',
+              {
+                number: `STMT-${customer?.id || '0'}`,
+                statementNumber: `STMT-${customer?.id || '0'}`,
+                date: statementDate,
+                clientName: customer?.companyName || '',
+                customerName: customer?.companyName || '',
+                address: customer?.billingAddress || companyProfile.address || '',
+                phone: customer?.phone || companyProfile.phone || '',
+                openingBalance: 0,
+                closingBalance: totalBalance,
+                finalBalance: totalBalance,
+                startDate: (customerInvoices.map(i => i.date).filter(Boolean).sort()[0]) || statementDate,
+                endDate: statementDate,
+                totalDebit,
+                totalCredit,
+                currency: currency,
+                transactions: customerInvoices.map(inv => ({
+                  date: inv.date,
+                  reference: inv.invoiceNumber,
+                  description: inv.notes || 'Invoice',
+                  debit: inv.total || 0,
+                  credit: inv.amountPaid || 0,
+                  balance: inv.balanceDue || 0,
+                })),
+              },
+              `Statement — ${customer?.companyName || ''}`
+            );
+          }}
+        >
+          Print Statement
+        </Button>
+      </div>
+
+      {/* Printable Document Body */}
+      <div className="p-6 sm:p-8 space-y-6 overflow-y-auto text-xs bg-white text-slate-900 font-sans">
+        {!customer ? (
+          <EmptyState
+            title="No customers available"
+            description="Create a customer account before generating a billing statement."
+            icon={<FileText className="w-5 h-5" strokeWidth={1.75} />}
+          />
+        ) : (
+          <>
           {/* Statement Header */}
           <div className="flex justify-between items-start border-b pb-4">
             <div>
@@ -214,8 +218,9 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
             <h3 className="font-bold text-xs uppercase tracking-wider mb-2 text-slate-800">
               Transaction Activity
             </h3>
-            <table className="w-full text-left border border-slate-300">
-              <thead className="bg-slate-100 font-bold text-[10px] uppercase text-slate-600 border-b border-slate-300">
+            <DataTableShell className="rounded-lg border border-slate-300">
+            <table className="w-full text-left">
+              <thead className="bg-slate-100 font-bold text-[11px] uppercase text-slate-700 border-b border-slate-300">
                 <tr>
                   <th className="p-2 border-r">DATE</th>
                   <th className="p-2 border-r">TRANSACTION / INVOICE #</th>
@@ -279,39 +284,40 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
                 )}
               </tbody>
             </table>
+            </DataTableShell>
           </div>
 
           {/* Aging Summary Buckets */}
           <div className="border border-slate-300 rounded overflow-hidden">
-            <div className="bg-slate-100 p-2 font-bold text-[10px] uppercase text-slate-600">
+            <div className="bg-slate-100 p-2 font-bold text-[11px] uppercase text-slate-700">
               Aging Analysis
             </div>
-            <div className="grid grid-cols-4 divide-x divide-slate-300 text-center font-mono p-3">
-              <div>
-                <span className="text-[10px] font-sans text-slate-500">Current</span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-300 text-center font-mono tabular-nums p-3">
+              <div className="py-1 sm:py-0">
+                <span className="text-[11px] font-sans text-slate-600">Current</span>
                 <div className="font-bold mt-1">{formatCurrency(agingBuckets.current, currency)}</div>
               </div>
-              <div>
-                <span className="text-[10px] font-sans text-slate-500">1 - 30 Days</span>
+              <div className="py-1 sm:py-0">
+                <span className="text-[11px] font-sans text-slate-600">1 - 30 Days</span>
                 <div className="font-bold mt-1">{formatCurrency(agingBuckets.d1_30, currency)}</div>
               </div>
-              <div>
-                <span className="text-[10px] font-sans text-slate-500">31 - 60 Days</span>
+              <div className="py-1 sm:py-0">
+                <span className="text-[11px] font-sans text-slate-600">31 - 60 Days</span>
                 <div className="font-bold mt-1">{formatCurrency(agingBuckets.d31_60, currency)}</div>
               </div>
-              <div>
-                <span className="text-[10px] font-sans text-slate-500">60+ Days</span>
-                <div className="font-bold mt-1 text-slate-400">{formatCurrency(agingBuckets.d61_90 + agingBuckets.d90plus, currency)}</div>
+              <div className="py-1 sm:py-0">
+                <span className="text-[11px] font-sans text-slate-600">60+ Days</span>
+                <div className="font-bold mt-1 text-slate-700">{formatCurrency(agingBuckets.d61_90 + agingBuckets.d90plus, currency)}</div>
               </div>
             </div>
           </div>
 
           {/* Remittance Tear-off Slip */}
           <div className="border-t-2 border-dashed border-slate-400 pt-4 space-y-2">
-            <div className="text-[10px] uppercase font-bold text-slate-500">
+            <div className="text-[11px] uppercase font-bold text-slate-600">
               Please Detach and Return With Your Remittance
             </div>
-            <div className="flex justify-between items-center text-xs font-mono">
+            <div className="flex flex-wrap justify-between items-center gap-2 text-xs font-mono">
               <div>
                 Customer: <strong>{customer.companyName}</strong> · Account #{customer.id}
               </div>
@@ -320,8 +326,9 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = (pr
               </div>
             </div>
           </div>
-        </div>
+          </>
+        )}
       </div>
-    </div>
+    </ModalShell>
   );
 };

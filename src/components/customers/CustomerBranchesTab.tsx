@@ -11,6 +11,7 @@ import {
   Panel,
   StatusBadge,
 } from '../common/ui';
+import { appDialog } from '../../design-system';
 
 interface CustomerBranchesTabProps {
   customerId: number;
@@ -93,13 +94,13 @@ export const CustomerBranchesTab: React.FC<CustomerBranchesTabProps> = ({ custom
   };
 
   const remove = async (branch: CustomerBranch) => {
-    if (
-      !confirm(
-        `Deactivate branch "${branch.branchName}"? Historical documents keep referencing it.`
-      )
-    ) {
-      return;
-    }
+    const confirmed = await appDialog.confirm({
+      title: 'Deactivate Branch',
+      message: `Deactivate branch "${branch.branchName}"? Historical documents keep referencing it.`,
+      confirmLabel: 'Deactivate',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await customerBranchApi.remove(customerId, branch.id);
       triggerShortcutNotice('Branch deactivated');

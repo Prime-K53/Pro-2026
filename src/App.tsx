@@ -5,6 +5,7 @@ import { AuthPortal } from './components/auth/AuthPortal';
 import { AppHeader } from './components/layout/AppHeader';
 import { SidebarNavigator } from './components/layout/SidebarNavigator';
 import { StatusBar } from './components/layout/StatusBar';
+import { AppDialogHost } from './design-system';
 import { AlertTriangle, CheckCircle2, Info, Loader2, X } from 'lucide-react';
 
 // Views
@@ -328,6 +329,10 @@ const AppContent: React.FC = () => {
           : 'bg-[#f8fafc]'
       }`}
     >
+      <a href="#main-workspace" className="skip-link">
+        Skip to main content
+      </a>
+
       {/* Primary application header and quick-action toolbar */}
       <AppHeader />
 
@@ -337,7 +342,7 @@ const AppContent: React.FC = () => {
         <SidebarNavigator />
 
         {/* Primary Viewport */}
-        <main className="flex-1 overflow-y-auto print:overflow-visible">
+        <main id="main-workspace" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none print:overflow-visible">
           <Suspense fallback={<ViewLoadingFallback />}>
             {canAccessView(currentView, permissions) ? (
               renderActiveView()
@@ -356,7 +361,7 @@ const AppContent: React.FC = () => {
         <div
           role="status"
           aria-live="polite"
-          className={`animate-toast-enter no-print fixed right-5 bottom-11 z-50 flex max-w-sm items-center gap-3 rounded-2xl border py-3 pr-2.5 pl-3.5 text-[13px] font-medium shadow-pop backdrop-blur-md ${
+          className={`animate-toast-enter no-print fixed right-4 bottom-11 z-50 flex max-w-sm items-center gap-3 rounded-xl border py-3 pr-2.5 pl-3.5 text-[13px] font-medium shadow-pop backdrop-blur-md ${
             activeShortcutNotice.tone === 'error'
               ? 'border-rose-500/30 bg-rose-600 text-white'
               : activeShortcutNotice.tone === 'warning'
@@ -367,29 +372,31 @@ const AppContent: React.FC = () => {
           }`}
         >
           <span
-            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
               activeShortcutNotice.tone === 'success'
                 ? 'bg-emerald-50 dark:bg-emerald-500/15'
                 : 'bg-white/15'
             }`}
+            aria-hidden="true"
           >
             {activeShortcutNotice.tone === 'error' ? (
-              <AlertTriangle className="h-4 w-4" />
+              <AlertTriangle className="h-4 w-4" strokeWidth={1.75} />
             ) : activeShortcutNotice.tone === 'warning' ? (
-              <AlertTriangle className="h-4 w-4" />
+              <AlertTriangle className="h-4 w-4" strokeWidth={1.75} />
             ) : activeShortcutNotice.tone === 'info' ? (
-              <Info className="h-4 w-4" />
+              <Info className="h-4 w-4" strokeWidth={1.75} />
             ) : (
-              <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
             )}
           </span>
           <span className="min-w-0 flex-1 leading-snug">{activeShortcutNotice.text}</span>
           <button
+            type="button"
             onClick={dismissShortcutNotice}
-            className="shrink-0 rounded-lg p-1.5 transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10"
             aria-label="Dismiss notification"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
           </button>
         </div>
       )}
@@ -453,6 +460,7 @@ export default function App() {
       <AuthProvider>
         <AuthenticatedWorkspace />
       </AuthProvider>
+      <AppDialogHost />
     </AppErrorBoundary>
   );
 }

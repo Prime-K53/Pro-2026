@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
-import { requestJsonRaw, SESSION_EXPIRED_EVENT, setCsrfToken, refreshCsrfToken } from '../services/http';
+import { requestJsonRaw, SESSION_EXPIRED_EVENT, setCsrfToken, setSessionToken, refreshCsrfToken } from '../services/http';
 
 export type ServerCompanyRole =
   | 'Administrator'
@@ -93,23 +93,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const applySessionPayload = useCallback((data: any) => {
     if (data?.authenticated) {
+      // Populate in-memory auth & CSRF tokens synchronously before React
+      // renders <AccountingProvider> so initial data requests carry them.
+      if (data?.sessionToken) {
+        setSessionToken(String(data.sessionToken));
+      }
+      setCsrfToken(data?.csrfToken ?? null);
       setAuthenticated(true);
       setUser(data.user || null);
       setActiveCompany(data.activeCompany || null);
       setPermissions(Array.isArray(data.permissions) ? data.permissions : []);
       setCompanies(Array.isArray(data.companies) ? data.companies : []);
       setAuthError(null);
-      // Capture the CSRF token minted at login; if the payload did not carry
-      // one (e.g. session restored from a cookie), fetch it now.
-      setCsrfToken(data?.csrfToken ?? null);
       if (!data?.csrfToken) void refreshCsrfToken();
     } else {
+      setSessionToken(null);
+      setCsrfToken(null);
       setAuthenticated(false);
       setUser(null);
       setActiveCompany(null);
       setPermissions([]);
       setCompanies([]);
-      setCsrfToken(null);
     }
   }, []);
 

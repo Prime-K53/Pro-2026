@@ -37,11 +37,21 @@ function notifySessionExpired(): void {
   window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
 }
 
-// ─── CSRF ───────────────────────────────────────────────────────────────────
-// The server issues a per-session CSRF token on login (and via
-// /api/auth/csrf-token). Mutating requests must echo it in `X-CSRF-Token`.
+// ─── Session & CSRF (strictly in-memory; never written to Web Storage) ────────
+// The server sets a Partitioned HttpOnly cookie on login and also returns a
+// signed server session token so cross-origin iframe previews keep working even
+// when a browser blocks third-party cookies. Both tokens live only in memory.
 
+let sessionToken: string | null = null;
 let csrfToken: string | null = null;
+
+export function setSessionToken(token: string | null): void {
+  sessionToken = token || null;
+}
+
+export function getSessionToken(): string | null {
+  return sessionToken;
+}
 
 export function setCsrfToken(token: string | null): void {
   csrfToken = token || null;
@@ -57,10 +67,20 @@ function csrfHeaderFor(method?: string): Record<string, string> {
   return csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
 }
 
+export function getAuthHeaders(method?: string): Record<string, string> {
+  return {
+    ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    ...csrfHeaderFor(method),
+  };
+}
+
 /** Fetch and cache a fresh CSRF token for the current session. */
 export async function refreshCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch('/api/auth/csrf-token', { credentials: 'include' });
+    const res = await fetch('/api/auth/csrf-token', {
+      credentials: 'include',
+      headers: getAuthHeaders('GET'),
+    });
     if (!res.ok) return null;
     const data: any = await res.json().catch(() => ({}));
     const token = data?.csrfToken ?? null;
@@ -76,15 +96,29 @@ function buildHeaders(init: RequestInit, jsonContentType: boolean): Headers {
   if (jsonContentType && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  if (sessionToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${sessionToken}`);
+  }
   const csrf = csrfHeaderFor(init.method);
-  if (csrf['X-CSRF-Token']) headers.set('X-CSRF-Token', csrf['X-CSRF-Token']);
+  if (csrf['X-CSRF-Token'] && !headers.has('X-CSRF-Token')) {
+    headers.set('X-CSRF-Token', csrf['X-CSRF-Token']);
+  }
   return headers;
+}
+
+function shouldSuppressSessionExpired(url: string): boolean {
+  return (
+    url.startsWith('/api/auth/status') ||
+    url.startsWith('/api/auth/login') ||
+    url.startsWith('/api/auth/register') ||
+    url.startsWith('/api/auth/supabase-session')
+  );
 }
 
 /**
  * Perform a JSON request against the API.
  *
- * - Sends the session cookie (`credentials: 'include'`).
+ * - Sends the session cookie (`credentials: 'include'`) and in-memory Bearer token.
  * - Parses the body defensively (empty/non-JSON bodies become `{}`).
  * - Throws an `ApiError` with the server's own message where available.
  * - Emits `SESSION_EXPIRED_EVENT` on HTTP 401 so the app can re-verify the session.
@@ -104,7 +138,7 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
   }
 
   if (!res.ok) {
-    if (res.status === 401) notifySessionExpired();
+    if (res.status === 401 && !shouldSuppressSessionExpired(url)) notifySessionExpired();
     const message =
       body?.error ||
       body?.message ||
@@ -142,7 +176,7 @@ export async function requestJsonRaw<T = any>(
   } catch {
     data = {};
   }
-  if (res.status === 401) notifySessionExpired();
+  if (res.status === 401 && !shouldSuppressSessionExpired(url)) notifySessionExpired();
   return { ok: res.ok, status: res.status, data };
 }
 

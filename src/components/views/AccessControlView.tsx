@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ServerCompanyRole, useAuth } from '../../context/AuthContext';
+import { requestJsonRaw } from '../../services/http';
 import { TwoFactorSetup } from '../auth/TwoFactorSetup';
 import {
   Building2,
@@ -104,18 +105,16 @@ export const AccessControlView: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const mRes = await fetch('/api/permissions/matrix', { credentials: 'include' });
+      const mRes = await requestJsonRaw<any>('/api/permissions/matrix');
       if (mRes.ok) {
-        const mJson = await mRes.json();
-        setMatrixRows(mJson.matrix || []);
+        setMatrixRows(mRes.data?.matrix || []);
       }
 
       if (canManageUsers) {
-        const uRes = await fetch('/api/users', { credentials: 'include' });
+        const uRes = await requestJsonRaw<any>('/api/users');
         if (uRes.ok) {
-          const uJson = await uRes.json();
-          setMembers(uJson.members || []);
-          setInvitations(uJson.invitations || []);
+          setMembers(uRes.data?.members || []);
+          setInvitations(uRes.data?.invitations || []);
         }
       } else {
         setMembers([]);
@@ -123,10 +122,9 @@ export const AccessControlView: React.FC = () => {
       }
 
       if (canReadAudit) {
-        const aRes = await fetch('/api/audit/logs?limit=40', { credentials: 'include' });
+        const aRes = await requestJsonRaw<any>('/api/audit/logs?limit=40');
         if (aRes.ok) {
-          const aJson = await aRes.json();
-          setAuditLogs(aJson.logs || []);
+          setAuditLogs(aRes.data?.logs || []);
         }
       } else {
         setAuditLogs([]);
@@ -144,10 +142,8 @@ export const AccessControlView: React.FC = () => {
     e.preventDefault();
     setStatusMsg(null);
     setIssuedToken(null);
-    const res = await fetch('/api/invitations', {
+    const { ok, data } = await requestJsonRaw<any>('/api/invitations', {
       method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: invEmail,
         username: invUsername || invEmail.split('@')[0],
@@ -156,12 +152,11 @@ export const AccessControlView: React.FC = () => {
         expiresOn: invExpiresOn || null,
       }),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatusMsg({ type: 'err', text: data.error || 'Failed to create invitation' });
+    if (!ok) {
+      setStatusMsg({ type: 'err', text: data?.error || 'Failed to create invitation' });
       return;
     }
-    setIssuedToken(data.invitation?.oneTimeInviteToken || null);
+    setIssuedToken(data?.invitation?.oneTimeInviteToken || null);
     setStatusMsg({ type: 'ok', text: `Invitation generated for ${invEmail} (${invRole}).` });
     setInvEmail('');
     setInvUsername('');
@@ -172,15 +167,12 @@ export const AccessControlView: React.FC = () => {
 
   const handleRoleChange = async (targetUserId: number, role: ServerCompanyRole) => {
     setStatusMsg(null);
-    const res = await fetch(`/api/users/${targetUserId}/membership`, {
+    const { ok, data } = await requestJsonRaw<any>(`/api/users/${targetUserId}/membership`, {
       method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role }),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatusMsg({ type: 'err', text: data.error || 'Role update failed' });
+    if (!ok) {
+      setStatusMsg({ type: 'err', text: data?.error || 'Role update failed' });
       return;
     }
     setStatusMsg({ type: 'ok', text: `Updated membership role to ${role}. Active sessions rotated.` });
@@ -190,13 +182,11 @@ export const AccessControlView: React.FC = () => {
 
   const handleRevokeMembership = async (targetUserId: number, username: string) => {
     setStatusMsg(null);
-    const res = await fetch(`/api/users/${targetUserId}/membership`, {
+    const { ok, data } = await requestJsonRaw<any>(`/api/users/${targetUserId}/membership`, {
       method: 'DELETE',
-      credentials: 'include',
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatusMsg({ type: 'err', text: data.error || 'Unable to revoke membership' });
+    if (!ok) {
+      setStatusMsg({ type: 'err', text: data?.error || 'Unable to revoke membership' });
       return;
     }
     setStatusMsg({ type: 'ok', text: `Revoked company membership for ${username}.` });
@@ -205,13 +195,11 @@ export const AccessControlView: React.FC = () => {
 
   const handleDeactivateUser = async (targetUserId: number, username: string) => {
     setStatusMsg(null);
-    const res = await fetch(`/api/users/${targetUserId}/deactivate`, {
+    const { ok, data } = await requestJsonRaw<any>(`/api/users/${targetUserId}/deactivate`, {
       method: 'POST',
-      credentials: 'include',
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatusMsg({ type: 'err', text: data.error || 'Unable to deactivate user' });
+    if (!ok) {
+      setStatusMsg({ type: 'err', text: data?.error || 'Unable to deactivate user' });
       return;
     }
     setStatusMsg({ type: 'ok', text: `Deactivated global account for ${username} and invalidated sessions.` });
@@ -220,15 +208,12 @@ export const AccessControlView: React.FC = () => {
 
   const handleReactivateMembership = async (targetUserId: number, username: string) => {
     setStatusMsg(null);
-    const res = await fetch(`/api/users/${targetUserId}/membership`, {
+    const { ok, data } = await requestJsonRaw<any>(`/api/users/${targetUserId}/membership`, {
       method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ isActive: true }),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatusMsg({ type: 'err', text: data.error || 'Unable to reactivate membership' });
+    if (!ok) {
+      setStatusMsg({ type: 'err', text: data?.error || 'Unable to reactivate membership' });
       return;
     }
     setStatusMsg({ type: 'ok', text: `Reactivated membership for ${username}.` });

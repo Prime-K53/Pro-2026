@@ -4,6 +4,7 @@ import { formatCurrency } from '../../utils/currency';
 import { commercialApi, ApiCustomer } from '../../services/commercialApi';
 import { accountingApi, ApiAccount } from '../../services/accountingApi';
 import { ModalShell } from '../common/ui';
+import { appDialog } from '../../design-system';
 import { Sparkles, Copy } from 'lucide-react';
 import { printingApi } from '../../services/printingApi';
 import { QuickPrintJobModal, type QuickPrintJobDraft } from './QuickPrintJobModal';
@@ -527,9 +528,15 @@ export const NewInvoiceModal: React.FC = () => {
     (otherChargesEnabled && otherCharges.trim().length > 0) ||
     lines.some(l => Boolean(l.quickPrint));
 
-  const beforeClose = () => {
+  const beforeClose = async () => {
     if (!isDirty || submitting) return true;
-    return window.confirm('Discard this unsaved invoice?');
+    return appDialog.confirm({
+      title: 'Discard unsaved invoice?',
+      message: 'You have unsaved line items or notes on this invoice. Discard your changes and close?',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      destructive: true,
+    });
   };
 
   const canSave = Boolean(customerId) && validLineCount > 0 && currencyReady && !loading;
@@ -654,15 +661,6 @@ export const NewInvoiceModal: React.FC = () => {
     }
   };
 
-  const C = {
-    ink: '#0f2b2a', mute: '#5d7573', line: '#dfe7e5', teal: '#0f4c4a', teal2: '#14706b',
-    tealSoft: '#e3f1ef', amber: '#d99a1c', amberSoft: '#fbf1d9', green: '#0e8a5f', red: '#c0392b', paper: '#fbfaf6',
-  };
-  const secStyle: React.CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '.12em', textTransform: 'uppercase', color: C.teal2, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 8 };
-  const labelStyle: React.CSSProperties = { display: 'block', fontSize: 11.5, fontWeight: 500, color: C.mute, marginBottom: 5 };
-  const fStyle: React.CSSProperties = { width: '100%', height: 32, border: `1px solid ${C.line}`, borderRadius: 9, background: '#fff', padding: '0 10px', font: 'inherit', color: C.ink, outline: 0 };
-  const secLine = <div style={{ flex: 1, height: 1, background: C.line }} />;
-
   const saveDisabled = submitting || !canSave;
 
   return (
@@ -673,113 +671,135 @@ export const NewInvoiceModal: React.FC = () => {
       beforeClose={beforeClose}
       size="4xl"
       titleId="invoice-modal-title"
-      className="inv-modal !max-w-[1040px]"
+      className="!max-w-[1040px]"
     >
-      <style>{`
-        .inv-modal input:focus-visible, .inv-modal select:focus-visible, .inv-modal textarea:focus-visible { border-color: ${C.teal2} !important; box-shadow: 0 0 0 3px ${C.tealSoft} !important; }
-        .inv-modal .inv-btn:active:not(:disabled) { transform: translateY(1px); }
-        .inv-modal .inv-btn:disabled { cursor: not-allowed; }
-        .dark .inv-modal .inv-sidebar { background: #0e2425 !important; border-color: #1f3b3c !important; color: #cbd5e1; }
-        .dark .inv-modal .inv-paper { background: #0e2425 !important; border-color: #1f3b3c !important; color: #cbd5e1; }
-        .dark .inv-modal .inv-table { background: #0e2425 !important; border-color: #1f3b3c !important; }
-        .dark .inv-modal .inv-footer { background: #0e2425 !important; border-color: #1f3b3c !important; color: #cbd5e1; }
-        .dark .inv-modal .inv-table th { background: #132e30 !important; border-color: #1f3b3c !important; color: #94a3b8 !important; }
-        .dark .inv-modal .inv-table td { border-color: #1f3b3c !important; color: #e2e8f0 !important; }
-        .dark .inv-modal .inv-table input { color: #e2e8f0 !important; }
-        .dark .inv-modal .inv-table input::placeholder { color: #64748b !important; }
-        .dark .inv-modal .inv-sidebar input, .dark .inv-modal .inv-sidebar select, .dark .inv-modal .inv-sidebar textarea { background: #132e30 !important; border-color: #2b4a4b !important; color: #e2e8f0 !important; }
-        .dark .inv-modal .inv-sidebar label, .dark .inv-modal .inv-sidebar p, .dark .inv-modal .inv-sidebar span, .dark .inv-modal .inv-sidebar b, .dark .inv-modal .inv-sidebar em { color: inherit; }
-      `}</style>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px', color: '#fff', background: 'linear-gradient(120deg,#0f4c4a,#14706b)', position: 'relative' }}>
-        <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(255,255,255,.14)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.25)', fontSize: 18 }}>
-          🧾
-        </div>
-        <div className="min-w-0">
-          <h1 id="invoice-modal-title" style={{ font: "400 22px 'DM Serif Display', serif", margin: 0, letterSpacing: '.2px' }}>
-            Create Invoice
-          </h1>
-          <p style={{ margin: '1px 0 0', fontSize: 12, opacity: 0.8 }}>
-            Bill a customer for printing products or services
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={beforeClose}
-          aria-label="Close"
-          style={{ marginLeft: 'auto', width: 32, height: 32, borderRadius: 9, border: 0, background: 'rgba(255,255,255,.12)', color: '#fff', cursor: 'pointer', fontSize: 18 }}
-        >
-          ×
-        </button>
-        <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 3, background: 'linear-gradient(90deg,#d99a1c,transparent 70%)' }} />
-      </div>
+      <ModalHeader
+        title="Create Invoice"
+        subtitle="Bill a customer for printing products or services"
+        icon={<FileText className="h-4.5 w-4.5" />}
+        tone="brand"
+        titleId="invoice-modal-title"
+        onClose={() => {
+          void (async () => {
+            if (await beforeClose()) close();
+          })();
+        }}
+      />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-auto lg:flex-row">
         {/* Sidebar */}
-        <aside className="inv-sidebar p-5 lg:w-[290px] lg:shrink-0 lg:border-r lg:border-dashed" style={{ background: C.paper, borderColor: C.line, fontSize: 12.5 }}>
-          <div style={{ marginBottom: 20 }}>
-            <p style={secStyle}>Customer {secLine}</p>
-            <label style={labelStyle} htmlFor="inv-customer">
-              Bill to <i style={{ color: C.red, fontStyle: 'normal' }}>*</i>
-            </label>
-            <select id="inv-customer" value={customerId} onChange={e => setCustomerId(e.target.value)} style={fStyle} required disabled={loading}>
-              {customers.length === 0 && <option value="">No customers</option>}
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.companyName}
-                </option>
-              ))}
-            </select>
+        <aside className="space-y-5 border-b border-slate-200 bg-slate-50/70 p-5 text-[12.5px] dark:border-white/[0.08] dark:bg-slate-900/50 lg:w-[290px] lg:shrink-0 lg:border-b-0 lg:border-r">
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-brand-600 dark:text-brand-400">
+              <span>Customer</span>
+              <span className="h-px flex-1 bg-slate-200 dark:bg-white/[0.08]" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-customer">
+                Bill to <span className="text-rose-600 dark:text-rose-400">*</span>
+              </label>
+              <select
+                id="inv-customer"
+                value={customerId}
+                onChange={e => setCustomerId(e.target.value)}
+                className="app-input"
+                required
+                disabled={loading}
+              >
+                {customers.length === 0 && <option value="">No customers</option>}
+                {customers.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.companyName}
+                  </option>
+                ))}
+              </select>
+            </div>
             {selectedCustomer && (
-              <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 12, background: '#fff', border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.amber}` }}>
-                <b style={{ display: 'block', fontWeight: 600 }}>{selectedCustomer.companyName}</b>
-                {selectedCustomer.email && <span style={{ color: C.mute, fontSize: 12 }}>{selectedCustomer.email}</span>}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.line}`, fontSize: 12, color: C.mute }}>
-                  Current balance
-                  <em style={{ fontStyle: 'normal', color: C.green, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+              <div className="surface p-3.5 text-[12px]">
+                <div className="font-semibold text-slate-900 dark:text-white">{selectedCustomer.companyName}</div>
+                {selectedCustomer.email && (
+                  <div className="text-slate-500 dark:text-slate-400">{selectedCustomer.email}</div>
+                )}
+                <div className="mt-2.5 flex items-center justify-between border-t border-dashed border-slate-200 pt-2 text-slate-500 dark:border-white/[0.08] dark:text-slate-400">
+                  <span>Current balance</span>
+                  <span className="font-mono font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                     {fmt(selectedCustomer.balance || 0)}
-                  </em>
+                  </span>
                 </div>
                 {creditProfile && creditProfile.creditLimit != null && (
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: C.mute }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div className="mt-1.5 space-y-1 text-[11.5px] text-slate-500 dark:text-slate-400">
+                    <div className="flex justify-between">
                       <span>Credit limit</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{fmt(creditProfile.creditLimit)}</span>
+                      <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200">
+                        {fmt(creditProfile.creditLimit)}
+                      </span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <div className="flex justify-between">
                       <span>Available</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", color: (creditProfile.availableCredit ?? 0) <= 0 ? C.red : C.ink }}>
+                      <span
+                        className={`font-mono tabular-nums ${
+                          (creditProfile.availableCredit ?? 0) <= 0
+                            ? 'font-semibold text-rose-600 dark:text-rose-400'
+                            : 'text-slate-900 dark:text-white'
+                        }`}
+                      >
                         {creditProfile.availableCredit != null ? fmt(creditProfile.availableCredit) : '—'}
                       </span>
                     </div>
                   </div>
                 )}
-                {creditLoading && <div style={{ marginTop: 6, fontSize: 11, color: C.mute }}>Checking credit…</div>}
+                {creditLoading && (
+                  <div className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">Checking credit…</div>
+                )}
               </div>
             )}
             {customers.length === 0 && !loading && (
-              <div style={{ marginTop: 10 }}>
-                <p style={{ fontSize: 12, color: C.mute, marginBottom: 6 }}>Add a customer first.</p>
-                <button type="button" className="inv-btn" onClick={() => setIsNewCustomerOpen(true)} style={{ height: 32, padding: '0 12px', borderRadius: 11, border: `1px solid ${C.line}`, background: '#fff', color: C.ink, cursor: 'pointer', fontSize: 12.5 }}>
+              <div className="space-y-1.5">
+                <p className="text-[12px] text-slate-500 dark:text-slate-400">Add a customer first.</p>
+                <Button variant="secondary" size="sm" onClick={() => setIsNewCustomerOpen(true)}>
                   New customer
-                </button>
+                </Button>
               </div>
             )}
           </div>
 
-          <div style={{ marginBottom: 20 }}>
-            <p style={secStyle}>Invoice details {secLine}</p>
-            <label style={labelStyle} htmlFor="inv-number">Invoice number</label>
-            <input id="inv-number" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="Auto-generated" disabled style={{ ...fStyle, fontFamily: "'JetBrains Mono', monospace" }} />
-            <div style={{ marginTop: 12 }}>
-              <label style={labelStyle} htmlFor="inv-date">
-                Invoice date <i style={{ color: C.red, fontStyle: 'normal' }}>*</i>
-              </label>
-              <input id="inv-date" type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...fStyle, fontFamily: "'JetBrains Mono', monospace" }} required />
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-brand-600 dark:text-brand-400">
+              <span>Invoice details</span>
+              <span className="h-px flex-1 bg-slate-200 dark:bg-white/[0.08]" />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-number">
+                Invoice number
+              </label>
+              <input
+                id="inv-number"
+                value={invoiceNumber}
+                onChange={e => setInvoiceNumber(e.target.value)}
+                placeholder="Auto-generated"
+                disabled
+                className="app-input font-mono"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-date">
+                Invoice date <span className="text-rose-600 dark:text-rose-400">*</span>
+              </label>
+              <input
+                id="inv-date"
+                type="date"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                className="app-input font-mono"
+                required
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <label style={labelStyle} htmlFor="inv-terms">Terms</label>
-                <select id="inv-terms" value={terms} onChange={e => setTerms(e.target.value)} style={fStyle}>
+                <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-terms">
+                  Terms
+                </label>
+                <select id="inv-terms" value={terms} onChange={e => setTerms(e.target.value)} className="app-input">
                   {TERMS_OPTIONS.map(t => (
                     <option key={t.label} value={t.label}>
                       {t.label}
@@ -788,21 +808,31 @@ export const NewInvoiceModal: React.FC = () => {
                 </select>
               </div>
               <div>
-                <label style={labelStyle} htmlFor="inv-due">Due date</label>
-                <input id="inv-due" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={{ ...fStyle, fontFamily: "'JetBrains Mono', monospace", padding: '0 8px' }} />
+                <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-due">
+                  Due date
+                </label>
+                <input
+                  id="inv-due"
+                  type="date"
+                  value={dueDate}
+                  onChange={e => setDueDate(e.target.value)}
+                  className="app-input font-mono"
+                />
               </div>
             </div>
             {isForeign && (
-              <div style={{ marginTop: 12 }}>
-                <label style={labelStyle} htmlFor="inv-currency">Currency</label>
-                <div style={{ ...fStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: "'JetBrains Mono', monospace" }}>
+              <div>
+                <label className="mb-1.5 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300" htmlFor="inv-currency">
+                  Currency
+                </label>
+                <div className="app-input flex items-center justify-between font-mono">
                   <span>{currency}</span>
-                  <span style={{ fontSize: 11, color: currencyReady ? C.mute : C.red }}>
+                  <span className={`text-[11px] ${currencyReady ? 'text-slate-500 dark:text-slate-400' : 'text-rose-600 dark:text-rose-400'}`}>
                     {currencyReady ? `1 ${currency} = ${fxRate} ${baseCurrency}` : 'No rate'}
                   </span>
                 </div>
                 {!currencyReady && (
-                  <p style={{ fontSize: 11, color: C.red, marginTop: 4 }}>
+                  <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
                     No exchange rate for {currency}. Add one in FX settings before saving.
                   </p>
                 )}
@@ -810,93 +840,102 @@ export const NewInvoiceModal: React.FC = () => {
             )}
           </div>
 
-          <div>
-            <p style={secStyle}>Notes {secLine}</p>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Add a note for the customer…" style={{ ...fStyle, height: 56, padding: '6px 10px', resize: 'none' }} />
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-brand-600 dark:text-brand-400">
+              <span>Notes</span>
+              <span className="h-px flex-1 bg-slate-200 dark:bg-white/[0.08]" />
+            </div>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Add a note for the customer…"
+              className="app-input !h-auto resize-none py-2"
+            />
           </div>
         </aside>
 
         {/* Line items */}
-        <section className="lg:min-w-0 lg:flex-1" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <p style={{ ...secStyle, marginBottom: -4 }}>Line items {secLine}</p>
+        <section className="flex flex-col gap-4 p-5 sm:p-6 lg:min-w-0 lg:flex-1">
+          <div className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-brand-600 dark:text-brand-400">
+            <span>Line items</span>
+            <span className="h-px flex-1 bg-slate-200 dark:bg-white/[0.08]" />
+          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 6px 12px', borderRadius: 12, border: `1px solid ${C.amber}`, background: `linear-gradient(90deg,${C.amberSoft},${C.tealSoft})` }}>
-            <Sparkles className="h-4 w-4" style={{ color: C.amber }} />
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 p-1.5 pl-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <Sparkles className="h-4 w-4 shrink-0 text-amber-500" />
             <input
               value={assistInput}
               aria-label="AI assist"
               onChange={e => setAssistInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); askAssist(); } }}
               placeholder={'AI assist — e.g. “50 A4 flyers, full colour”'}
-              style={{ flex: 1, border: 0, background: 'transparent', font: '12.5px Inter', color: C.ink, outline: 0 }}
+              className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-slate-100"
             />
-            <button
-              type="button"
-              className="inv-btn"
-              onClick={askAssist}
-              disabled={assistBusy}
-              style={{ height: 30, padding: '0 12px', borderRadius: 11, border: '1px solid #b9810f', background: 'linear-gradient(180deg,#f1c35a,#d99a1c)', color: '#2d1f00', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
-            >
+            <Button variant="amber" size="sm" onClick={askAssist} disabled={assistBusy}>
               {assistBusy ? '…' : 'Ask'}
-            </button>
+            </Button>
           </div>
           {assistAnswer && (
-            <div style={{ fontSize: 12, color: C.mute, whiteSpace: 'pre-wrap' }}>{assistAnswer}</div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-600 whitespace-pre-wrap dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-slate-300">
+              {assistAnswer}
+            </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => setQuickPrintOpen(true)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 13px', borderRadius: 999, border: `1px solid ${C.line}`, background: '#fff', font: '500 12.5px Inter', color: C.ink, cursor: 'pointer' }}
-            >
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setQuickPrintOpen(true)}>
               <Copy className="h-3.5 w-3.5" /> Quick Photocopy / Print
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant={mode === 'ai' ? 'primary' : 'secondary'}
+              size="sm"
               onClick={() => { setMode(m => (m === 'ai' ? 'manual' : 'ai')); }}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 13px', borderRadius: 999, border: `1px solid ${C.amber}`, background: `linear-gradient(120deg,${C.amberSoft},${C.tealSoft})`, font: '500 12.5px Inter', color: C.ink, cursor: 'pointer' }}
             >
-              <Sparkles className="h-3.5 w-3.5" style={{ color: C.amber }} /> AI Invoice
-            </button>
+              <Sparkles className="h-3.5 w-3.5 text-amber-500" /> AI Invoice
+            </Button>
           </div>
 
           {mode === 'ai' && (
-            <div style={{ borderRadius: 12, border: `1px solid ${C.amber}`, background: C.amberSoft, padding: 12 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
+            <div className="rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+              <div className="flex gap-2">
                 <input
                   value={aiRequest}
                   aria-label="Describe the invoice"
                   onChange={e => setAiRequest(e.target.value)}
                   placeholder="Describe the invoice (e.g. 500 A4 flyers + 2 reams A4 80gsm)"
-                  style={{ ...fStyle, flex: 1 }}
+                  className="app-input flex-1"
                 />
-                <button type="button" className="inv-btn" onClick={aiDraft} disabled={aiBusy} style={{ height: 32, padding: '0 14px', borderRadius: 11, border: `1px solid ${C.teal}`, background: `linear-gradient(180deg,${C.teal2},${C.teal})`, color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                <Button variant="primary" size="sm" onClick={aiDraft} disabled={aiBusy}>
                   {aiBusy ? 'Working…' : 'AI draft'}
-                </button>
+                </Button>
               </div>
-              {aiError && <div style={{ marginTop: 8, fontSize: 11, color: C.red }}>{aiError}</div>}
+              {aiError && <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">{aiError}</div>}
               {aiAction && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: C.teal2, marginBottom: 4 }}>
+                <div className="mt-2.5 space-y-1.5">
+                  <div className="text-[11px] font-semibold text-brand-700 dark:text-brand-300">
                     Review the AI draft, then apply it to the form:
                   </div>
                   {aiPreview.map((l, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.mute }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description}</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{l.quantity} × {fmt(l.rate)}</span>
+                    <div key={i} className="flex justify-between text-[11.5px] text-slate-600 dark:text-slate-300">
+                      <span className="truncate">{l.description}</span>
+                      <span className="font-mono tabular-nums">{l.quantity} × {fmt(l.rate)}</span>
                     </div>
                   ))}
                   {!aiApplyConfirm ? (
-                    <button type="button" className="inv-btn" onClick={() => (validLineCount > 0 ? setAiApplyConfirm(true) : applyAiDraft('replace'))} disabled={aiBusy} style={{ marginTop: 6, height: 34, padding: '0 14px', borderRadius: 11, border: `1px solid ${C.teal}`, background: `linear-gradient(180deg,${C.teal2},${C.teal})`, color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => (validLineCount > 0 ? setAiApplyConfirm(true) : applyAiDraft('replace'))}
+                      disabled={aiBusy}
+                    >
                       Apply draft to form
-                    </button>
+                    </Button>
                   ) : (
-                    <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11.5, color: C.mute, alignSelf: 'center' }}>Existing lines present —</span>
-                      <button type="button" className="inv-btn" onClick={() => applyAiDraft('replace')} style={{ height: 30, padding: '0 12px', borderRadius: 11, border: `1px solid ${C.red}`, background: '#fff', color: C.red, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Replace</button>
-                      <button type="button" className="inv-btn" onClick={() => applyAiDraft('append')} style={{ height: 30, padding: '0 12px', borderRadius: 11, border: `1px solid ${C.teal}`, background: '#fff', color: C.teal, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Append</button>
-                      <button type="button" className="inv-btn" onClick={() => setAiApplyConfirm(false)} style={{ height: 30, padding: '0 12px', borderRadius: 11, border: `1px solid ${C.line}`, background: '#fff', color: C.ink, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[11.5px] text-slate-600 dark:text-slate-300">Existing lines present —</span>
+                      <Button variant="danger" size="sm" onClick={() => applyAiDraft('replace')}>Replace</Button>
+                      <Button variant="primary" size="sm" onClick={() => applyAiDraft('append')}>Append</Button>
+                      <Button variant="secondary" size="sm" onClick={() => setAiApplyConfirm(false)}>Cancel</Button>
                     </div>
                   )}
                 </div>
@@ -904,44 +943,44 @@ export const NewInvoiceModal: React.FC = () => {
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <SearchDropdown label="Item" placeholder="Search inventory…" items={itemCatalog} onPick={addItem} formatMoney={fmt} />
             <SearchDropdown label="Services" placeholder="Search services…" items={serviceCatalog} onPick={addItem} formatMoney={fmt} />
           </div>
 
-          <div style={{ fontSize: 12, color: C.mute, display: 'flex', gap: 10, alignItems: 'center', marginTop: -6 }}>
-            <span>Units left: <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{unitsLeft == null ? '—' : unitsLeft}</span></span>
-            <span style={{ color: C.line }}>|</span>
-            <span style={{ color: C.teal2 }}>Alt+F2 · Item History</span>
+          <div className="flex items-center gap-2.5 text-[12px] text-slate-500 dark:text-slate-400">
+            <span>Units left: <span className="font-mono font-medium text-slate-700 dark:text-slate-200">{unitsLeft == null ? '—' : unitsLeft}</span></span>
+            <span className="text-slate-300 dark:text-slate-700">|</span>
+            <span className="text-brand-600 dark:text-brand-400">Alt+F2 · Item History</span>
           </div>
 
-          <div className="inv-table" style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="surface overflow-hidden">
+            <table className="data-table">
               <thead>
                 <tr>
-                  <th style={{ fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 600, color: C.mute, textAlign: 'left', padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }}>SN</th>
-                  <th style={{ fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 600, color: C.mute, textAlign: 'left', padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }}>Description</th>
-                  <th style={{ fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 600, color: C.mute, textAlign: 'right', padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }}>Qty</th>
-                  <th style={{ fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 600, color: C.mute, textAlign: 'right', padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }}>Price</th>
-                  <th style={{ fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 600, color: C.mute, textAlign: 'right', padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }}>Amount</th>
-                  <th style={{ padding: '10px 12px', background: C.paper, borderBottom: `1px solid ${C.line}` }} />
+                  <th className="w-11">SN</th>
+                  <th>Description</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Price</th>
+                  <th className="text-right">Amount</th>
+                  <th className="w-10" />
                 </tr>
               </thead>
               <tbody>
                 {lines.map((line, idx) => (
                   <tr key={line.id}>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}`, color: C.mute, width: 44, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{idx + 1}</td>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}` }}>
+                    <td className="font-mono text-slate-500">{idx + 1}</td>
+                    <td>
                       <input
                         value={line.description}
                         aria-label={`Description for line ${idx + 1}`}
                         onChange={e => updateLine(line.id, { description: e.target.value })}
                         placeholder="Description"
                         readOnly={!!line.quickPrint}
-                        style={{ width: '100%', border: 0, background: 'transparent', font: 'inherit', color: C.ink, outline: 0, padding: '4px 6px', borderRadius: 7 }}
+                        className="w-full rounded border-0 bg-transparent px-1.5 py-1 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:text-slate-100"
                       />
                     </td>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}`, textAlign: 'right' }}>
+                    <td className="text-right">
                       <input
                         type="number"
                         min={1}
@@ -949,10 +988,10 @@ export const NewInvoiceModal: React.FC = () => {
                         value={line.quantity}
                         readOnly={!!line.quickPrint}
                         onChange={e => updateLine(line.id, { quantity: Math.max(1, Number(e.target.value) || 1) })}
-                        style={{ width: 80, border: 0, background: 'transparent', font: "13px 'JetBrains Mono', monospace", color: C.ink, outline: 0, textAlign: 'right' }}
+                        className="w-20 rounded border-0 bg-transparent px-1 py-1 text-right font-mono tabular-nums text-slate-900 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:text-slate-100"
                       />
                     </td>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}`, textAlign: 'right' }}>
+                    <td className="text-right">
                       <input
                         type="number"
                         min={0}
@@ -961,15 +1000,22 @@ export const NewInvoiceModal: React.FC = () => {
                         value={line.rate}
                         readOnly={!!line.quickPrint}
                         onChange={e => updateLine(line.id, { rate: Math.max(0, Number(e.target.value) || 0) })}
-                        style={{ width: 80, border: 0, background: 'transparent', font: "13px 'JetBrains Mono', monospace", color: C.ink, outline: 0, textAlign: 'right' }}
+                        className="w-24 rounded border-0 bg-transparent px-1 py-1 text-right font-mono tabular-nums text-slate-900 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:text-slate-100"
                       />
                     </td>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}`, font: "500 13px 'JetBrains Mono', monospace", textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <td className="text-right font-mono font-medium tabular-nums whitespace-nowrap text-slate-900 dark:text-white">
                       {fmt(line.quantity * line.rate)}
                     </td>
-                    <td style={{ padding: '6px 12px', borderBottom: `1px dashed ${C.line}`, textAlign: 'center' }}>
+                    <td className="text-center">
                       {lines.length > 1 && (
-                        <button type="button" onClick={() => removeLine(line.id)} aria-label={`Remove line ${idx + 1}`} style={{ border: 0, background: 'none', color: C.mute, cursor: 'pointer', fontSize: 16, borderRadius: 6 }}>×</button>
+                        <button
+                          type="button"
+                          onClick={() => removeLine(line.id)}
+                          aria-label={`Remove line ${idx + 1}`}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10 dark:hover:text-rose-400"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -977,97 +1023,152 @@ export const NewInvoiceModal: React.FC = () => {
               </tbody>
             </table>
             {validLineCount === 0 && (
-              <div style={{ padding: 12, textAlign: 'center', color: C.mute, fontSize: 12, background: `repeating-linear-gradient(0deg,transparent 0 23px,${C.line} 23px 24px)` }}>
+              <div className="border-t border-slate-200/80 px-3 py-3 text-center text-[12px] text-slate-500 dark:border-white/[0.06] dark:text-slate-400">
                 Search for an item above, or type a description to add the first line
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <span style={{ font: "500 11.5px 'JetBrains Mono', monospace", background: C.tealSoft, color: C.teal2, padding: '3px 9px', borderRadius: 7, marginRight: 6 }}>{validLineCount} item{validLineCount === 1 ? '' : 's'}</span>
-              <span style={{ font: "500 11.5px 'JetBrains Mono', monospace", background: C.tealSoft, color: C.teal2, padding: '3px 9px', borderRadius: 7 }}>{totalQty} qty</span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-brand-50 px-2.5 py-1 font-mono text-[11.5px] font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
+                {validLineCount} item{validLineCount === 1 ? '' : 's'}
+              </span>
+              <span className="rounded-md bg-brand-50 px-2.5 py-1 font-mono text-[11.5px] font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
+                {totalQty} qty
+              </span>
             </div>
-            <div style={{ fontSize: 11, letterSpacing: '.1em', color: C.mute, fontWeight: 600 }}>
-              SUBTOTAL <b style={{ font: "600 17px 'JetBrains Mono', monospace", color: C.ink, marginLeft: 8 }}>{fmt(subtotal)}</b>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+              SUBTOTAL <span className="ml-2 font-mono text-[16px] font-semibold tabular-nums text-slate-900 dark:text-white">{fmt(subtotal)}</span>
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 330px', gap: 22, alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', gap: 9, alignItems: 'center', fontSize: 13, color: C.ink }}>
-                <input type="checkbox" checked={otherChargesEnabled} onChange={e => setOtherChargesEnabled(e.target.checked)} style={{ accentColor: C.teal2, width: 16, height: 16 }} />
+          <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-[1fr_320px]">
+            <div className="flex flex-col gap-3">
+              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={otherChargesEnabled}
+                  onChange={e => setOtherChargesEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+                />
                 Other charges
               </label>
               {otherChargesEnabled && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <label htmlFor="inv-other" style={{ width: 64, color: C.mute, fontSize: 12.5 }}>Amount</label>
-                  <input id="inv-other" type="number" min={0} value={otherCharges} onChange={e => setOtherCharges(e.target.value)} placeholder="0.00" style={{ ...fStyle, width: 104, height: 30, textAlign: 'right', fontFamily: "'JetBrains Mono', monospace" }} />
+                <div className="flex items-center gap-2.5">
+                  <label htmlFor="inv-other" className="w-16 text-[12px] text-slate-500 dark:text-slate-400">Amount</label>
+                  <input
+                    id="inv-other"
+                    type="number"
+                    min={0}
+                    value={otherCharges}
+                    onChange={e => setOtherCharges(e.target.value)}
+                    placeholder="0.00"
+                    className="app-input !w-28 text-right font-mono tabular-nums"
+                  />
                 </div>
               )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 64, color: C.mute, fontSize: 12.5 }}>Discount</span>
-                <div style={{ display: 'inline-flex', padding: 3, borderRadius: 10, background: C.tealSoft }} role="group" aria-label="Discount type">
+              <div className="flex items-center gap-2.5">
+                <span className="w-16 text-[12px] text-slate-500 dark:text-slate-400">Discount</span>
+                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 dark:border-white/[0.08] dark:bg-white/[0.04]" role="group" aria-label="Discount type">
                   {(['K', '%'] as const).map(m => (
-                    <button key={m} type="button" aria-pressed={discountMode === m} onClick={() => setDiscountMode(m)} style={{ border: 0, background: discountMode === m ? C.teal2 : 'transparent', padding: '6px 14px', borderRadius: 8, font: "600 12.5px 'JetBrains Mono', monospace", color: discountMode === m ? '#fff' : C.mute, cursor: 'pointer' }}>
+                    <button
+                      key={m}
+                      type="button"
+                      aria-pressed={discountMode === m}
+                      onClick={() => setDiscountMode(m)}
+                      className={`rounded-md px-3 py-1 font-mono text-[12px] font-semibold transition-colors ${
+                        discountMode === m
+                          ? 'bg-brand-600 text-white'
+                          : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                      }`}
+                    >
                       {m}
                     </button>
                   ))}
                 </div>
-                <input id="inv-discount" type="number" min={0} aria-label="Discount value" value={discountValue} onChange={e => setDiscountValue(e.target.value)} placeholder="0.00" style={{ ...fStyle, width: 104, height: 30, textAlign: 'right', fontFamily: "'JetBrains Mono', monospace" }} />
+                <input
+                  id="inv-discount"
+                  type="number"
+                  min={0}
+                  aria-label="Discount value"
+                  value={discountValue}
+                  onChange={e => setDiscountValue(e.target.value)}
+                  placeholder="0.00"
+                  className="app-input !w-28 text-right font-mono tabular-nums"
+                />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <label htmlFor="inv-tax" style={{ width: 64, color: C.mute, fontSize: 12.5 }}>Tax %</label>
-                <input id="inv-tax" type="number" min={0} max={100} step={0.5} value={isExempt ? 0 : taxPercent} disabled readOnly style={{ ...fStyle, width: 104, height: 30, textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", background: '#f8fafc', color: C.mute }} />
-                <span style={{ fontSize: 11, color: C.mute }}>{isExempt ? 'Tax exempt' : 'Company tax policy'}</span>
+              <div className="flex items-center gap-2.5">
+                <label htmlFor="inv-tax" className="w-16 text-[12px] text-slate-500 dark:text-slate-400">Tax %</label>
+                <input
+                  id="inv-tax"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={isExempt ? 0 : taxPercent}
+                  disabled
+                  readOnly
+                  className="app-input !w-28 text-right font-mono tabular-nums"
+                />
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {isExempt ? 'Tax exempt' : 'Company tax policy'}
+                </span>
               </div>
 
               {overLimit && (
-                <div role="alert" style={{ padding: '10px 12px', borderRadius: 10, border: `1px solid ${C.red}`, background: '#fdecea', color: C.red, fontSize: 12 }}>
+                <InlineAlert tone="rose" title="Credit limit exceeded">
                   This invoice exceeds the customer&apos;s available credit
                   {creditProfile?.availableCredit != null ? ` of ${fmt(creditProfile.availableCredit)}` : ''}. An override reason is required and the server will verify permission.
-                  <div style={{ marginTop: 8 }}>
-                    <label htmlFor="inv-override" style={{ display: 'block', fontSize: 11.5, marginBottom: 4 }}>Override reason</label>
-                    <textarea id="inv-override" value={overrideReason} onChange={e => setOverrideReason(e.target.value)} rows={2} placeholder="Why is this over the limit?" style={{ ...fStyle, height: 44, padding: '6px 8px', resize: 'none' }} />
+                  <div className="mt-2">
+                    <label htmlFor="inv-override" className="mb-1 block text-[11.5px] font-medium">Override reason</label>
+                    <textarea
+                      id="inv-override"
+                      value={overrideReason}
+                      onChange={e => setOverrideReason(e.target.value)}
+                      rows={2}
+                      placeholder="Why is this over the limit?"
+                      className="app-input !h-auto resize-none py-1.5"
+                    />
                   </div>
-                </div>
+                </InlineAlert>
               )}
             </div>
 
-            <div className="inv-paper" style={{ position: 'relative', background: C.paper, border: `1px solid ${C.line}`, borderRadius: 14, padding: '16px 18px 18px' }}>
+            <div className="surface p-4">
               {!isForeign && (
                 <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: C.mute, fontSize: 12.5 }}>
+                  <div className="flex justify-between py-1 text-[12.5px] text-slate-500 dark:text-slate-400">
                     <span>Cost of Sales</span>
-                    <span style={{ font: "500 12.5px 'JetBrains Mono', monospace", color: costKnown ? C.ink : C.mute }}>
+                    <span className="font-mono font-medium tabular-nums text-slate-900 dark:text-white">
                       {costKnown ? fmt(cost) : 'Unavailable'}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: C.mute, fontSize: 12.5 }}>
+                  <div className="flex justify-between py-1 text-[12.5px] text-slate-500 dark:text-slate-400">
                     <span>Gross Profit</span>
-                    <span style={{ font: "500 12.5px 'JetBrains Mono', monospace", color: costKnown ? C.green : C.mute }}>
+                    <span className={`font-mono font-medium tabular-nums ${costKnown ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'}`}>
                       {costKnown && grossProfit != null ? fmt(grossProfit) : 'Unavailable'}
                     </span>
                   </div>
                   {!costKnown && (
-                    <div style={{ fontSize: 11.5, color: C.mute, padding: '2px 0 8px' }}>
+                    <div className="pb-2 pt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                       Cost unavailable for one or more lines; profit is not shown until authoritative costing is known.
                     </div>
                   )}
                 </>
               )}
               {isForeign && (
-                <div style={{ fontSize: 11.5, color: C.mute, padding: '2px 0 8px' }}>
+                <div className="pb-2 pt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                   Server computes cost and margin for {currency} invoices.
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: C.mute, fontSize: 12.5 }}>
+              <div className="flex justify-between py-1 text-[12.5px] text-slate-500 dark:text-slate-400">
                 <span>Sales Tax ({isExempt ? 0 : taxPercent}%)</span>
-                <span style={{ font: "500 12.5px 'JetBrains Mono', monospace", color: C.ink }}>{fmt(taxAmount)}</span>
+                <span className="font-mono font-medium tabular-nums text-slate-900 dark:text-white">{fmt(taxAmount)}</span>
               </div>
-              <div style={{ marginTop: 14, paddingTop: 14, borderTop: `2px dashed ${C.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                <small style={{ fontSize: 10.5, letterSpacing: '.14em', fontWeight: 600, color: C.teal2 }}>TOTAL DUE</small>
-                <strong style={{ font: "400 28px/1 'DM Serif Display', serif", color: C.teal, fontVariantNumeric: 'tabular-nums' }}>{fmt(total)}</strong>
+              <div className="mt-3 flex items-end justify-between border-t border-dashed border-slate-200 pt-3 dark:border-white/[0.08]">
+                <span className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-brand-600 dark:text-brand-400">TOTAL DUE</span>
+                <span className="font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{fmt(total)}</span>
               </div>
             </div>
           </div>
@@ -1080,34 +1181,34 @@ export const NewInvoiceModal: React.FC = () => {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="inv-footer" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 22px', borderTop: `1px solid ${C.line}`, background: '#fff' }}>
-        <span style={{ marginRight: 'auto', color: C.mute, fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <i style={{ width: 8, height: 8, borderRadius: '50%', background: C.amber, display: 'inline-block' }} />
-          {loading ? 'Loading customers & items…' : selectedCustomer?.companyName || 'No customer selected'}
-        </span>
-        <button type="button" className="inv-btn" onClick={beforeClose} style={{ height: 38, padding: '0 14px', borderRadius: 11, font: '600 12.5px Inter', cursor: 'pointer', border: `1px solid ${C.line}`, background: '#fff', color: C.ink }}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="inv-btn"
-          onClick={() => handleSave(true)}
-          disabled={saveDisabled || !bankAccountId}
-          style={{ height: 38, padding: '0 14px', borderRadius: 11, font: '600 12.5px Inter', cursor: 'pointer', border: '1px solid #b9810f', background: 'linear-gradient(180deg,#f1c35a,#d99a1c)', color: '#2d1f00', boxShadow: '0 2px 0 #b9810f', opacity: saveDisabled || !bankAccountId ? 0.45 : 1 }}
-        >
-          Save &amp; Pay
-        </button>
-        <button
-          type="button"
-          className="inv-btn"
-          onClick={() => handleSave(false)}
-          disabled={saveDisabled}
-          style={{ height: 38, padding: '0 14px', borderRadius: 11, font: '600 12.5px Inter', cursor: 'pointer', border: `1px solid ${C.teal}`, background: `linear-gradient(180deg,${C.teal2},${C.teal})`, color: '#fff', boxShadow: '0 2px 0 rgba(0,0,0,.25)', opacity: saveDisabled ? 0.45 : 1 }}
-        >
-          Save &amp; Finalise
-        </button>
-      </footer>
+      <ModalFooter
+        left={
+          <span>
+            {loading ? 'Loading customers & items…' : selectedCustomer?.companyName || 'No customer selected'}
+          </span>
+        }
+        right={
+          <>
+            <Button variant="secondary" onClick={beforeClose}>
+              Cancel
+            </Button>
+            <Button
+              variant="emerald"
+              onClick={() => handleSave(true)}
+              disabled={saveDisabled || !bankAccountId}
+            >
+              Save &amp; Pay
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => handleSave(false)}
+              disabled={saveDisabled}
+            >
+              Save &amp; Finalise
+            </Button>
+          </>
+        }
+      />
     </ModalShell>
 
     <QuickPrintJobModal

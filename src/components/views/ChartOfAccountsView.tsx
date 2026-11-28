@@ -12,7 +12,19 @@ import {
   ApiJournalEntry,
 } from '../../services/accountingApi';
 import { formatCurrency } from '../../utils/currency';
-import { HubLandingView, HubCard } from './HubLandingView';
+import {
+  Button,
+  FormField,
+  InlineAlert,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalShell,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+  Tabs,
+} from '../common/ui';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type {
@@ -666,7 +678,6 @@ export const ChartOfAccountsView: React.FC = () => {
   const canReopenPeriods = hasPermission('periods:reopen');
 
   const [activeTab, setActiveTab] = useState<CoaTab>('accounts');
-  const [hubOpen, setHubOpen] = useState(false);
   const [accounts, setAccounts] = useState<ApiAccount[]>([]);
   const [journals, setJournals] = useState<ApiJournalEntry[]>([]);
   const [periods, setPeriods] = useState<ApiFiscalPeriod[]>([]);
@@ -1053,14 +1064,13 @@ export const ChartOfAccountsView: React.FC = () => {
   const handleOpenLedgerAccount = useCallback((accountId: number) => {
     setSelectedAccountId(accountId);
     setActiveTab('accounts');
-    setHubOpen(true);
   }, []);
 
   const renderPeriodActions = (p: any) => {
     const defs: AdvancedActionDefinition<any>[] = [];
     if (canClosePeriods && p.status === 'open') defs.push({ id: 'soft-close', label: 'Soft-Close (Adjusting Only)', icon: <Lock className="w-3.5 h-3.5 text-amber-600" />, group: 'process', groupLabel: 'Period', requiredPermission: 'accounting:close', execute: async () => handleSoftClosePeriod(p) });
     if (canClosePeriods && p.status !== 'closed') defs.push({ id: 'hard-close', label: 'Close Period & Lock', icon: <CheckCircle2 className="w-3.5 h-3.5 text-rose-600" />, group: 'danger', groupLabel: 'Period', destructive: true, risk: 'destructive', requiredPermission: 'accounting:close', confirmation: { title: `Close ${p.period_name}`, message: 'Close this period?', confirmLabel: 'Close', destructive: true }, execute: async () => { setClosingTargetPeriod(p); setGenerateClosingEntry(true); setClosingNotes(''); } });
-    if (canReopenPeriods && p.status !== 'open') defs.push({ id: 'reopen', label: 'Reopen Period', icon: <RotateCcw className="w-3.5 h-3.5 text-blue-600" />, group: 'admin', groupLabel: 'Period', requiredPermission: 'accounting:reopen', execute: async () => { setReopenTargetPeriod(p); setReopenReason(''); } });
+    if (canReopenPeriods && p.status !== 'open') defs.push({ id: 'reopen', label: 'Reopen Period', icon: <RotateCcw className="w-3.5 h-3.5 text-brand-600" />, group: 'admin', groupLabel: 'Period', requiredPermission: 'accounting:reopen', execute: async () => { setReopenTargetPeriod(p); setReopenReason(''); } });
     defs.push({ id: 'copy-period', label: 'Copy Period Name', icon: <Copy className="w-3.5 h-3.5" />, group: 'admin', groupLabel: 'Other', requiredPermission: 'accounting:read', execute: async () => { await navigator.clipboard?.writeText(p.period_name); triggerShortcutNotice(`Copied ${p.period_name}`); } });
     const ctx = buildCoaActionContext(p, null);
     const resolved = resolveActions(defs, ctx);
@@ -1077,127 +1087,80 @@ export const ChartOfAccountsView: React.FC = () => {
     );
   };
 
-  const coaCards: HubCard[] = [
-    {
-      id: 'accounts',
-      label: 'Chart of Accounts',
-      description: 'Account register, balances and detail drill-down.',
-      icon: BookOpen,
-      count: accounts.length,
-    },
+  const coaTabs = [
+    { id: 'accounts', label: 'Chart of Accounts', icon: <BookOpen className="h-3.5 w-3.5" />, count: accounts.length },
     ...(canReadJournals
-      ? [
-          {
-            id: 'journals',
-            label: 'General Journal',
-            description: 'Immutable double-entry journals and reversals.',
-            icon: Layers,
-            count: journals.length,
-          },
-        ]
+      ? [{ id: 'journals', label: 'General Journal', icon: <Layers className="h-3.5 w-3.5" />, count: journals.length }]
       : []),
     ...(canWriteJournals
-      ? [
-          {
-            id: 'opening',
-            label: 'Opening Balances',
-            description: 'Enter and post opening balances for new accounts.',
-            icon: Scale,
-          },
-        ]
+      ? [{ id: 'opening', label: 'Opening Balances', icon: <Scale className="h-3.5 w-3.5" /> }]
       : []),
-    {
-      id: 'periods',
-      label: 'Fiscal Periods',
-      description: 'Accounting periods and closing locks.',
-      icon: Calendar,
-      count: periods.length,
-    },
+    { id: 'periods', label: 'Fiscal Periods', icon: <Calendar className="h-3.5 w-3.5" />, count: periods.length },
   ];
 
   return (
-    <>
-    <HubLandingView
-      title="Accounting"
-      subtitle="Double-entry Chart of Accounts, immutable journals, traceable reversals, opening balances and period closing locks."
-      cards={coaCards}
-      activeId={hubOpen ? activeTab : null}
-      onOpen={id => {
-        setActiveTab(id as CoaTab);
-        setHubOpen(true);
-      }}
-      onBack={() => setHubOpen(false)}
-      headerActions={
-        <div className="flex flex-wrap items-center gap-2">
-          {canRebuild && (
-            <button
-              type="button"
-              onClick={handleRebuildBalances}
-              className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Rebuild Balances</span>
-            </button>
-          )}
-          {canWriteJournals && (
-            <button
-              type="button"
-              onClick={() => setIsJournalEntryOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-[#e4ddd1] bg-white/80 px-3.5 py-2 text-xs font-semibold text-[#0f544c] transition-colors hover:border-[#3fa294] hover:bg-white dark:border-white/10 dark:bg-slate-900/60 dark:text-[#8be0d3] dark:hover:bg-slate-900"
-            >
-              <Scale className="w-3.5 h-3.5" />
-              <span>New Journal Entry</span>
-            </button>
-          )}
-          {canWriteAccounts && (
-            <button
-              type="button"
-              onClick={openCreateAccountModal}
-              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#1f8577] to-[#0f544c] px-4 py-2 text-xs font-bold text-white shadow-[0_4px_10px_-3px_rgba(31,133,119,0.5)] transition-transform hover:-translate-y-px"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Account</span>
-            </button>
-          )}
-        </div>
-      }
-    >
-      <div className="space-y-5">
+    <PageShell>
+      <PageHeader
+        title="Chart of Accounts & General Ledger"
+        subtitle="Double-entry Chart of Accounts, immutable journals, traceable reversals, opening balances and period closing locks."
+        icon={<BookOpen className="h-4.5 w-4.5" />}
+        actions={
+          <>
+            {canRebuild && (
+              <Button variant="secondary" size="sm" onClick={handleRebuildBalances}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Rebuild Balances
+              </Button>
+            )}
+            {canWriteJournals && (
+              <Button variant="secondary" size="sm" onClick={() => setIsJournalEntryOpen(true)}>
+                <Scale className="h-3.5 w-3.5" />
+                New Journal Entry
+              </Button>
+            )}
+            {canWriteAccounts && (
+              <Button variant="primary" size="sm" onClick={openCreateAccountModal}>
+                <Plus className="h-3.5 w-3.5" />
+                Add Account
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      <Tabs
+        items={coaTabs}
+        activeId={activeTab}
+        onChange={id => setActiveTab(id as CoaTab)}
+        ariaLabel="Accounting sections"
+      />
+
       {errorBanner && (
-        <div
-          role="alert"
-          className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3"
-        >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-            <span>{errorBanner}</span>
-          </div>
-          <button type="button" onClick={() => setErrorBanner(null)} className="text-xs underline">
-            Dismiss
-          </button>
-        </div>
+        <InlineAlert tone="rose" onDismiss={() => setErrorBanner(null)}>
+          {errorBanner}
+        </InlineAlert>
       )}
 
       {/* TAB 1: CHART OF ACCOUNTS & LIVE REGISTER */}
       {activeTab === 'accounts' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="lg:col-span-7 surface overflow-hidden">
+            <div className="surface-header flex-wrap gap-2">
               <div className="relative flex-1 min-w-[180px]">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search account code or name..."
-                  className="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 text-xs text-slate-900 dark:text-slate-100 outline-none"
+                  className="app-input pl-8"
                 />
               </div>
 
               <select
                 value={filterType}
                 onChange={e => setFilterType(e.target.value)}
-                className="bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-md px-2.5 py-1.5 text-xs text-slate-700 dark:text-slate-300 outline-none"
+                className="app-input !w-auto min-w-[160px]"
               >
                 <option value="all">All Account Types</option>
                 {ACCOUNT_TYPE_OPTIONS.map(o => (
@@ -1300,8 +1263,8 @@ export const ChartOfAccountsView: React.FC = () => {
           {/* Right Column: Live General Ledger Register Drill-Down */}
           <div className="lg:col-span-5">
             {selectedAccount ? (
-              <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
-                <div className="border-b border-slate-200 dark:border-slate-800 pb-3 flex items-start justify-between gap-3">
+              <div className="surface p-5 space-y-4">
+                <div className="border-b border-slate-200 dark:border-white/[0.08] pb-3 flex items-start justify-between gap-3">
                   <div>
                     <div className="font-mono text-xs font-bold text-slate-500">
                       {selectedAccount.code || 'No Code'} · {selectedAccount.account_type} ({selectedAccount.detail_type})
@@ -1495,13 +1458,13 @@ export const ChartOfAccountsView: React.FC = () => {
               </div>
             )}
 
-            <button
+            <Button
               type="submit"
+              variant="emerald"
               disabled={obTotals.lines.length === 0 || obSubmitting || (obTotals.diff !== 0 && !obAutoEquityId)}
-              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-300 disabled:text-slate-500 text-white font-bold"
             >
               {obSubmitting ? 'Posting...' : 'Post Opening Balances'}
-            </button>
+            </Button>
           </div>
         </form>
       )}
@@ -1512,7 +1475,7 @@ export const ChartOfAccountsView: React.FC = () => {
           {canClosePeriods && (
             <form
               onSubmit={handleCreatePeriod}
-              className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex flex-wrap items-end gap-3 text-xs"
+              className="surface p-4 flex flex-wrap items-end gap-3 text-xs"
             >
               <div className="flex-1 min-w-[180px] space-y-1">
                 <label className="font-semibold text-slate-700 dark:text-slate-300">Period Name</label>
@@ -1521,7 +1484,7 @@ export const ChartOfAccountsView: React.FC = () => {
                   value={newPeriodName}
                   onChange={e => setNewPeriodName(e.target.value)}
                   placeholder="e.g. Oct 2026 or FY 2025"
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-1.5 outline-none"
+                  className="app-input"
                   required
                 />
               </div>
@@ -1531,7 +1494,7 @@ export const ChartOfAccountsView: React.FC = () => {
                   type="date"
                   value={newPeriodStart}
                   onChange={e => setNewPeriodStart(e.target.value)}
-                  className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5 font-mono"
+                  className="app-input font-mono"
                   required
                 />
               </div>
@@ -1541,31 +1504,28 @@ export const ChartOfAccountsView: React.FC = () => {
                   type="date"
                   value={newPeriodEnd}
                   onChange={e => setNewPeriodEnd(e.target.value)}
-                  className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5 font-mono"
+                  className="app-input font-mono"
                   required
                 />
               </div>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold"
-              >
+              <Button type="submit" variant="primary" size="sm">
                 Create Fiscal Period
-              </button>
+              </Button>
             </form>
           )}
 
-          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+          <div className="surface overflow-hidden">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th className="px-4 py-2.5">PERIOD</th>
-                  <th className="px-4 py-2.5">DATE RANGE</th>
-                  <th className="px-4 py-2.5">STATUS</th>
-                  <th className="px-4 py-2.5">CLOSING NOTES</th>
-                  <th className="px-4 py-2.5 text-right">ACTIONS</th>
+                  <th>PERIOD</th>
+                  <th>DATE RANGE</th>
+                  <th>STATUS</th>
+                  <th>CLOSING NOTES</th>
+                  <th className="text-right">ACTIONS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              <tbody>
                 {periods.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
@@ -1575,17 +1535,17 @@ export const ChartOfAccountsView: React.FC = () => {
                 ) : (
                   periods.map(p => (
                     <tr key={p.id}>
-                      <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">{p.period_name}</td>
-                      <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300">
+                      <td className="font-semibold text-slate-900 dark:text-white">{p.period_name}</td>
+                      <td className="font-mono text-slate-600 dark:text-slate-300">
                         {p.start_date} to {p.end_date}
                       </td>
-                      <td className="px-4 py-3 font-mono font-bold uppercase text-[11px]">
-                        {p.status === 'closed' && <span className="text-rose-600 dark:text-rose-400">Closed (Locked)</span>}
-                        {p.status === 'soft_closed' && <span className="text-amber-600 dark:text-amber-400">Soft-Closed (Adjusting Only)</span>}
-                        {p.status === 'open' && <span className="text-emerald-600 dark:text-emerald-400">Open</span>}
+                      <td>
+                        {p.status === 'closed' && <StatusBadge tone="rose">Closed (Locked)</StatusBadge>}
+                        {p.status === 'soft_closed' && <StatusBadge tone="amber">Soft-Closed</StatusBadge>}
+                        {p.status === 'open' && <StatusBadge tone="emerald">Open</StatusBadge>}
                       </td>
-                      <td className="px-4 py-3 text-slate-500">{p.notes || '—'}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="text-slate-500">{p.notes || '—'}</td>
+                      <td className="text-right">
                         {renderPeriodActions(p)}
                       </td>
                     </tr>
@@ -1598,168 +1558,151 @@ export const ChartOfAccountsView: React.FC = () => {
       )}
 
       {/* ADD / EDIT ACCOUNT MODAL */}
-      {accountModalMode && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">
-                {accountModalMode === 'create' ? 'Add Account to Chart of Accounts' : 'Edit Account'}
-              </span>
-              <button type="button" onClick={() => setAccountModalMode(null)} className="text-white/80 hover:text-white">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveAccount} className="p-5 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Account Code</label>
-                  <input
-                    type="text"
-                    value={acctCode}
-                    onChange={e => setAcctCode(e.target.value)}
-                    placeholder="e.g. 6450"
-                    disabled={Boolean(editingAccount?.is_control)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 font-mono outline-none disabled:opacity-60"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Account Type</label>
-                  <select
-                    value={acctType}
-                    disabled={accountModalMode === 'edit'}
-                    onChange={e => {
-                      const next = e.target.value as ApiAccountType;
-                      setAcctType(next);
-                      const def = ACCOUNT_TYPE_OPTIONS.find(o => o.value === next)?.defaultDetail || 'expense';
-                      setAcctDetailType(def);
-                    }}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 outline-none disabled:opacity-60"
-                  >
-                    {ACCOUNT_TYPE_OPTIONS.map(o => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Detail Type (Statement Placement)</label>
+      <ModalShell open={Boolean(accountModalMode)} onClose={() => setAccountModalMode(null)} size="md">
+        <ModalHeader
+          title={accountModalMode === 'create' ? 'Add Account to Chart of Accounts' : 'Edit Account'}
+          subtitle="Configure account code, classification and statement placement"
+          icon={<BookOpen className="h-4.5 w-4.5" />}
+          onClose={() => setAccountModalMode(null)}
+        />
+        <form onSubmit={handleSaveAccount} className="flex min-h-0 flex-1 flex-col">
+          <ModalBody className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormField label="Account Code">
+                <input
+                  type="text"
+                  value={acctCode}
+                  onChange={e => setAcctCode(e.target.value)}
+                  placeholder="e.g. 6450"
+                  disabled={Boolean(editingAccount?.is_control)}
+                  className="app-input font-mono"
+                />
+              </FormField>
+              <FormField label="Account Type">
                 <select
-                  value={acctDetailType}
-                  onChange={e => setAcctDetailType(e.target.value as ApiDetailType)}
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 outline-none"
+                  value={acctType}
+                  disabled={accountModalMode === 'edit'}
+                  onChange={e => {
+                    const next = e.target.value as ApiAccountType;
+                    setAcctType(next);
+                    const def = ACCOUNT_TYPE_OPTIONS.find(o => o.value === next)?.defaultDetail || 'expense';
+                    setAcctDetailType(def);
+                  }}
+                  className="app-input"
                 >
-                  {(DETAIL_OPTIONS_BY_TYPE[acctType] || []).map(d => (
-                    <option key={d.value} value={d.value}>
-                      {d.label}
+                  {ACCOUNT_TYPE_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>
-              </div>
+              </FormField>
+            </div>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Account Name</label>
-                <input
-                  type="text"
-                  value={acctName}
-                  onChange={e => setAcctName(e.target.value)}
-                  placeholder="e.g. Press Maintenance & Spares"
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 outline-none"
-                  required
-                />
-              </div>
+            <FormField label="Detail Type (Statement Placement)">
+              <select
+                value={acctDetailType}
+                onChange={e => setAcctDetailType(e.target.value as ApiDetailType)}
+                className="app-input"
+              >
+                {(DETAIL_OPTIONS_BY_TYPE[acctType] || []).map(d => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </FormField>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Parent Account (Optional)</label>
-                <select
-                  value={acctParentId}
-                  onChange={e => setAcctParentId(e.target.value)}
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-2 outline-none"
-                >
-                  <option value="">None (Top-Level Account)</option>
-                  {accounts
-                    .filter(a => a.id !== editingAccount?.id && a.account_type === acctType)
-                    .map(a => (
-                      <option key={a.id} value={String(a.id)}>
-                        {a.code ? `${a.code} - ` : ''}{a.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
+            <FormField label="Account Name" required>
+              <input
+                type="text"
+                value={acctName}
+                onChange={e => setAcctName(e.target.value)}
+                placeholder="e.g. Press Maintenance & Spares"
+                className="app-input"
+                required
+              />
+            </FormField>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Description</label>
-                <input
-                  type="text"
-                  value={acctDesc}
-                  onChange={e => setAcctDesc(e.target.value)}
-                  placeholder="Optional ledger description"
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 outline-none"
-                />
-              </div>
+            <FormField label="Parent Account (Optional)">
+              <select
+                value={acctParentId}
+                onChange={e => setAcctParentId(e.target.value)}
+                className="app-input"
+              >
+                <option value="">None (Top-Level Account)</option>
+                {accounts
+                  .filter(a => a.id !== editingAccount?.id && a.account_type === acctType)
+                  .map(a => (
+                    <option key={a.id} value={String(a.id)}>
+                      {a.code ? `${a.code} - ` : ''}{a.name}
+                    </option>
+                  ))}
+              </select>
+            </FormField>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setAccountModalMode(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                >
+            <FormField label="Description">
+              <input
+                type="text"
+                value={acctDesc}
+                onChange={e => setAcctDesc(e.target.value)}
+                placeholder="Optional ledger description"
+                className="app-input"
+              />
+            </FormField>
+          </ModalBody>
+          <ModalFooter
+            right={
+              <>
+                <Button variant="secondary" onClick={() => setAccountModalMode(null)}>
                   Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={acctSaving}
-                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold"
-                >
+                </Button>
+                <Button type="submit" variant="primary" disabled={acctSaving}>
                   {acctSaving ? 'Saving...' : 'Save Account'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                </Button>
+              </>
+            }
+          />
+        </form>
+      </ModalShell>
 
       {/* VIEW JOURNAL DETAILS MODAL */}
-      {viewingJournal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Journal {viewingJournal.entryNumber}</span>
-              <button type="button" onClick={() => setViewingJournal(null)} className="text-white/80 hover:text-white">
-                ✕
-              </button>
-            </div>
-            <div className="p-5 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-300">
-                <div><span className="font-semibold">Date:</span> {viewingJournal.txnDate}</div>
-                <div><span className="font-semibold">Source:</span> {viewingJournal.sourceType}</div>
-                <div><span className="font-semibold">Status:</span> {viewingJournal.status}</div>
-                <div><span className="font-semibold">Reference:</span> {viewingJournal.reference || '—'}</div>
+      <ModalShell open={Boolean(viewingJournal)} onClose={() => setViewingJournal(null)} size="2xl">
+        <ModalHeader
+          title={`Journal ${viewingJournal?.entryNumber ?? ''}`}
+          subtitle={viewingJournal?.description || undefined}
+          icon={<Layers className="h-4.5 w-4.5" />}
+          onClose={() => setViewingJournal(null)}
+        />
+        {viewingJournal && (
+          <>
+            <ModalBody className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-slate-300">
+                <div><span className="font-semibold text-slate-900 dark:text-white">Date:</span> <span className="font-mono">{viewingJournal.txnDate}</span></div>
+                <div><span className="font-semibold text-slate-900 dark:text-white">Source:</span> {viewingJournal.sourceType}</div>
+                <div><span className="font-semibold text-slate-900 dark:text-white">Status:</span> <span className="uppercase font-mono">{viewingJournal.status}</span></div>
+                <div><span className="font-semibold text-slate-900 dark:text-white">Reference:</span> {viewingJournal.reference || '—'}</div>
               </div>
-              <div className="text-slate-700 dark:text-slate-200">{viewingJournal.description}</div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase tracking-wider font-bold text-[10px] border-b border-slate-200 dark:border-slate-800">
+              <div className="surface overflow-hidden">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <th className="px-3 py-2">Account</th>
-                      <th className="px-3 py-2 text-right">Debit</th>
-                      <th className="px-3 py-2 text-right">Credit</th>
+                      <th>Account</th>
+                      <th className="text-right">Debit</th>
+                      <th className="text-right">Credit</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  <tbody>
                     {viewingJournal.lines.map(l => (
                       <tr key={l.id}>
-                        <td className="px-3 py-2">
+                        <td>
                           {l.accountCode ? `${l.accountCode} ` : ''}{l.accountName}
                           {l.basis !== 'both' ? ` [${l.basis}]` : ''}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono tabular-nums text-blue-600 dark:text-blue-400">
+                        <td className="text-right font-mono tabular-nums text-brand-600 dark:text-brand-400">
                           {l.debitNum > 0 ? formatCurrency(l.debitNum, currency) : ''}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                        <td className="text-right font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
                           {l.creditNum > 0 ? formatCurrency(l.creditNum, currency) : ''}
                         </td>
                       </tr>
@@ -1767,94 +1710,80 @@ export const ChartOfAccountsView: React.FC = () => {
                   </tbody>
                 </table>
               </div>
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => setViewingJournal(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+            </ModalBody>
+            <ModalFooter right={<Button variant="secondary" onClick={() => setViewingJournal(null)}>Close</Button>} />
+          </>
+        )}
+      </ModalShell>
 
       {/* REVERSE (VOID) JOURNAL ENTRY MODAL */}
-      {reversingEntry && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-rose-900 text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Reverse Journal Entry {reversingEntry.entryNumber}</span>
-              <button type="button" onClick={() => setReversingEntry(null)} className="text-white/80 hover:text-white">
-                ✕
-              </button>
-            </div>
-            <form onSubmit={handleConfirmReverse} className="p-5 space-y-4 text-xs">
-              <p className="text-slate-600 dark:text-slate-300">
+      <ModalShell open={Boolean(reversingEntry)} onClose={() => setReversingEntry(null)} size="md">
+        <ModalHeader
+          title={`Reverse Journal Entry ${reversingEntry?.entryNumber ?? ''}`}
+          icon={<RotateCcw className="h-4.5 w-4.5" />}
+          tone="rose"
+          onClose={() => setReversingEntry(null)}
+        />
+        {reversingEntry && (
+          <form onSubmit={handleConfirmReverse} className="flex min-h-0 flex-1 flex-col">
+            <ModalBody className="space-y-4">
+              <InlineAlert tone="amber">
                 Posted entries cannot be deleted or edited. Reversing creates a mirror-image entry swapping all debits and credits and marks{' '}
                 <strong>{reversingEntry.entryNumber}</strong> as voided.
-              </p>
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Reversal Date</label>
+              </InlineAlert>
+              <FormField label="Reversal Date" required>
                 <input
                   type="date"
                   value={reversalDate}
                   onChange={e => setReversalDate(e.target.value)}
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 font-mono"
+                  className="app-input font-mono"
                   required
                 />
-              </div>
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Audit Reason</label>
+              </FormField>
+              <FormField label="Audit Reason" required>
                 <input
                   type="text"
                   value={reversalReason}
                   onChange={e => setReversalReason(e.target.value)}
                   placeholder="Reason for voiding/reversing..."
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2"
+                  className="app-input"
                   required
                 />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setReversingEntry(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={reversalSubmitting}
-                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold"
-                >
-                  {reversalSubmitting ? 'Reversing...' : 'Confirm Reversal'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </FormField>
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setReversingEntry(null)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" variant="danger" disabled={reversalSubmitting}>
+                    {reversalSubmitting ? 'Reversing...' : 'Confirm Reversal'}
+                  </Button>
+                </>
+              }
+            />
+          </form>
+        )}
+      </ModalShell>
 
       {/* HARD CLOSE PERIOD MODAL */}
-      {closingTargetPeriod && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-[#0f3d63] text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Close Fiscal Period — {closingTargetPeriod.period_name}</span>
-              <button type="button" onClick={() => setClosingTargetPeriod(null)} className="text-white/80 hover:text-white">
-                ✕
-              </button>
-            </div>
-            <form onSubmit={handleConfirmClosePeriod} className="p-5 space-y-4 text-xs">
+      <ModalShell open={Boolean(closingTargetPeriod)} onClose={() => setClosingTargetPeriod(null)} size="md">
+        <ModalHeader
+          title={`Close Fiscal Period — ${closingTargetPeriod?.period_name ?? ''}`}
+          icon={<Lock className="h-4.5 w-4.5" />}
+          tone="rose"
+          onClose={() => setClosingTargetPeriod(null)}
+        />
+        {closingTargetPeriod && (
+          <form onSubmit={handleConfirmClosePeriod} className="flex min-h-0 flex-1 flex-col">
+            <ModalBody className="space-y-4 text-xs">
               <p className="text-slate-600 dark:text-slate-300">
                 Closing permanently blocks all new journal entries and reversals dated between{' '}
                 <strong className="font-mono">{closingTargetPeriod.start_date}</strong> and{' '}
                 <strong className="font-mono">{closingTargetPeriod.end_date}</strong>.
               </p>
-              <label className="flex items-start gap-2 cursor-pointer">
+              <label className="flex items-start gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
                 <input
                   type="checkbox"
                   checked={generateClosingEntry}
@@ -1865,73 +1794,69 @@ export const ChartOfAccountsView: React.FC = () => {
                   <strong>Generate Year-End Closing Journal Entry</strong> — transfer net Income/Expense balances in this period to Retained Earnings (3200).
                 </span>
               </label>
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Closing Notes (Optional)</label>
+              <FormField label="Closing Notes (Optional)">
                 <input
                   type="text"
                   value={closingNotes}
                   onChange={e => setClosingNotes(e.target.value)}
                   placeholder="Sign-off note..."
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2"
+                  className="app-input"
                 />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setClosingTargetPeriod(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold">
-                  Close & Lock Period
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </FormField>
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setClosingTargetPeriod(null)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" variant="danger">
+                    Close &amp; Lock Period
+                  </Button>
+                </>
+              }
+            />
+          </form>
+        )}
+      </ModalShell>
 
       {/* REOPEN PERIOD MODAL */}
-      {reopenTargetPeriod && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-800 overflow-hidden">
-            <div className="px-5 py-3 bg-amber-800 text-white flex items-center justify-between">
-              <span className="font-bold text-sm">Reopen Fiscal Period — {reopenTargetPeriod.period_name}</span>
-              <button type="button" onClick={() => setReopenTargetPeriod(null)} className="text-white/80 hover:text-white">
-                ✕
-              </button>
-            </div>
-            <form onSubmit={handleConfirmReopenPeriod} className="p-5 space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">Mandatory Audit Reason</label>
+      <ModalShell open={Boolean(reopenTargetPeriod)} onClose={() => setReopenTargetPeriod(null)} size="md">
+        <ModalHeader
+          title={`Reopen Fiscal Period — ${reopenTargetPeriod?.period_name ?? ''}`}
+          icon={<Unlock className="h-4.5 w-4.5" />}
+          tone="amber"
+          onClose={() => setReopenTargetPeriod(null)}
+        />
+        {reopenTargetPeriod && (
+          <form onSubmit={handleConfirmReopenPeriod} className="flex min-h-0 flex-1 flex-col">
+            <ModalBody className="space-y-4">
+              <FormField label="Mandatory Audit Reason" required>
                 <input
                   type="text"
                   value={reopenReason}
                   onChange={e => setReopenReason(e.target.value)}
                   placeholder="Explain why this locked period is being reopened..."
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-3 py-2"
+                  className="app-input"
                   required
                 />
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setReopenTargetPeriod(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold">
-                  Reopen Period
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-    </HubLandingView>
-    </>
+              </FormField>
+            </ModalBody>
+            <ModalFooter
+              right={
+                <>
+                  <Button variant="secondary" onClick={() => setReopenTargetPeriod(null)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" variant="amber">
+                    Reopen Period
+                  </Button>
+                </>
+              }
+            />
+          </form>
+        )}
+      </ModalShell>
+    </PageShell>
   );
 };

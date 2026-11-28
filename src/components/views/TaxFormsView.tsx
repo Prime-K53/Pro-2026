@@ -6,13 +6,12 @@ import { commercialApi } from '../../services/commercialApi';
 import { formatCurrency } from '../../utils/currency';
 import {
   Printer,
-  CheckCircle2,
   Loader2,
-  AlertTriangle,
   Percent,
   Save,
-  Info,
 } from 'lucide-react';
+import { appDialog } from '../../design-system';
+import { Button, InlineAlert, MetricTile, PageHeader, PageShell, Tabs } from '../common/ui';
 
 type TaxForm = 'salesTax' | 'payeQuarter' | 'payeAnnual' | 'p45' | 'contractor';
 
@@ -164,41 +163,35 @@ export const TaxFormsView: React.FC = () => {
   const periodLabel = `${startDate} → ${endDate}`;
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-            Statutory Tax Summaries
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            VAT return aggregated live from the general ledger. PAYE, P45 and contractor
-            statements are draft summaries computed from the payroll and purchase ledgers.
-          </p>
-        </div>
-
-        <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm transition-all"
-        >
-          <Printer className="w-4 h-4" />
-          <span>Print Active Summary</span>
-        </button>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Statutory Tax Summaries"
+        subtitle="VAT return aggregated live from the general ledger. PAYE, P45 and contractor statements are draft summaries computed from the payroll and purchase ledgers."
+        icon={<Percent className="w-5 h-5" strokeWidth={1.75} />}
+        actions={
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => window.print()}
+            icon={<Printer className="w-3.5 h-3.5" />}
+          >
+            Print Active Summary
+          </Button>
+        }
+      />
 
       {/* Draft disclaimer */}
-      <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-xs">
-        <Info className="w-4 h-4 shrink-0 mt-0.5" />
+      <InlineAlert tone="warning">
         <span>
           <strong>Draft working papers.</strong> Except for the live VAT return, these
           summaries are computed from recorded payroll and purchase transactions. They are
           not filed returns, carry no cryptographic seal, and must be reviewed by a
           qualified accountant before submission to the Malawi Revenue Authority.
         </span>
-      </div>
+      </InlineAlert>
 
       {/* Shared period selector */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div className="surface p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <label className="font-semibold text-slate-600 dark:text-slate-300">Period From:</label>
@@ -206,7 +199,7 @@ export const TaxFormsView: React.FC = () => {
               type="date"
               value={startDate}
               onChange={e => setStartDate(e.target.value)}
-              className="bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1 font-mono"
+              className="app-input app-input-mono !w-auto !py-1"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -215,11 +208,11 @@ export const TaxFormsView: React.FC = () => {
               type="date"
               value={endDate}
               onChange={e => setEndDate(e.target.value)}
-              className="bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1 font-mono"
+              className="app-input app-input-mono !w-auto !py-1"
             />
           </div>
         </div>
-        <div className="text-[11px] font-mono text-slate-500">
+        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
           Company:{' '}
           <strong className="text-slate-800 dark:text-slate-200">
             {activeCompany?.name || companyProfile.legalName}
@@ -228,139 +221,80 @@ export const TaxFormsView: React.FC = () => {
       </div>
 
       {/* Forms Nav Tabs */}
-      <div className="flex flex-wrap items-center gap-2 p-1 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs text-xs font-semibold w-fit">
-        <button
-          type="button"
-          onClick={() => setActiveForm('salesTax')}
-          className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeForm === 'salesTax'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          <Percent className="w-3.5 h-3.5" />
-          Sales &amp; Use Tax Return (VAT)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveForm('payeQuarter')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeForm === 'payeQuarter'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          PAYE Summary (Period)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveForm('payeAnnual')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeForm === 'payeAnnual'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          Annual PAYE Reconciliation
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveForm('p45')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeForm === 'p45'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          Employee P45 (Draft)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveForm('contractor')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            activeForm === 'contractor'
-              ? 'bg-[#0f3d63] text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          Contractor Statement (Draft)
-        </button>
-      </div>
+      <Tabs
+        ariaLabel="Tax summary forms"
+        value={activeForm}
+        onChange={(id) => setActiveForm(id as TaxForm)}
+        tabs={[
+          { id: 'salesTax', label: 'Sales & Use Tax Return (VAT)', icon: <Percent className="w-3.5 h-3.5" /> },
+          { id: 'payeQuarter', label: 'PAYE Summary (Period)' },
+          { id: 'payeAnnual', label: 'Annual PAYE Reconciliation' },
+          { id: 'p45', label: 'Employee P45 (Draft)' },
+          { id: 'contractor', label: 'Contractor Statement (Draft)' },
+        ]}
+      />
 
       {/* LIVE SALES & USE TAX RETURN (VAT) */}
       {activeForm === 'salesTax' && (
         <div className="space-y-4">
           {taxError && (
-            <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{taxError}</span>
-            </div>
+            <InlineAlert tone="error" onDismiss={() => setTaxError(null)}>
+              {taxError}
+            </InlineAlert>
           )}
           {taxNotice && (
-            <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>{taxNotice}</span>
-            </div>
+            <InlineAlert tone="success" onDismiss={() => setTaxNotice(null)}>
+              {taxNotice}
+            </InlineAlert>
           )}
 
           {taxLoading ? (
-            <div className="p-10 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2 text-xs text-slate-500">
+            <div className="surface p-10 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>Aggregating VAT, credit memo reversals, and purchase use tax from GL...</span>
             </div>
           ) : taxSummary ? (
             <div className="space-y-4">
               {/* KPI Strip */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                  <div className="text-[11px] uppercase font-bold text-slate-500">Gross Sales ({taxSummary.invoiceCount} docs)</div>
-                  <div className="text-lg font-black tabular-nums font-mono text-slate-900 dark:text-white mt-1">
-                    {formatCurrency(Number(taxSummary.grossSales || 0), currency)}
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-1 tabular-nums">
-                    Taxable: {formatCurrency(Number(taxSummary.taxableSales || 0), currency)} · Exempt: {formatCurrency(Number(taxSummary.exemptSales || 0), currency)}
-                  </div>
-                </div>
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                  <div className="text-[11px] uppercase font-bold text-slate-500">Output VAT Collected</div>
-                  <div className="text-lg font-black tabular-nums font-mono text-blue-700 dark:text-blue-400 mt-1">
-                    {formatCurrency(Number(taxSummary.outputVatCollected || 0), currency)}
-                  </div>
-                  <div className="text-[11px] text-rose-600 mt-1 tabular-nums">
-                    Less Credit Memos: -{formatCurrency(Number(taxSummary.creditMemoVatReversed || 0), currency)}
-                  </div>
-                </div>
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                  <div className="text-[11px] uppercase font-bold text-slate-500">Purchase Use Tax Accrued</div>
-                  <div className="text-lg font-black tabular-nums font-mono text-amber-700 dark:text-amber-400 mt-1">
-                    {formatCurrency(Number(taxSummary.purchaseUseTaxAccrued || 0), currency)}
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-1">Accrued on vendor bills</div>
-                </div>
-                <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-xl p-4">
-                  <div className="text-[11px] uppercase font-bold text-emerald-800 dark:text-emerald-300">Net Tax Payable (Period)</div>
-                  <div className="text-lg font-black tabular-nums font-mono text-emerald-900 dark:text-emerald-200 mt-1">
-                    {formatCurrency(Number(taxSummary.netTaxPayableForPeriod || 0), currency)}
-                  </div>
-                  <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1 tabular-nums">
-                    GL 2200 Balance: {formatCurrency(Number(taxSummary.glTaxLiabilityBalance || 0), currency)}
-                  </div>
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <MetricTile
+                  label={`Gross Sales (${taxSummary.invoiceCount} docs)`}
+                  value={formatCurrency(Number(taxSummary.grossSales || 0), currency)}
+                  hint={`Taxable: ${formatCurrency(Number(taxSummary.taxableSales || 0), currency)} · Exempt: ${formatCurrency(Number(taxSummary.exemptSales || 0), currency)}`}
+                />
+                <MetricTile
+                  label="Output VAT Collected"
+                  value={formatCurrency(Number(taxSummary.outputVatCollected || 0), currency)}
+                  tone="blue"
+                  hint={`Less Credit Memos: -${formatCurrency(Number(taxSummary.creditMemoVatReversed || 0), currency)}`}
+                />
+                <MetricTile
+                  label="Purchase Use Tax Accrued"
+                  value={formatCurrency(Number(taxSummary.purchaseUseTaxAccrued || 0), currency)}
+                  tone="amber"
+                  hint="Accrued on vendor bills"
+                />
+                <MetricTile
+                  label="Net Tax Payable (Period)"
+                  value={formatCurrency(Number(taxSummary.netTaxPayableForPeriod || 0), currency)}
+                  tone="emerald"
+                  hint={`GL 2200 Balance: ${formatCurrency(Number(taxSummary.glTaxLiabilityBalance || 0), currency)}`}
+                />
               </div>
 
               {/* Tax Category Mappings */}
-              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="surface overflow-hidden">
+                <div className="surface-header flex-wrap gap-2">
                   <div>
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">GL Account Tax Line Mappings</h3>
-                    <p className="text-[11px] text-slate-500">Maps Chart of Accounts lines to statutory tax reporting schedules.</p>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">GL Account Tax Line Mappings</h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">Maps Chart of Accounts lines to statutory tax reporting schedules.</p>
                   </div>
                   {canWriteTax && (
                     <form onSubmit={handleSaveTaxMapping} className="flex flex-wrap items-center gap-2 text-xs">
                       <select
                         value={mapAccountId}
                         onChange={e => setMapAccountId(Number(e.target.value))}
-                        className="bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5"
+                        className="app-input !w-auto !py-1.5"
                       >
                         {accounts.map(a => (
                           <option key={a.id} value={a.id}>
@@ -373,29 +307,30 @@ export const TaxFormsView: React.FC = () => {
                         value={mapTaxLine}
                         onChange={e => setMapTaxLine(e.target.value)}
                         placeholder="Tax schedule line (e.g. output_vat_standard)"
-                        className="bg-slate-50 dark:bg-slate-850 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5 font-mono w-52"
+                        className="app-input app-input-mono !w-52 !py-1.5"
                       />
-                      <button
+                      <Button
                         type="submit"
-                        disabled={savingMap}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold disabled:opacity-50"
+                        variant="primary"
+                        size="sm"
+                        loading={savingMap}
+                        icon={<Save className="w-3.5 h-3.5" />}
                       >
-                        <Save className="w-3.5 h-3.5" />
-                        {savingMap ? 'Saving...' : 'Save Mapping'}
-                      </button>
+                        Save Mapping
+                      </Button>
                     </form>
                   )}
                 </div>
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                <table className="data-table w-full text-left text-xs">
+                  <thead>
                     <tr>
-                      <th className="px-4 py-2.5">Account Code</th>
-                      <th className="px-4 py-2.5">Account Name</th>
-                      <th className="px-4 py-2.5">Type</th>
-                      <th className="px-4 py-2.5">Statutory Tax Line</th>
+                      <th>Account Code</th>
+                      <th>Account Name</th>
+                      <th>Type</th>
+                      <th>Statutory Tax Line</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  <tbody>
                     {(!taxSummary.mappings || taxSummary.mappings.length === 0) ? (
                       <tr>
                         <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
@@ -405,10 +340,10 @@ export const TaxFormsView: React.FC = () => {
                     ) : (
                       taxSummary.mappings.map((m: any) => (
                         <tr key={m.id}>
-                          <td className="px-4 py-2 font-mono font-bold">{m.account_code || m.accountCode || '—'}</td>
-                          <td className="px-4 py-2 font-semibold">{m.account_name || m.accountName}</td>
-                          <td className="px-4 py-2 text-slate-500">{m.account_type || m.accountType}</td>
-                          <td className="px-4 py-2 font-mono text-blue-700 dark:text-blue-300">{m.tax_line || m.taxLine}</td>
+                          <td className="font-mono font-semibold">{m.account_code || m.accountCode || '—'}</td>
+                          <td className="font-semibold">{m.account_name || m.accountName}</td>
+                          <td className="text-slate-500">{m.account_type || m.accountType}</td>
+                          <td className="font-mono text-brand-700 dark:text-brand-300">{m.tax_line || m.taxLine}</td>
                         </tr>
                       ))
                     )}
@@ -418,15 +353,39 @@ export const TaxFormsView: React.FC = () => {
             </div>
           ) : null}
 
-          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+          <div className="surface p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">Tax Compliance Controls</h3>
-              <button type="button" className="px-2.5 py-1 rounded border border-slate-300 text-[11px]" onClick={async () => {
-                const jurisdiction = window.prompt('Jurisdiction', 'ZRA') || 'ZRA';
-                const periodStart = window.prompt('Period start (YYYY-MM-DD)', startDate) || startDate;
-                const periodEnd = window.prompt('Period end (YYYY-MM-DD)', endDate) || endDate;
+              <button type="button" className="btn btn-secondary btn-sm" onClick={async () => {
+                const jurisdiction = await appDialog.prompt({
+                  title: 'Add Tax Filing Period',
+                  message: 'Enter the tax authority or jurisdiction code.',
+                  label: 'Jurisdiction',
+                  defaultValue: 'ZRA',
+                  required: true,
+                });
+                if (!jurisdiction) return;
+                const periodStart = await appDialog.prompt({
+                  title: 'Filing Period Start',
+                  message: 'Select the start date for this statutory filing period.',
+                  label: 'Period start',
+                  defaultValue: startDate,
+                  inputType: 'date',
+                  required: true,
+                });
+                if (!periodStart) return;
+                const periodEnd = await appDialog.prompt({
+                  title: 'Filing Period End',
+                  message: 'Select the end date for this statutory filing period.',
+                  label: 'Period end',
+                  defaultValue: endDate,
+                  inputType: 'date',
+                  required: true,
+                });
+                if (!periodEnd) return;
                 await commercialApi.upsertTaxFilingPeriod({ jurisdiction, periodStart, periodEnd, status: 'open' });
                 setFilingPeriods(await commercialApi.listTaxFilingPeriods().catch(() => []));
+                setTaxNotice(`Added ${jurisdiction} filing period (${periodStart} → ${periodEnd}).`);
               }}>Add Filing Period</button>
             </div>
             <div className="overflow-x-auto">
@@ -693,7 +652,7 @@ export const TaxFormsView: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 };
 
