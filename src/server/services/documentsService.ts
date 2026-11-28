@@ -1495,6 +1495,14 @@ export async function generateInvoiceFromWorkflow(
   actor: ActorContext,
   input: WorkflowInvoiceGenerationInput
 ) {
+  // TEST-ONLY failure seam (env-gated, inert unless explicitly enabled). Lets an
+  // isolated harness force a deterministic invoice-stage failure AFTER the job
+  // and material issue have written, to prove the surrounding transaction rolls
+  // back. Never active in production/dev (PMS_TEST_FAIL_INVOICE unset).
+  if (process.env.PMS_TEST_FAIL_INVOICE === '1') {
+    throw new AccountingError(500, 'TEST: forced invoice generation failure', 'TEST_FORCED_INVOICE_FAILURE');
+  }
+
   let resolvedCustomerId = input.customerId && Number.isInteger(Number(input.customerId)) && Number(input.customerId) > 0
     ? Number(input.customerId)
     : null;

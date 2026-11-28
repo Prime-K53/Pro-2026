@@ -36,7 +36,7 @@ export const PageHeader: React.FC<{
     <div className="min-w-0">
       <div className="flex items-center gap-2.5">
         {icon && (
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600 ring-1 ring-brand-100 ring-inset dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-500/20">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 ring-1 ring-brand-100 ring-inset dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-500/20">
             {icon}
           </span>
         )}
@@ -93,7 +93,8 @@ export const StatCard: React.FC<{
   icon?: React.ReactNode;
   tone?: 'neutral' | 'blue' | 'emerald' | 'amber' | 'rose';
   loading?: boolean;
-}> = ({ label, value, hint, icon, tone = 'neutral', loading }) => {
+  trend?: { direction: 'up' | 'down' | 'neutral'; value: string };
+}> = ({ label, value, hint, icon, tone = 'neutral', loading, trend }) => {
   const valueTone =
     tone === 'blue'
       ? 'text-brand-600 dark:text-brand-400'
@@ -104,6 +105,17 @@ export const StatCard: React.FC<{
       : tone === 'rose'
       ? 'text-rose-600 dark:text-rose-400'
       : 'text-slate-900 dark:text-white';
+
+  const accentBar =
+    tone === 'blue'
+      ? 'bg-brand-500'
+      : tone === 'emerald'
+      ? 'bg-emerald-500'
+      : tone === 'amber'
+      ? 'bg-amber-500'
+      : tone === 'rose'
+      ? 'bg-rose-500'
+      : 'bg-slate-400';
 
   const iconTone =
     tone === 'blue'
@@ -116,14 +128,23 @@ export const StatCard: React.FC<{
       ? 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300'
       : 'bg-slate-100 text-slate-500 dark:bg-white/[0.07] dark:text-slate-300';
 
+  const trendBadge =
+    trend && trend.direction !== 'neutral'
+      ? trend.direction === 'up'
+        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+        : 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
+      : 'bg-slate-100 text-slate-600 dark:bg-white/[0.07] dark:text-slate-300';
+
   return (
-    <div className="surface surface-hover flex min-h-[124px] flex-col justify-between p-5">
+    <div className="surface surface-hover relative flex min-h-[124px] flex-col justify-between overflow-hidden p-5 pl-6">
+      {/* Left accent bar (Prime KPI) */}
+      <span className={`absolute inset-y-0 left-0 w-1 ${accentBar}`} aria-hidden="true" />
       <div className="flex items-start justify-between gap-3">
-        <span className="text-[11px] font-bold tracking-[0.07em] text-slate-500 uppercase dark:text-slate-400">
+        <span className="text-[13px] font-medium tracking-[-0.01em] text-slate-500 dark:text-slate-400">
           {label}
         </span>
         {icon && (
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${iconTone}`}>
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconTone}`}>
             {icon}
           </span>
         )}
@@ -131,11 +152,20 @@ export const StatCard: React.FC<{
       {loading ? (
         <div className="skeleton mt-3 h-8 w-32" />
       ) : (
-        <div className={`mt-2 font-mono text-[26px] font-bold leading-none tabular-nums ${valueTone}`}>
+        <div className={`mt-2 font-mono text-[26px] font-bold leading-none tracking-[-0.02em] tabular-nums ${valueTone}`}>
           {value}
         </div>
       )}
-      {hint && <div className="mt-2.5 min-h-[16px] text-[11px] text-slate-500 dark:text-slate-400">{hint}</div>}
+      {(hint || trend) && (
+        <div className="mt-2.5 flex min-h-[16px] flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+          {trend && trend.direction !== 'neutral' && (
+            <span className={`inline-flex items-center gap-0.5 rounded px-2 py-0.5 text-[11px] font-semibold ${trendBadge}`}>
+              {trend.direction === 'up' ? '▲' : '▼'} {trend.value}
+            </span>
+          )}
+          {hint}
+        </div>
+      )}
     </div>
   );
 };
@@ -209,6 +239,12 @@ interface ModalShellProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
   children: React.ReactNode;
   className?: string;
+  /**
+   * Optional guard consulted before the modal closes via Escape, overlay click
+   * or the close button. Return `false` to keep the modal open (e.g. to prompt
+   * before discarding unsaved input). When omitted, closing is unconditional.
+   */
+  beforeClose?: () => boolean;
 }
 
 export const ModalShell: React.FC<ModalShellProps> = ({
@@ -218,9 +254,17 @@ export const ModalShell: React.FC<ModalShellProps> = ({
   size = 'lg',
   children,
   className = '',
+  beforeClose,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const beforeCloseRef = useRef(beforeClose);
+  beforeCloseRef.current = beforeClose;
+  const requestCloseRef = useRef<() => void>(() => onClose());
+  requestCloseRef.current = () => {
+    if (beforeCloseRef.current && !beforeCloseRef.current()) return;
+    onClose();
+  };
 
   const widthClass: Record<string, string> = {
     sm: 'max-w-sm',
@@ -249,7 +293,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        requestCloseRef.current();
       }
       // Focus trap
       if (e.key === 'Tab' && panelRef.current) {
@@ -283,7 +327,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/60 p-4 backdrop-blur-sm sm:p-6 md:p-8"
       onMouseDown={e => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestCloseRef.current();
       }}
     >
       <div
@@ -292,7 +336,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`animate-modal-enter relative flex max-h-[92vh] w-full ${widthClass[size]} flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-pop outline-none dark:border-white/[0.08] dark:bg-slate-900 ${className}`}
+        className={`animate-modal-enter relative flex max-h-[92vh] w-full ${widthClass[size]} flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-[#fcfcfd] shadow-2xl outline-none dark:border-white/[0.08] dark:bg-slate-900 ${className}`}
       >
         {children}
       </div>
@@ -306,6 +350,8 @@ interface ModalHeaderProps {
   icon?: React.ReactNode;
   tone?: 'brand' | 'emerald' | 'amber' | 'rose' | 'slate';
   onClose: () => void;
+  /** Id applied to the title, matching the dialog's aria-labelledby. */
+  titleId?: string;
 }
 
 export const ModalHeader: React.FC<ModalHeaderProps> = ({
@@ -314,28 +360,27 @@ export const ModalHeader: React.FC<ModalHeaderProps> = ({
   icon,
   tone = 'brand',
   onClose,
+  titleId,
 }) => {
   const toneClass: Record<string, string> = {
-    brand: 'from-brand-700 via-brand-800 to-brand-950',
-    emerald: 'from-emerald-700 via-emerald-800 to-emerald-950',
-    amber: 'from-amber-600 via-amber-700 to-amber-900',
-    rose: 'from-rose-700 via-rose-800 to-rose-950',
-    slate: 'from-slate-800 via-slate-900 to-slate-950',
+    brand: 'bg-brand-50 text-brand-600 ring-brand-100 dark:bg-brand-500/10 dark:text-brand-300 dark:ring-brand-500/20',
+    emerald: 'bg-emerald-50 text-emerald-600 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20',
+    amber: 'bg-amber-50 text-amber-600 ring-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20',
+    rose: 'bg-rose-50 text-rose-600 ring-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-500/20',
+    slate: 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-white/[0.06] dark:text-slate-300 dark:ring-white/10',
   };
   return (
-    <div
-      className={`flex shrink-0 items-start justify-between gap-3 bg-gradient-to-br ${toneClass[tone]} px-5 py-4 text-white`}
-    >
+    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200/80 bg-white px-5 py-4 dark:border-white/[0.06] dark:bg-slate-900">
       <div className="flex min-w-0 items-start gap-3">
         {icon && (
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/20 ring-inset">
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${toneClass[tone]}`}>
             {icon}
           </span>
         )}
         <div className="min-w-0">
-          <h2 className="truncate text-[15px] font-bold leading-tight tracking-tight">{title}</h2>
+          <h2 id={titleId} className="truncate text-[19px] font-semibold leading-tight tracking-tight text-slate-900 dark:text-white">{title}</h2>
           {subtitle && (
-            <p className="mt-0.5 text-[11px] leading-relaxed text-white/70">{subtitle}</p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{subtitle}</p>
           )}
         </div>
       </div>
@@ -343,7 +388,7 @@ export const ModalHeader: React.FC<ModalHeaderProps> = ({
         type="button"
         onClick={onClose}
         aria-label="Close dialog"
-        className="shrink-0 rounded-lg p-1.5 text-white/70 transition-colors hover:bg-white/15 hover:text-white"
+        className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-white"
       >
         <X className="h-4 w-4" />
       </button>
@@ -486,20 +531,38 @@ export const FormField: React.FC<FormFieldProps> = ({
   error,
   children,
   className = '',
-}) => (
-  <div className={className}>
-    <label className="app-label">
-      {label}
-      {required && <span className="ml-0.5 text-rose-500">*</span>}
-    </label>
-    {children}
-    {error ? (
-      <p className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">{error}</p>
-    ) : hint ? (
-      <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{hint}</p>
-    ) : null}
-  </div>
-);
+}) => {
+  const generatedId = React.useId();
+  const hintId = `${generatedId}-hint`;
+  const describedBy = error || hint ? hintId : undefined;
+
+  type ControlProps = { id?: string; 'aria-describedby'?: string };
+  const child = React.isValidElement(children)
+    ? (children as React.ReactElement<ControlProps>)
+    : null;
+  const controlId = child?.props.id ?? generatedId;
+  const control = child
+    ? React.cloneElement(child, {
+        id: controlId,
+        'aria-describedby': describedBy,
+      })
+    : children;
+
+  return (
+    <div className={className}>
+      <label htmlFor={controlId} className="app-label">
+        {label}
+        {required && <span className="ml-0.5 text-rose-500">*</span>}
+      </label>
+      {control}
+      {error ? (
+        <p id={hintId} className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">{error}</p>
+      ) : hint ? (
+        <p id={hintId} className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{hint}</p>
+      ) : null}
+    </div>
+  );
+};
 
 interface SummaryRowProps {
   label: string;

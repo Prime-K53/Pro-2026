@@ -1,8 +1,7 @@
 export function getCurrencySymbol(currency?: string): string {
-  const trimmed = (currency || 'K').trim();
-  if (!trimmed || trimmed.toUpperCase() === 'USD') {
-    return 'K';
-  }
+  const trimmed = String(currency || '').trim();
+  if (!trimmed) return 'K';
+  if (trimmed.toUpperCase() === 'USD') return '$';
   return trimmed;
 }
 

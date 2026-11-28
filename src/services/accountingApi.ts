@@ -328,9 +328,10 @@ export const accountingApi = {
     detailType?: ApiDetailType;
     description?: string;
     parentId?: number | null;
-  }): Promise<ApiAccount> {
+  }, idempotencyKey?: string | null): Promise<ApiAccount> {
     const data = await requestJson<{ account: ApiAccount }>('/api/accounts', {
       method: 'POST',
+      headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
       body: JSON.stringify(payload),
     });
     emitAccountingUpdated();

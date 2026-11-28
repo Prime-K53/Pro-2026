@@ -5,6 +5,8 @@ import { ACCOUNTING_UPDATED_EVENT, accountingApi, ApiAccount } from '../../servi
 import { ApiCustomer, ApiInvoice, commercialApi } from '../../services/commercialApi';
 import { useFxRates } from '../../hooks/useFxRates';
 import { Pagination, pageSlice } from '../common/Pagination';
+import { FinancialDataNotice } from '../common/FinancialDataNotice';
+import { resolveFinancialFigureState } from '../common/financialDataState';
 import { documentsApi } from '../../services/documentsApi';
 import { DocumentPreviewKind, mapApiPreviewToModel } from '../../types/documents';
 import { formatCurrency } from '../../utils/currency';
@@ -738,6 +740,17 @@ export const InvoicesView: React.FC = () => {
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<ApiAccount[]>([]);
   const [aging, setAging] = useState<any>(null);
+
+  /**
+   * The A/R aging strip is derived from the sales-ledger load. It is only
+   * rendered once real rows exist, so a failed load must say so (and offer a
+   * retry) rather than leaving the user with no figure and no explanation.
+   */
+  const agingFigureState = resolveFinancialFigureState({
+    loading,
+    error: errorMsg,
+    hasData: Boolean(aging?.totals),
+  });
 
   const handleOpenPreview = async (kind: DocumentPreviewKind, id: number) => {
     try {
@@ -1857,7 +1870,14 @@ export const InvoicesView: React.FC = () => {
         </div>
         )}
 
-      {!hubOpen && aging?.totals && (
+      {!hubOpen && (
+        <>
+          <FinancialDataNotice
+            state={agingFigureState}
+            label="sales ledger data"
+            onRetry={loadData}
+          />
+          {aging?.totals && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             { label: 'Outstanding', value: aging.totals.total, tone: 'text-slate-900 dark:text-white' },
@@ -1873,6 +1893,8 @@ export const InvoicesView: React.FC = () => {
             </div>
           ))}
         </div>
+          )}
+        </>
       )}
 
       {errorMsg && (

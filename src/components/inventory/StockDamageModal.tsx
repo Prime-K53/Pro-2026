@@ -29,6 +29,57 @@ const REASON_CODES: Array<{ value: string; label: string }> = [
   { value: 'other', label: 'Other' },
 ];
 
+/**
+ * Composite damage-quantity control.
+ *
+ * FormField clones its child to inject `id`/`aria-describedby`, so this typed
+ * wrapper forwards both to the real number input. The "All" button stays a
+ * separate control and is never the labelled element.
+ */
+interface DamageQuantityControlProps {
+  id?: string;
+  'aria-describedby'?: string;
+  quantity: string;
+  onQuantityChange: (value: string) => void;
+  exceedsOnHand: boolean;
+  showAllButton: boolean;
+  onSelectAll: () => void;
+}
+
+export const DamageQuantityControl: React.FC<DamageQuantityControlProps> = ({
+  id,
+  'aria-describedby': ariaDescribedBy,
+  quantity,
+  onQuantityChange,
+  exceedsOnHand,
+  showAllButton,
+  onSelectAll,
+}) => (
+  <div className="flex items-center gap-2">
+    <input
+      id={id}
+      aria-describedby={ariaDescribedBy}
+      type="number"
+      min="0"
+      step="0.0001"
+      value={quantity}
+      onChange={e => onQuantityChange(e.target.value)}
+      placeholder="0"
+      className="app-input w-full font-mono"
+      aria-invalid={exceedsOnHand}
+    />
+    {showAllButton && (
+      <button
+        type="button"
+        onClick={onSelectAll}
+        className="btn-secondary shrink-0 px-2 py-1.5 text-[10px]"
+      >
+        All
+      </button>
+    )}
+  </div>
+);
+
 export const StockDamageModal: React.FC<StockDamageModalProps> = ({
   open,
   item,
@@ -99,6 +150,7 @@ export const StockDamageModal: React.FC<StockDamageModalProps> = ({
   return (
     <ModalShell open={open} onClose={onClose} titleId={titleId} size="2xl">
       <ModalHeader
+          titleId={titleId}
         title="Record Stock Damage"
         subtitle="Write off damaged or lost stock"
         tone="rose"
@@ -129,27 +181,13 @@ export const StockDamageModal: React.FC<StockDamageModalProps> = ({
             </div>
 
             <FormField label="Damage quantity" required hint={`Maximum ${onHand}`}>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={quantity}
-                  onChange={e => setQuantity(e.target.value)}
-                  placeholder="0"
-                  className="app-input w-full font-mono"
-                  aria-invalid={exceedsOnHand}
-                />
-                {qty > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setQuantity(String(onHand))}
-                    className="btn-secondary shrink-0 px-2 py-1.5 text-[10px]"
-                  >
-                    All
-                  </button>
-                )}
-              </div>
+              <DamageQuantityControl
+                quantity={quantity}
+                onQuantityChange={setQuantity}
+                exceedsOnHand={exceedsOnHand}
+                showAllButton={qty > 0}
+                onSelectAll={() => setQuantity(String(onHand))}
+              />
             </FormField>
             {exceedsOnHand && (
               <p className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">

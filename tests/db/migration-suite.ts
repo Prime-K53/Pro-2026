@@ -110,32 +110,40 @@ async function main() {
   // ---------------------------------------------------------------------------
   // 2. MIGRATION UPGRADES, IDEMPOTENCY & STEP-BY-STEP ROLLBACK
   // ---------------------------------------------------------------------------
-  await runTest('2. Upgrade & Rollback', 'Idempotent re-run, incremental upgrade 0001->0004->latest, full rollback latest->0000, re-apply', async () => {
+  await runTest('2. Upgrade & Rollback', 'Idempotent re-run, permitted 0089 rollback, protected 0088 refusal, staged upgrade on a fresh DB', async () => {
     const migrations = loadMigrations();
     const rerun = await migrateUp(db);
     assert.equal(rerun.applied.length, 0);
     assert.equal(rerun.skipped.length, migrations.length);
 
-    // Step-by-step full rollback to clean slate
-    const downRes = await migrateDown(db, { steps: migrations.length });
-    assert.deepEqual(downRes.rolledBack, [...migrations].reverse().map(m => m.version));
+    // Permitted rollback: the non-destructive 0089 down is allowed and re-applied.
+    const down89 = await migrateDown(db, { steps: 1 });
+    assert.deepEqual(down89.rolledBack, ['0089']);
+    const re89 = await migrateUp(db);
+    assert.deepEqual(re89.applied, ['0089']);
 
-    const remainingTables = await db.query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name <> 'schema_migrations'`
+    // Protected rollback: 0088 down must be refused BEFORE any SQL, and a
+    // multi-step request spanning it must be refused wholesale (0089 untouched).
+    const appliedBeforeRefusal = (await getAppliedMigrations(db)).map(r => r.version);
+    await assert.rejects(
+      () => migrateDown(db, { steps: 2 }),
+      /Protected migration 0088/
     );
-    assert.equal(remainingTables.rows.length, 0, 'Expected zero application tables after full rollback');
+    const appliedAfterRefusal = (await getAppliedMigrations(db)).map(r => r.version);
+    assert.deepEqual(appliedAfterRefusal, appliedBeforeRefusal, 'Refused rollback must not change migration history');
+    assert.ok(appliedAfterRefusal.includes('0088') && appliedAfterRefusal.includes('0087'));
 
-    // Incremental staged upgrade: first 0001 -> 0004, verify mid-state, then 0005 -> latest
-    const stage1 = await migrateUp(db, { targetVersion: '0004' });
+    // Incremental staged upgrade is exercised on a fresh disposable instance.
+    const stagedDb = new PGlite();
+    const stage1 = await migrateUp(stagedDb, { targetVersion: '0004' });
     assert.deepEqual(stage1.applied, ['0001', '0002', '0003', '0004']);
-
-    const appliedMid = await getAppliedMigrations(db);
+    const appliedMid = await getAppliedMigrations(stagedDb);
     assert.equal(appliedMid.length, 4);
-
-    const stage2 = await migrateUp(db);
+    const stage2 = await migrateUp(stagedDb);
     assert.deepEqual(stage2.applied, migrations.slice(4).map(m => m.version));
+    await stagedDb.close();
 
-    return `Idempotent rerun + ${migrations.length}->0 rollback + staged 0004->${migrations[migrations.length - 1].version} upgrade clean`;
+    return `Idempotent rerun + 0089 down permitted + 0088 down refused + staged 0004->${migrations[migrations.length - 1].version} upgrade clean`;
   });
 
   // ---------------------------------------------------------------------------
@@ -628,7 +636,7 @@ async function main() {
     '## Coverage Checklist',
     '',
     '- [x] Migrations executed cleanly from a completely empty PostgreSQL database (`0001` -> `0009`)',
-    '- [x] Idempotent re-runs, staged mid-version upgrades (`0001..0004` -> `0005..0009`), and full step-by-step rollbacks (`0009..0001`)',
+    '- [x] Idempotent re-runs, staged mid-version upgrades (`0001..0004` -> `0005..latest`), permitted `0089` rollback, and refusal of the protected `0087`/`0088` down migrations',
     '- [x] SHA-256 migration checksum tracking in `schema_migrations`',
     '- [x] Zero floating-point columns (`real` / `double precision`) in schema; exact `NUMERIC(19,4)` & `NUMERIC(19,6)` arithmetic verified',
     '- [x] `ON DELETE RESTRICT` foreign key protection & `raw_material` invoice line rejection trigger verified',
@@ -638,7 +646,7 @@ async function main() {
     '',
   ];
 
-  const reportPath = path.resolve(process.cwd(), 'docs', 'database', 'test-execution-report.md');
+  const reportPath = path.resolve(process.env.PMS_TEST_REPORT_DIR || path.join(process.cwd(), 'docs'), 'database', 'test-execution-report.md');
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, reportLines.join('\n'), 'utf8');
 

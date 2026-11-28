@@ -243,6 +243,10 @@ async function main() {
 
       // Convert estimate to invoice -> consumes 5 penBoxes & posts balanced AR/Revenue/VAT/COGS/Inventory JE
       const stockBefore = Number(penBox.on_hand);
+      // An estimate must be accepted before it can be converted; without this
+      // the conversion is correctly rejected with 409 ESTIMATE_NOT_ACCEPTED.
+      const accept = await adminClient.request('POST', `/api/estimates/${estId}/approve`, { body: {} });
+      assert.equal(accept.status, 200, `Estimate approval failed: ${accept.text}`);
       const conv = await adminClient.request('POST', `/api/estimates/${estId}/convert`, { body: {} });
       assert.equal(conv.status, 201);
       const convertedInv = conv.json.invoice;
@@ -902,7 +906,13 @@ async function main() {
     '',
   ];
 
-  const reportPath = path.resolve(process.cwd(), 'docs', 'commercial', 'test-execution-report.md');
+  // Test-only report destination override. When PMS_TEST_REPORT_DIR is set the
+  // report is written there instead of the repository, so a run can be kept
+  // isolated without changing the default behaviour.
+  const reportDir = process.env.PMS_TEST_REPORT_DIR
+    ? path.resolve(process.env.PMS_TEST_REPORT_DIR)
+    : path.resolve(process.cwd(), 'docs', 'commercial');
+  const reportPath = path.join(reportDir, 'test-execution-report.md');
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, reportLines.join('\n'), 'utf8');
   console.log(`\nCommercial test report written to ${reportPath}`);

@@ -133,6 +133,72 @@ export const printingApi = {
   },
 
   /**
+   * Atomic quick-print sale. Creates the production job, issues materials,
+   * records WIP, raises the linked invoice and — in cash mode — records and
+   * allocates the full payment, all in one server transaction. The server is
+   * the financial authority; the browser must not re-create any of these
+   * records. A mandatory idempotency key makes a retried request replay the
+   * original committed result instead of posting twice.
+   */
+  async postQuickSale(payload: {
+    mode: 'on_account' | 'cash';
+    jobType?: 'quick_photocopy' | 'type_and_printing' | 'general_print';
+    customerId?: number | null;
+    customerName?: string;
+    rawPaperItemId: number;
+    rawTonerItemId: number;
+    title: string;
+    pages: number;
+    copies: number;
+    printSide?: 'Single-Sided' | 'Duplex';
+    typingFeeMode?: 'flat' | 'per_page';
+    typingFeeRate?: number;
+    finishingCost?: number;
+    finishingCostPerPage?: number;
+    manualSellingPrice?: number;
+    manualSellingPricePerSheet?: number;
+    jobDate?: string;
+    notes?: string | null;
+    paymentMethod?: string;
+    depositToAccountId?: number | null;
+    approvalRequestId?: number | null;
+    idempotencyKey: string;
+  }): Promise<{
+    mode: 'on_account' | 'cash';
+    job: {
+      id: number;
+      jobNumber: string;
+      jobType: string;
+      title: string;
+      pages: number;
+      copies: number;
+      printSide: string;
+      customerId: number | null;
+      customerName: string | null;
+      jobDate: string;
+      sheetsUsed: number;
+      impressionsUsed: number;
+      paperCost: number;
+      tonerCost: number;
+      totalCost: number;
+      manualSellingPrice: number;
+      profit: number;
+    };
+    invoice: { id: number; invoiceNumber: string; total: string };
+    wipJournalTxnId: number | null;
+    payment?: { id: number; amount: string; allocations: Array<{ invoiceId: number; amount: string; status: string }> };
+    idempotentReplay: boolean;
+  }> {
+    const d = await requestJson<any>('/api/printing/quick-sales', {
+      method: 'POST',
+      headers: idempotencyHeaders(payload.idempotencyKey),
+      body: JSON.stringify(payload),
+    });
+    emitAccountingUpdated();
+    return d;
+  },
+
+  /**
    * Recent quick-print desk jobs (newest first) for the desk history panel.
    */
   async listQuickPrintJobs(limit = 50): Promise<any[]> {

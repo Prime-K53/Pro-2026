@@ -1,12 +1,55 @@
 import type { Transaction } from '@electric-sql/pglite';
+import { randomUUID } from 'node:crypto';
 import { AccountingError } from './accountingEngine.ts';
 import { decryptSecret } from './secretCrypto.ts';
-import { chatCompletion, type AiProvider, type AiProviderConfig } from './aiProvider.ts';
-import { parseOcrExtraction, type OcrExtraction } from './ocrSchema.ts';
+import { chatCompletion, type AiProvider, type AiProviderConfig, type AiChatResponse } from './aiProvider.ts';
+import { parseOcrExtraction, type OcrExtraction, type OcrKind } from './ocrSchema.ts';
+import { reserveAttempt, settleAttempt } from './aiService.ts';
+import { resolveOcrModel, ocrImageTokens, conservativeTextTokens } from './ocrEligibility.ts';
+import { decodeOcrImage } from './ocrImage.ts';
 import { writeAuditLog } from '../audit.ts';
 
-const OCR_PROMPT_VERSION = 'v1';
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const OCR_PROMPT_VERSION = 'v2';
+
+/** Overall confidence below this blocks auto-fill and forces manual review. */
+export const OCR_CONFIDENCE_THRESHOLD = 0.6;
+
+function buildOcrSystemPrompt(kind: string): string {
+  const counterparty =
+    kind === 'supplier_bill'
+      ? 'the SUPPLIER/vendor issuing the bill'
+      : kind === 'receipt'
+        ? 'the customer who paid (payment receipt)'
+        : 'the customer the quote/invoice is addressed to';
+  return `You are an expert accounting document digitizer. Extract a ${kind} from the image.
+Return ONLY a JSON object with this exact shape:
+{
+  "kind": "${kind}",
+  "counterpartyName": string (${counterparty}),
+  "counterpartyPhone": string|null,
+  "counterpartyEmail": string|null,
+  "date": "YYYY-MM-DD",
+  "currency": string (ISO 4217, e.g. MWK, USD),
+  "taxRate": number|null (percentage 0-100),
+  "paymentMethod": string|null,
+  "reference": string|null,
+  "discount": number|null,
+  "lines": [ { "description": string, "quantity": number, "rate": number, "amount": number, "confidence": number } ],
+  "subtotal": number,
+  "tax": number|null,
+  "total": number,
+  "confidence": number (0-1 overall)
+}
+Rules: never invent data; use null when a field is absent; keep line order; confidence reflects OCR clarity. The server recomputes totals, so line amounts must equal quantity * rate.`;
+}
+
+// D-08/R3: the old fixed 2048-token image allowance is NO LONGER a safety
+// guarantee. OCR now reserves a defensible, provider/model-specific maximum
+// (see ocrEligibility.ts) computed from the decoded image dimensions and the
+// documented OpenAI tile formula, plus the enforced output ceiling. The export
+// is retained only for backward compatibility with older tests.
+/** @deprecated Not used as a safety bound. See ocrEligibility.ocrImageTokens. */
+export const OCR_IMAGE_TOKEN_RESERVE = 2048;
 
 const SYSTEM_PROMPT = `You are an expert accounting document digitizer. Extract a quotation or invoice from the image.
 Return ONLY a JSON object with this exact shape:
@@ -38,10 +81,12 @@ function resolveConfig(row: any): AiProviderConfig {
 
 /** Recompute totals from lines so the model's arithmetic is never trusted. */
 function reconcileTotals(ext: OcrExtraction): OcrExtraction {
-  const subtotal = ext.lines.reduce((s, l) => s + (Number(l.amount) || Number(l.quantity) * Number(l.rate) || 0), 0);
+  // Always derive line amounts from quantity * rate; never trust a model amount.
+  const subtotal = ext.lines.reduce((s, l) => s + Number(l.quantity) * Number(l.rate), 0);
   const rate = Number(ext.taxRate) || 0;
   const tax = rate > 0 ? Math.round(subtotal * rate) / 100 : Number(ext.tax) || 0;
-  const total = subtotal + tax;
+  const discount = Number(ext.discount) || 0;
+  const total = subtotal + tax - discount;
   return { ...ext, subtotal, tax, total };
 }
 
@@ -51,19 +96,71 @@ export interface OcrExtractResult {
   extraction: OcrExtraction;
   model: string;
   duplicate: boolean;
+  /** True when confidence is below the gate — the draft must be reviewed. */
+  needsReview: boolean;
+  /** True when a prior non-identical document with the same business identity exists. */
+  businessDuplicate: boolean;
 }
 
-export async function extractDocument(
+type OcrProviderMessages = Array<{ role: 'user' | 'assistant' | 'system'; content: string; images?: string[] }>;
+
+/**
+ * Phase 1 (D-08): short company-scoped transaction. Validates the request,
+ * computes the document hash, performs the existing deduplication check, resolves
+ * the provider config, and RESERVES D-05 budget + a durable attempt BEFORE any
+ * external call. No provider/network call happens here.
+ *
+ * Returns either a duplicate hit (existing extraction, no reservation) or a
+ * prepared request (with a reserved attempt) ready for Phase 2.
+ */
+export interface PreparedOcr {
+  duplicate: false;
+  requestId: string;
+  attemptId: number;
+  providerConfig: AiProviderConfig;
+  messages: OcrProviderMessages;
+  imageHash: string;
+  kind: OcrKind;
+  mime: string;
+  /** Reserved + enforced maximum output tokens for the provider call. */
+  maxOutputTokens: number;
+}
+
+export interface PreparedOcrDuplicate {
+  duplicate: true;
+  result: OcrExtractResult;
+}
+
+export async function prepareOcrExtraction(
   tx: Transaction,
   companyId: number,
-  actor: { userId: number; username: string },
-  input: { kind: 'quote' | 'invoice'; imageBase64: string; mime?: string }
-): Promise<OcrExtractResult> {
-  if (!input.imageBase64 || !/^data:image\//.test(input.imageBase64)) {
-    throw new AccountingError(400, 'A valid image is required', 'IMAGE_REQUIRED');
-  }
-  if (input.imageBase64.length > MAX_IMAGE_BYTES) {
-    throw new AccountingError(413, 'Image is too large (max 10MB)', 'IMAGE_TOO_LARGE');
+  _actor: { userId: number; username: string },
+  input: { kind: OcrKind; imageBase64: string; mime?: string }
+): Promise<PreparedOcr | PreparedOcrDuplicate> {
+  // Validate + decode the ACTUAL image (format + dimensions) before anything else.
+  const decoded = decodeOcrImage(input.imageBase64);
+  const imageHash = await sha256(decoded.dataUrl);
+
+  // Existing deduplication: a previously stored extraction for the same image is
+  // returned as-is. No provider call and no new reservation for a duplicate.
+  const existing = await tx.query<{ id: string; extraction_jsonb: any; model: string }>(
+    `SELECT id::text AS id, extraction_jsonb, model FROM ocr_extractions
+      WHERE company_id = $1 AND image_sha256 = $2 LIMIT 1`,
+    [companyId, imageHash]
+  );
+  if (existing.rows.length > 0) {
+    return {
+      duplicate: true,
+      result: {
+        id: existing.rows[0].id,
+        imageHash,
+        extraction: existing.rows[0].extraction_jsonb as OcrExtraction,
+        model: existing.rows[0].model || '',
+        duplicate: true,
+        needsReview: Number(existing.rows[0].extraction_jsonb?.confidence ?? 0) < OCR_CONFIDENCE_THRESHOLD,
+        businessDuplicate: false,
+      },
+    };
   }
 
   const cfgRes = await tx.query<any>(
@@ -76,48 +173,123 @@ export async function extractDocument(
   }
   const config = resolveConfig(cfgRes.rows[0]);
 
-  const imageHash = await sha256(input.imageBase64);
-  const existing = await tx.query<{ id: string; extraction_jsonb: any; model: string }>(
-    `SELECT id::text AS id, extraction_jsonb, model FROM ocr_extractions
-      WHERE company_id = $1 AND image_sha256 = $2 LIMIT 1`,
-    [companyId, imageHash]
-  );
-  if (existing.rows.length > 0) {
-    return {
-      id: existing.rows[0].id,
-      imageHash,
-      extraction: existing.rows[0].extraction_jsonb as OcrExtraction,
-      model: existing.rows[0].model || '',
-      duplicate: true,
-    };
+  // OCR-specific, model-exact eligibility. Fail closed for unsupported combos.
+  const policy = resolveOcrModel(config.provider, config.modelName);
+  if (!policy || policy.provider !== config.provider) {
+    throw new AccountingError(400, 'OCR is not supported for the configured provider/model.', 'OCR_PROVIDER_UNSUPPORTED');
   }
 
-  const response = await chatCompletion(config, [
-    { role: 'system', content: SYSTEM_PROMPT },
+  const messages: OcrProviderMessages = [
+    { role: 'system', content: buildOcrSystemPrompt(input.kind) },
     {
       role: 'user',
       content: `Extract this ${input.kind}. Return only the JSON.`,
-      images: [input.imageBase64],
+      images: [decoded.dataUrl],
     },
-  ]);
+  ];
 
-  const extraction = reconcileTotals(parseOcrExtraction(response.content));
+  // Defensible maximum image tokens for the exact representation (detail:"high").
+  // Provably conservative text upper bound (UTF-8 bytes + framing), not chars/4.
+  const textTokens = conservativeTextTokens(messages);
+  const maxImageTokens = ocrImageTokens(policy, decoded.width, decoded.height);
+  const maxOutputTokens = policy.maxOutputTokens;
+  // Complete maximum request cost reserved BEFORE any provider invocation.
+  const totalReservation = textTokens + maxImageTokens + maxOutputTokens;
+  const requestId = randomUUID();
+  const reservation = await reserveAttempt(
+    tx,
+    companyId,
+    requestId,
+    1,
+    config.provider,
+    config.modelName,
+    messages,
+    maxOutputTokens,
+    { tokenOverride: totalReservation }
+  );
+  // The reservation is immutable and matches the exact request (same messages,
+  // image representation and output ceiling) sent in Phase 2.
+
+  return {
+    duplicate: false,
+    requestId,
+    attemptId: reservation.attemptId,
+    providerConfig: config,
+    messages,
+    imageHash,
+    kind: input.kind,
+    mime: decoded.format === 'jpeg' ? 'image/jpeg' : 'image/png',
+    maxOutputTokens,
+  };
+}
+
+/**
+ * Phase 2 (D-08): provider execution OUTSIDE all database transactions. The
+ * provider function is injectable (defaults to the real chatCompletion) so tests
+ * can supply a stub without any network access. Callers MUST NOT hold an open
+ * company transaction while this runs.
+ */
+export async function runOcrProvider(
+  prep: PreparedOcr,
+  providerFn: (config: AiProviderConfig, messages: OcrProviderMessages, opts?: { maxOutputTokens?: number }) => Promise<AiChatResponse> = chatCompletion
+): Promise<AiChatResponse> {
+  return providerFn(prep.providerConfig, prep.messages, { maxOutputTokens: prep.maxOutputTokens });
+}
+
+/**
+ * Phase 3 (D-08): new short company-scoped transaction. Validates provider
+ * output with the existing schema, reconciles totals, SETTLES the D-05 attempt
+ * from trusted provider usage, persists the extraction and audit. No financial
+ * records are created here — posting remains a separate, explicitly authorized
+ * human action.
+ */
+export async function finalizeOcrExtraction(
+  tx: Transaction,
+  companyId: number,
+  actor: { userId: number; username: string },
+  prep: PreparedOcr,
+  raw: AiChatResponse
+): Promise<OcrExtractResult> {
+  const extraction = reconcileTotals(parseOcrExtraction(raw.content));
+
+  // Confidence gate: low-confidence extractions never auto-fill; they are stored
+  // as needs_review and must be confirmed by a human.
+  const needsReview = Number(extraction.confidence ?? 0) < OCR_CONFIDENCE_THRESHOLD;
+  const status = needsReview ? 'needs_review' : 'extracted';
+
+  // Business-document dedup (distinct from image-hash dedup): flag a prior
+  // non-identical document with the same kind + counterparty + date + total.
+  const bizDup = await tx.query<{ id: string }>(
+    `SELECT id::text AS id FROM ocr_extractions
+      WHERE company_id = $1 AND kind = $2
+        AND lower(extraction_jsonb->>'counterpartyName') = lower($3)
+        AND extraction_jsonb->>'date' = $4
+        AND (extraction_jsonb->>'total')::numeric = $5
+      LIMIT 1`,
+    [companyId, prep.kind, extraction.counterpartyName, extraction.date, String(extraction.total)]
+  );
+  const businessDuplicate = bizDup.rows.length > 0;
+
+  // Settle the reserved attempt from trusted provider usage (or the conservative
+  // reservation when usage is absent — never zero, never client-supplied).
+  await settleAttempt(tx, companyId, prep.attemptId, raw.usage, raw.requestId);
 
   const ins = await tx.query<{ id: string }>(
     `INSERT INTO ocr_extractions
-       (company_id, kind, image_sha256, mime, raw_text, extraction_jsonb, confidence, model, prompt_version, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6::JSONB, $7, $8, $9, $10)
+       (company_id, kind, image_sha256, mime, raw_text, extraction_jsonb, confidence, model, prompt_version, status, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6::JSONB, $7, $8, $9, $10, $11)
      RETURNING id::text AS id`,
     [
       companyId,
-      input.kind,
-      imageHash,
-      input.mime || 'image/png',
+      prep.kind,
+      prep.imageHash,
+      prep.mime,
       extraction.rawText || null,
       JSON.stringify(extraction),
       extraction.confidence ?? 0,
-      response.model,
+      raw.model,
       OCR_PROMPT_VERSION,
+      status,
       actor.userId,
     ]
   );
@@ -129,10 +301,10 @@ export async function extractDocument(
     action: 'ocr.extract',
     tableName: 'ocr_extractions',
     recordId: 0,
-    newValues: { id: ins.rows[0].id, kind: input.kind, confidence: extraction.confidence, model: response.model },
+    newValues: { id: ins.rows[0].id, kind: prep.kind, confidence: extraction.confidence, model: raw.model, status, businessDuplicate },
   });
 
-  return { id: ins.rows[0].id, imageHash, extraction, model: response.model, duplicate: false };
+  return { id: ins.rows[0].id, imageHash: prep.imageHash, extraction, model: raw.model, duplicate: false, needsReview, businessDuplicate };
 }
 
 export async function getExtraction(tx: Transaction, companyId: number, id: string) {

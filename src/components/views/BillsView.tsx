@@ -6,6 +6,8 @@ import { ApiBill, ApiPurchaseOrder, ApiVendor, commercialApi } from '../../servi
 import { printingApi, type ApiPrintingJob } from '../../services/printingApi';
 import { useFxRates } from '../../hooks/useFxRates';
 import { Pagination, pageSlice } from '../common/Pagination';
+import { FinancialDataNotice } from '../common/FinancialDataNotice';
+import { resolveFinancialFigureState } from '../common/financialDataState';
 import { formatCurrency } from '../../utils/currency';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
@@ -418,6 +420,18 @@ export const BillsView: React.FC = () => {
   const pagedBills = pageSlice(filteredBills, page, pageSize);
 
   const totalAp = bills.filter(b => b.status !== 'voided' && b.balanceDue > 0).reduce((s, b) => s + b.balanceDue, 0);
+
+  /**
+   * The KPI strip is derived from the purchasing load, so it may only be shown
+   * as current when that load succeeded. A failed load must not render K0/0
+   * counts as though they were real, and a failed refresh must mark the
+   * retained figures as stale.
+   */
+  const purchasingFigureState = resolveFinancialFigureState({
+    loading,
+    error: errorMsg,
+    hasData: bills.length > 0 || purchaseOrders.length > 0 || vendors.length > 0,
+  });
 
   const buildBillActionContext = (bill: ApiBill, pendingId?: string | null): ActionEligibilityContext<ApiBill> => ({
     authenticated,
@@ -1006,6 +1020,12 @@ export const BillsView: React.FC = () => {
       )}
 
       {/* KPI Cards */}
+      <FinancialDataNotice
+        state={purchasingFigureState}
+        label="purchasing data"
+        onRetry={loadData}
+      />
+      {(purchasingFigureState === 'ready' || purchasingFigureState === 'stale') && (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
           <div>
@@ -1035,6 +1055,7 @@ export const BillsView: React.FC = () => {
           <Building2 className="w-6 h-6 text-blue-500" />
         </div>
       </div>
+      )}
 
       {/* Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">

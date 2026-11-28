@@ -133,6 +133,7 @@ export const EditItemModal: React.FC<EditItemModalProps> = ({
   return (
     <ModalShell open={open} onClose={onClose} titleId="edit-item-modal-title" size="2xl">
       <ModalHeader
+          titleId="edit-item-modal-title"
         title="Edit Item Details"
         subtitle={`Update master data for ${item.sku}`}
         tone="brand"

@@ -5,6 +5,8 @@ import { PayrollItem, PayrollRun } from '../../types/accounting';
 import { payrollApi } from '../../services/payrollApi';
 import { calculatePayrollItem } from '../../services/taxCalculation';
 import { formatCurrency } from '../../utils/currency';
+import { FinancialDataNotice } from '../common/FinancialDataNotice';
+import { financialFigureSourceFromDomains, resolveFinancialFigureState } from '../common/financialDataState';
 import { AdvancedActionsMenu } from '../actions/AdvancedActionsMenu';
 import { resolveActions } from '../../actions/evaluateActions';
 import type { ActionEligibilityContext, AdvancedActionDefinition } from '../../actions/types';
@@ -34,6 +36,8 @@ export const PayrollView: React.FC = () => {
     employees,
     payrollRuns,
     accounts,
+    financialData,
+    refreshFinancialData,
     setIsNewEmployeeOpen,
     setCurrentView,
     companyProfile,
@@ -41,6 +45,16 @@ export const PayrollView: React.FC = () => {
   } = useAccounting();
   const currency = companyProfile.currency || 'K';
   const { authenticated, permissions, activeCompany } = useAuth();
+
+  /**
+   * Payroll totals are derived from the employee roster and the posted runs.
+   * Both are backend-owned context domains, so the figures may only be shown
+   * as current when those domains loaded successfully; a failed refresh marks
+   * the retained figures stale instead of presenting them as current.
+   */
+  const payrollFigureState = resolveFinancialFigureState(
+    financialFigureSourceFromDomains(financialData, ['employees', 'payrollRuns'])
+  );
 
   const [activeTab, setActiveTab] = useState<
     'runs' | 'wizard' | 'employees' | 'advances' | 'deductions' | 'statutory' | 'controls' | 'bank'
@@ -493,6 +507,15 @@ export const PayrollView: React.FC = () => {
           </div>
 
           {/* Grand Totals Strip */}
+          {/* Derived from the employee roster, so it is only trustworthy when
+              that roster loaded successfully. A failed load must not render
+              K0 payroll totals as though they were real. */}
+          <FinancialDataNotice
+            state={payrollFigureState}
+            label="payroll data"
+            onRetry={refreshFinancialData}
+          />
+          {(payrollFigureState === 'ready' || payrollFigureState === 'stale') && (
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-6 font-mono text-xs">
             <div>
               <span className="text-slate-500">Gross Wages (Dr. Payroll Exp):</span>
@@ -544,6 +567,7 @@ export const PayrollView: React.FC = () => {
               {running ? 'Posting to server…' : 'Authorize & Process Payroll'}
             </button>
           </div>
+          )}
         </div>
       )}
 

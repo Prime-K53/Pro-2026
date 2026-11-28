@@ -1,5 +1,7 @@
 import { requestJson } from './http';
 
+export type OcrKind = 'quote' | 'invoice' | 'receipt' | 'supplier_bill';
+
 export interface OcrLine {
   description: string;
   quantity: number;
@@ -9,13 +11,16 @@ export interface OcrLine {
 }
 
 export interface OcrExtraction {
-  kind: 'quote' | 'invoice';
+  kind: OcrKind;
   counterpartyName: string;
   counterpartyPhone?: string | null;
   counterpartyEmail?: string | null;
   date: string;
   currency: string;
   taxRate?: number | null;
+  paymentMethod?: string | null;
+  reference?: string | null;
+  discount?: number | null;
   lines: OcrLine[];
   subtotal: number;
   tax?: number | null;
@@ -30,10 +35,14 @@ export interface OcrExtractResult {
   extraction: OcrExtraction;
   model: string;
   duplicate: boolean;
+  /** Confidence below the gate — the draft must be reviewed before use. */
+  needsReview: boolean;
+  /** A prior non-identical document with the same business identity exists. */
+  businessDuplicate: boolean;
 }
 
 export const ocrApi = {
-  async extract(kind: 'quote' | 'invoice', imageBase64: string, mime?: string): Promise<OcrExtractResult> {
+  async extract(kind: OcrKind, imageBase64: string, mime?: string): Promise<OcrExtractResult> {
     return requestJson<OcrExtractResult>('/api/ai/ocr/extract', {
       method: 'POST',
       body: JSON.stringify({ kind, imageBase64, mime }),

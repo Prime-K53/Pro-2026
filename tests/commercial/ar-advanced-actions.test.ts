@@ -87,6 +87,34 @@ async function main() {
       return `Created Invoice #${invoiceId} for K1,000 balance`;
     });
 
+    // A customer deposit can only be applied once the deposit/unearned
+    // liability actually holds funds. Fund it through the supported journal
+    // workflow (Dr Cash 1010 / Cr Customer Deposits 2300) before applying.
+    await runTest('3a. Fund Customer Deposit', 'Fund the customer deposit liability via a posted journal', async () => {
+      const acctRes = await admin.request('GET', '/api/accounts');
+      assert.equal(acctRes.status, 200, `Accounts fetch failed: ${acctRes.text}`);
+      const accounts: any[] = acctRes.json?.accounts || acctRes.json || [];
+      const cash = accounts.find(a => a.code === '1010');
+      const deposits = accounts.find(a => a.code === '2300');
+      assert.ok(cash?.id, 'Expected cash account 1010');
+      assert.ok(deposits?.id, 'Expected customer deposit account 2300');
+
+      const res = await admin.request('POST', '/api/journals', {
+        body: {
+          txnDate: '2026-11-25',
+          reference: 'FUND-DEPOSIT-1',
+          description: 'Fund customer deposit liability for deposit application test',
+          idempotencyKey: 'test-fund-deposit-1',
+          lines: [
+            { accountId: cash.id, debit: '1000.00', credit: '0' },
+            { accountId: deposits.id, debit: '0', credit: '1000.00' },
+          ],
+        },
+      });
+      assert.equal(res.status, 201, `Funding journal failed: ${res.text}`);
+      return `Funded K1,000 deposit liability, journal #${res.json?.entry?.id ?? res.json?.id}`;
+    });
+
     await runTest('3. Apply Deposit', 'Apply K400 customer advance deposit', async () => {
       const res = await admin.request('POST', `/api/invoices/${invoiceId}/apply-deposit`, {
         body: { amount: 400, sourceType: 'deposit' },

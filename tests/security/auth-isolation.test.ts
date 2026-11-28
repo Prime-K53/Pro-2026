@@ -461,7 +461,7 @@ async function main() {
     '',
   ];
 
-  const reportPath = path.resolve(process.cwd(), 'docs', 'security', 'security-test-report.md');
+  const reportPath = path.resolve(process.env.PMS_TEST_REPORT_DIR || path.join(process.cwd(), 'docs'), 'security', 'security-test-report.md');
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, reportLines.join('\n'), 'utf8');
   console.log(`\nSecurity test report written to ${reportPath}`);

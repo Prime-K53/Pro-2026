@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
+import { accountingApi } from '../../services/accountingApi';
+import { commercialApi } from '../../services/commercialApi';
+import { ApiError } from '../../services/http';
 import {
   FileSpreadsheet,
   X,
@@ -28,14 +31,33 @@ interface IifImportModalProps {
   onClose?: () => void;
 }
 
+type ImportRowStatus = 'created' | 'pending' | 'skipped' | 'failed';
+interface ImportRowResult {
+  row: number;
+  type: 'ACCNT' | 'CUST';
+  label: string;
+  status: ImportRowStatus;
+  reason: string;
+}
+
+/** Stable, content-derived key (not a display-name hash) for retry safety. */
+function stableRowKey(type: string, identity: string): string {
+  let h = 5381;
+  const s = `${type}:${identity.trim().toLowerCase()}`;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `iif-${type.toLowerCase()}-${(h >>> 0).toString(36)}`;
+}
+
 export const IifImportModal: React.FC<IifImportModalProps> = (props) => {
-  const { isIifImportOpen, setIsIifImportOpen, addAccount, addCustomer, triggerShortcutNotice } = useAccounting();
+  const { isIifImportOpen, setIsIifImportOpen, triggerShortcutNotice } = useAccounting();
   const isOpen = props.isOpen !== undefined ? props.isOpen : isIifImportOpen;
   const onClose = props.onClose || (() => setIsIifImportOpen(false));
 
   const [activePreset, setActivePreset] = useState<'coa' | 'customers' | 'custom'>('coa');
   const [iifText, setIifText] = useState(SAMPLE_IIF_COA);
   const [parsedRowsCount, setParsedRowsCount] = useState<number>(5);
+  const [importing, setImporting] = useState(false);
+  const [results, setResults] = useState<ImportRowResult[] | null>(null);
 
   // Dialogs opened from the header must be dismissible from the keyboard.
   useEffect(() => {
@@ -63,56 +85,121 @@ export const IifImportModal: React.FC<IifImportModalProps> = (props) => {
     }
   };
 
-  const handleExecuteImport = () => {
+  const handleExecuteImport = async () => {
     const lines = iifText.split('\n').map(l => l.trim()).filter(Boolean);
-    let importedCount = 0;
+    setImporting(true);
+    setResults(null);
 
-    lines.forEach(line => {
+    // Parse + validate the whole file before any mutation.
+    type ParsedRow =
+      | { kind: 'ACCNT'; row: number; name: string; code: string | null; typeMapped: any; description: string }
+      | { kind: 'CUST'; row: number; companyName: string; addr1: string; addr2: string; terms: string };
+    const parsed: ParsedRow[] = [];
+    const out: ImportRowResult[] = [];
+    const seen = new Set<string>();
+
+    lines.forEach((line, idx) => {
       const parts = line.split('\t');
       const recordType = parts[0];
-
+      const rowNo = idx + 1;
       if (recordType === 'ACCNT') {
-        const name = parts[1] || 'Imported Account';
+        const name = (parts[1] || '').trim();
+        if (!name) {
+          out.push({ row: rowNo, type: 'ACCNT', label: '(no name)', status: 'failed', reason: 'Missing account name' });
+          return;
+        }
         const typeRaw = parts[2] || 'Expense';
-        const desc = parts[3] || '';
-        const bal = parseFloat(parts[4]) || 0;
-
         let typeMapped: any = 'Expense';
         if (typeRaw === 'BANK') typeMapped = 'Bank';
         else if (typeRaw === 'OCASSET') typeMapped = 'OtherCurrentAsset';
         else if (typeRaw === 'FIXASSET') typeMapped = 'FixedAsset';
         else if (typeRaw === 'OCLIAB') typeMapped = 'OtherCurrentLiability';
         else if (typeRaw === 'INC') typeMapped = 'Income';
-
-        addAccount({
-          code: `${Math.floor(1800 + Math.random() * 8000)}`,
-          name,
-          type: typeMapped,
-          description: desc,
-          balance: bal,
-        });
-        importedCount++;
+        const code = (parts[5] || '').trim() || null;
+        const identity = code || name;
+        if (seen.has(`ACCNT:${identity.toLowerCase()}`)) {
+          out.push({ row: rowNo, type: 'ACCNT', label: name, status: 'skipped', reason: 'Duplicate row in file' });
+          return;
+        }
+        seen.add(`ACCNT:${identity.toLowerCase()}`);
+        parsed.push({ kind: 'ACCNT', row: rowNo, name, code, typeMapped, description: parts[3] || '' });
       } else if (recordType === 'CUST') {
-        const companyName = parts[1] || 'Imported Customer';
-        const addr1 = parts[2] || '';
-        const addr2 = parts[3] || '';
-        const terms = parts[4] || 'Net 30';
-
-        addCustomer({
-          name: companyName,
-          companyName,
-          email: `purchasing@${companyName.toLowerCase().replace(/[^a-z]/g, '')}.com`,
-          phone: '(555) 019-2831',
-          billingAddress: `${addr1}, ${addr2}`,
-          terms: terms as any,
-          notes: 'Migrated from QuickBooks IIF file',
-        });
-        importedCount++;
+        const companyName = (parts[1] || '').trim();
+        if (!companyName) {
+          out.push({ row: rowNo, type: 'CUST', label: '(no name)', status: 'failed', reason: 'Missing customer name' });
+          return;
+        }
+        if (seen.has(`CUST:${companyName.toLowerCase()}`)) {
+          out.push({ row: rowNo, type: 'CUST', label: companyName, status: 'skipped', reason: 'Duplicate row in file' });
+          return;
+        }
+        seen.add(`CUST:${companyName.toLowerCase()}`);
+        parsed.push({ kind: 'CUST', row: rowNo, companyName, addr1: parts[2] || '', addr2: parts[3] || '', terms: parts[4] || 'Net 30' });
       }
     });
 
-    triggerShortcutNotice(`Successfully imported ${importedCount} QuickBooks IIF records into Printing Management System!`);
-    onClose();
+    // Persist each valid row through the authoritative APIs. Per-row keys make a
+    // retry safe; the server's unique constraints are the authoritative
+    // duplicate guard (these endpoints do not use request_keys).
+    for (const p of parsed) {
+      if (p.kind === 'ACCNT') {
+        try {
+          await accountingApi.createAccount(
+            { code: p.code, name: p.name, accountType: p.typeMapped, description: p.description },
+            stableRowKey('ACCNT', p.code || p.name)
+          );
+          out.push({ row: p.row, type: 'ACCNT', label: p.name, status: 'created', reason: 'Created' });
+        } catch (err) {
+          const code = err instanceof ApiError ? (err.body as any)?.code : undefined;
+          if (err instanceof ApiError && err.status === 409 && code === 'DUPLICATE_ACCOUNT_CODE') {
+            out.push({ row: p.row, type: 'ACCNT', label: p.name, status: 'skipped', reason: 'Account code already exists' });
+          } else {
+            out.push({ row: p.row, type: 'ACCNT', label: p.name, status: 'failed', reason: (err as Error)?.message || 'Account import failed' });
+          }
+        }
+      } else {
+        try {
+          const created = await commercialApi.createCustomer(
+            {
+              name: p.companyName,
+              companyName: p.companyName,
+              email: `purchasing@${p.companyName.toLowerCase().replace(/[^a-z]/g, '')}.com`,
+              phone: '(555) 019-2831',
+              billingAddress: `${p.addr1}, ${p.addr2}`,
+              terms: p.terms as any,
+              notes: 'Migrated from QuickBooks IIF file',
+            },
+            stableRowKey('CUST', p.companyName)
+          );
+          if (!created || !(created as any).id) {
+            // HTTP 202 — pending maker-checker approval, NOT created.
+            out.push({ row: p.row, type: 'CUST', label: p.companyName, status: 'pending', reason: 'Pending approval' });
+          } else {
+            out.push({ row: p.row, type: 'CUST', label: p.companyName, status: 'created', reason: 'Created' });
+          }
+        } catch (err) {
+          const code = err instanceof ApiError ? (err.body as any)?.code : undefined;
+          if (err instanceof ApiError && err.status === 409 && code === 'DUPLICATE_CUSTOMER') {
+            out.push({ row: p.row, type: 'CUST', label: p.companyName, status: 'skipped', reason: 'Customer already exists' });
+          } else {
+            out.push({ row: p.row, type: 'CUST', label: p.companyName, status: 'failed', reason: (err as Error)?.message || 'Customer import failed' });
+          }
+        }
+      }
+    }
+
+    const ordered = [...out].sort((a, b) => a.row - b.row);
+    setResults(ordered);
+    setImporting(false);
+    const created = ordered.filter(r => r.status === 'created').length;
+    const pending = ordered.filter(r => r.status === 'pending').length;
+    const skipped = ordered.filter(r => r.status === 'skipped').length;
+    const failed = ordered.filter(r => r.status === 'failed').length;
+    triggerShortcutNotice(
+      `IIF import: ${created} created, ${pending} pending approval, ${skipped} skipped, ${failed} failed.`
+    );
+    // Do not auto-close: the operator must see the itemized results (pending is
+    // never reported as created).
   };
 
   return (
@@ -199,6 +286,48 @@ export const IifImportModal: React.FC<IifImportModalProps> = (props) => {
             <span className="text-blue-600 dark:text-blue-400 font-bold">Standard IIF Validated</span>
           </div>
 
+          {results && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+                <span className="rounded bg-emerald-100 text-emerald-700 px-2 py-0.5 dark:bg-emerald-500/15 dark:text-emerald-300">
+                  {results.filter(r => r.status === 'created').length} created
+                </span>
+                <span className="rounded bg-amber-100 text-amber-700 px-2 py-0.5 dark:bg-amber-500/15 dark:text-amber-300">
+                  {results.filter(r => r.status === 'pending').length} pending approval
+                </span>
+                <span className="rounded bg-slate-200 text-slate-700 px-2 py-0.5 dark:bg-white/10 dark:text-slate-300">
+                  {results.filter(r => r.status === 'skipped').length} skipped
+                </span>
+                <span className="rounded bg-rose-100 text-rose-700 px-2 py-0.5 dark:bg-rose-500/15 dark:text-rose-300">
+                  {results.filter(r => r.status === 'failed').length} failed
+                </span>
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-white/5">
+                {results.map(r => (
+                  <div key={`${r.row}-${r.type}`} className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px]">
+                    <span className="min-w-0 truncate text-slate-700 dark:text-slate-300">
+                      <span className="font-mono text-slate-400">{r.row}.</span> {r.label}
+                    </span>
+                    <span
+                      className={
+                        r.status === 'created'
+                          ? 'shrink-0 font-semibold text-emerald-600 dark:text-emerald-400'
+                          : r.status === 'pending'
+                          ? 'shrink-0 font-semibold text-amber-600 dark:text-amber-400'
+                          : r.status === 'skipped'
+                          ? 'shrink-0 font-semibold text-slate-500 dark:text-slate-400'
+                          : 'shrink-0 font-semibold text-rose-600 dark:text-rose-400'
+                      }
+                      title={r.reason}
+                    >
+                      {r.status === 'pending' ? 'pending' : r.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
             <button
@@ -206,15 +335,16 @@ export const IifImportModal: React.FC<IifImportModalProps> = (props) => {
               onClick={onClose}
               className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300"
             >
-              Cancel
+              {results ? 'Close' : 'Cancel'}
             </button>
             <button
               type="button"
               onClick={handleExecuteImport}
-              className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-md transition-all active:scale-95"
+              disabled={importing}
+              className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-md transition-all active:scale-95 disabled:opacity-60 disabled:pointer-events-none"
             >
               <Upload className="w-4 h-4" />
-              <span>Import Records into Printing Management System</span>
+              <span>{importing ? 'Importing…' : 'Import Records into Printing Management System'}</span>
             </button>
           </div>
         </div>

@@ -85,7 +85,7 @@ async function main() {
   const proposeRes = await fetch(`${baseUrl}/api/ai/actions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ actionType: 'test_action', description: 'Test action', parameters: { foo: 'bar' } }),
+    body: JSON.stringify({ actionType: 'create_invoice', description: 'Test action', parameters: { foo: 'bar' } }),
   });
   assert.equal(proposeRes.status, 201);
   console.log('Proposed action:', await proposeRes.json());

@@ -6,6 +6,7 @@ import { ApiBankTransaction, commercialApi } from '../../services/commercialApi'
 import { financeControlsApi } from '../../services/financeControlsApi';
 import type { DashboardAlerts } from '../../services/financeControlsApi';
 import { MonthlyCashflowChart, ExpenseBreakdownDonut } from '../charts/FinancialCharts';
+import { StatCard } from '../common/ui';
 import { formatCurrency, getCurrencySymbol } from '../../utils/currency';
 import {
   TrendingUp,
@@ -170,97 +171,61 @@ export const DashboardView: React.FC = () => {
 
       {/* KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="surface surface-hover p-5 overflow-hidden">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-400 to-emerald-600" />
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Total Revenue (YTD)</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
-              <TrendingUp className="w-4 h-4" />
+        <StatCard
+          label="Total Revenue (YTD)"
+          tone="emerald"
+          icon={<TrendingUp className="w-4 h-4" />}
+          loading={loading && !overview}
+          value={formatCurrency(totalIncome, currency)}
+          hint={
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">Gross Margin</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums">
+                {totalIncome > 0 ? ((grossProfit / totalIncome) * 100).toFixed(1) : '0.0'}%
+              </span>
             </span>
-          </div>
-          {loading && !overview ? (
-            <div className="skeleton h-7 w-32 mt-3" />
-          ) : (
-            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
-              {formatCurrency(totalIncome, currency)}
-            </div>
-          )}
-          <div className="mt-2 text-xs text-slate-500 flex items-center gap-1.5">
-            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Gross Margin</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">
-              {totalIncome > 0 ? ((grossProfit / totalIncome) * 100).toFixed(1) : '0.0'}%
-            </span>
-          </div>
-        </div>
+          }
+        />
 
-        <div className="surface surface-hover p-5 overflow-hidden">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Cost of Goods Sold</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400">
-              <Receipt className="w-4 h-4" />
-            </span>
-          </div>
-          {loading && !overview ? (
-            <div className="skeleton h-7 w-32 mt-3" />
-          ) : (
-            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
-              {formatCurrency(totalCogs, currency)}
-            </div>
-          )}
-          <div className="mt-2 text-xs text-slate-500">
-            Perpetual inventory &amp; BOM consumption
-          </div>
-        </div>
+        <StatCard
+          label="Cost of Goods Sold"
+          tone="amber"
+          icon={<Receipt className="w-4 h-4" />}
+          loading={loading && !overview}
+          value={formatCurrency(totalCogs, currency)}
+          hint="Perpetual inventory & BOM consumption"
+        />
 
-        <div className="surface surface-hover p-5 overflow-hidden">
-          <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${netIncome >= 0 ? 'from-brand-400 to-brand-600' : 'from-rose-400 to-rose-600'}`} />
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Net Operating Income</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-              <DollarSign className="w-4 h-4" />
+        <StatCard
+          label="Net Operating Income"
+          tone={netIncome >= 0 ? 'blue' : 'rose'}
+          icon={<DollarSign className="w-4 h-4" />}
+          loading={loading && !overview}
+          value={formatCurrency(netIncome, currency)}
+          hint={
+            <span className="flex items-center gap-1.5">
+              <span>Net Margin</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono font-bold tabular-nums text-slate-800 dark:text-slate-200">
+                {netMargin.toFixed(1)}%
+              </span>
             </span>
-          </div>
-          {loading && !overview ? (
-            <div className="skeleton h-7 w-32 mt-3" />
-          ) : (
-            <div
-              className={`mt-2 font-mono text-2xl font-bold tabular-nums ${
-                netIncome >= 0 ? 'text-brand-600 dark:text-brand-400' : 'text-rose-600 dark:text-rose-400'
-              }`}
-            >
-              {formatCurrency(netIncome, currency)}
-            </div>
-          )}
-          <div className="mt-2 text-xs text-slate-500 flex items-center gap-1.5">
-            <span>Net Margin</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-bold font-mono tabular-nums text-slate-800 dark:text-slate-200">
-              {netMargin.toFixed(1)}%
-            </span>
-          </div>
-        </div>
+          }
+        />
 
-        <div className="surface surface-hover p-5 overflow-hidden">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-slate-400 to-slate-600" />
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Liquid Bank Cash</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-400">
-              <Landmark className="w-4 h-4" />
+        <StatCard
+          label="Liquid Bank Cash"
+          tone="neutral"
+          icon={<Landmark className="w-4 h-4" />}
+          loading={loading && !overview}
+          value={formatCurrency(totalCash, currency)}
+          hint={
+            <span>
+              Net Liquid: <span className="font-mono font-semibold">{formatCurrency(kpis.netLiquidCash, currency)}</span>
             </span>
-          </div>
-          {loading && !overview ? (
-            <div className="skeleton h-7 w-32 mt-3" />
-          ) : (
-            <div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white tabular-nums">
-              {formatCurrency(totalCash, currency)}
-            </div>
-          )}
-          <div className="mt-2 text-xs text-slate-500">
-            Net Liquid: <span className="font-mono font-semibold">{formatCurrency(kpis.netLiquidCash, currency)}</span>
-          </div>
-        </div>
+          }
+        />
       </div>
 
       {/* Operational alert feed from /api/dashboard/alerts */}

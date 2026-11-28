@@ -126,6 +126,7 @@ export const StockCountModal: React.FC<StockCountModalProps> = ({
   return (
     <ModalShell open={open} onClose={onClose} titleId="stock-count-modal-title" size="3xl">
       <ModalHeader
+          titleId="stock-count-modal-title"
         title="Physical Stock Count"
         subtitle="Count stock, then post the variances to the ledger"
         tone="amber"

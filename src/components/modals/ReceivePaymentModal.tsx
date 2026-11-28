@@ -14,6 +14,7 @@ import {
   SummaryRow,
   InlineAlert,
 } from '../common/ui';
+import { AiAssistPanel } from '../ai/AiAssistPanel';
 
 export const ReceivePaymentModal: React.FC = () => {
   const { isReceivePaymentOpen, setIsReceivePaymentOpen, companyProfile, triggerShortcutNotice } = useAccounting();
@@ -105,7 +106,14 @@ export const ReceivePaymentModal: React.FC = () => {
 
   return (
     <ModalShell open={isReceivePaymentOpen} onClose={close} size="3xl" titleId="payment-modal-title">
+      <div className="px-4 pt-3">
+        <AiAssistPanel
+          context={`Customer: ${selectedCustomer?.companyName || '—'} · Balance due: ${formatCurrency(balanceDue, currency)}`}
+          suggestions={['How much does this customer owe?', 'Is this invoice overdue?', 'What is our cash position this month?']}
+        />
+      </div>
       <ModalHeader
+          titleId="payment-modal-title"
         title="Receive Customer Payment"
         subtitle="Apply a payment against an open customer invoice"
         icon={<DollarSign className="h-4 w-4" />}

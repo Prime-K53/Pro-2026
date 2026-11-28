@@ -3,6 +3,8 @@ import os from 'node:os';
 import { ServerDatabase } from './db.ts';
 import { getNextDueReportAt, runDueReportSchedules } from './services/reportSchedulingService.ts';
 import { writeAuditLog } from './audit.ts';
+import { recoverAllUnresolved, detectAnomalies } from './services/aiService.ts';
+import { runPredictiveChecks } from './services/predictiveService.ts';
 
 let nodemailer: any = null;
 try {
@@ -350,6 +352,18 @@ export async function runTenantTick(
         runDueReportSchedules(tx, companyId, actor, now)
       );
     }
+    // Operational anomaly detection (low stock, wastage, delays, unprofitable jobs).
+    try {
+      await db.withCompanyDb(companyId, (tx: any) => detectAnomalies(tx, companyId));
+    } catch (err) {
+      console.error('[Scheduler] anomaly detection failed for company', companyId, err);
+    }
+    // Predictive signals (duplicate/unusual expense, likely shortages).
+    try {
+      await db.withCompanyDb(companyId, (tx: any) => runPredictiveChecks(tx, companyId));
+    } catch (err) {
+      console.error('[Scheduler] predictive checks failed for company', companyId, err);
+    }
     email = await processQueuedEmailsForCompany(db, companyId);
   } catch (err: any) {
     error = err?.message || String(err);
@@ -548,8 +562,20 @@ export function startScheduler(
   activeScheduler = scheduler;
   scheduler.start(discoveryIntervalMs);
 
+  // D-05/R2 operational recovery: detect stale reserved/invoking attempts at
+  // startup and periodically. Never releases; failures are isolated/logged.
+  const runRecovery = () => {
+    void recoverAllUnresolved(db).catch((err) =>
+      console.error('[AI Recovery] failed:', (err as any)?.message || err)
+    );
+  };
+  runRecovery();
+  const recoveryTimer = setInterval(runRecovery, 30 * 60 * 1000);
+  if (typeof (recoveryTimer as any).unref === 'function') (recoveryTimer as any).unref();
+
   return {
     stop() {
+      clearInterval(recoveryTimer);
       scheduler.stop();
       if (activeScheduler === scheduler) activeScheduler = null;
     },

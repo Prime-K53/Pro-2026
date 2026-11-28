@@ -18,8 +18,35 @@ import {
 import { recordWalletDeposit } from './services/customerWalletService.ts';
 import { seedDefaultMalawiConfig } from './services/malawiPayroll.ts';
 
+/**
+ * Driver-neutral transaction surface.
+ *
+ * Every service consumes only `query` and `exec`, so this is the whole
+ * contract a database driver must provide inside a transaction.
+ */
+export interface DatabaseTransaction {
+  query<T = any>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  exec(sql: string): Promise<void>;
+}
+
+/**
+ * Driver-neutral database surface.
+ *
+ * PGlite remains the default and only production implementation. The
+ * interface exists so a test-only PostgreSQL driver can satisfy the same
+ * contract without changing production behaviour.
+ */
+export interface DatabaseDriver {
+  query<T = any>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  exec(sql: string): Promise<void>;
+  transaction<T>(fn: (tx: DatabaseTransaction) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+  /** PGlite-only: raw data-directory dump used by the backup service. */
+  dumpDataDir?(): Promise<Blob>;
+}
+
 export interface ServerDatabase {
-  pg: PGlite;
+  pg: DatabaseDriver;
   config: ServerConfig;
   withSystemDb<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>;
   withCompanyDb<T>(companyId: number, fn: (tx: Transaction) => Promise<T>, userId?: number): Promise<T>;
@@ -615,7 +642,7 @@ export async function createServerDatabase(
   await migrateUp(pg);
 
   const db: ServerDatabase = {
-    pg,
+    pg: pg as unknown as DatabaseDriver,
     config,
     async withSystemDb<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
       return pg.transaction(async tx => {

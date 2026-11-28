@@ -1244,10 +1244,24 @@ export async function createInvoiceOrSalesReceipt(
     requestedTaxExempt
   );
   const isTaxExempt = taxExemption.valid;
+  const companyTaxRes = await tx.query<{ sales_tax_rate: string }>(
+    `SELECT sales_tax_rate::text AS sales_tax_rate FROM companies WHERE id = $1 LIMIT 1`,
+    [companyId]
+  );
+  const companyTaxRatePct = Number(companyTaxRes.rows[0]?.sales_tax_rate ?? 0);
+  // Precedence: explicit invoice tax rate (authoritative per-invoice override) >>
+  // configured company default tax rate. Zero is the DB default for an
+  // uninitialized company, never an invented tax-free rate. The server recomputes
+  // and persists the tax authoritatively; the client is never the source of truth.
   const taxRatePct6 = isTaxExempt
     ? 0n
     : parseDecimal6(
-        await resolveTaxRatePct(tx, companyId, input.taxCodeId, Number(input.taxRate ?? 0))
+        await resolveTaxRatePct(
+          tx,
+          companyId,
+          input.taxCodeId,
+          Number(input.taxRate ?? companyTaxRatePct)
+        )
       );
 
   let depositAccountId: number | null = null;

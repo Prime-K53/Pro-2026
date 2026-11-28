@@ -368,6 +368,62 @@ export interface AssessmentActualStats {
   papersCount: number;
 }
 
+/**
+ * Financial data domains whose contents are owned by the backend ledger.
+ *
+ * Each domain carries an explicit load state so the UI can tell the difference
+ * between "the server returned nothing", "the request failed" and "these rows
+ * are real but were loaded by an earlier successful refresh". Bundled demo
+ * seeds are never used to fill a domain after a failed request.
+ */
+export type FinancialDataDomain =
+  | 'accounts'
+  | 'customers'
+  | 'vendors'
+  | 'inventoryItems'
+  | 'invoices'
+  | 'bills'
+  | 'journalEntries'
+  | 'bankTransactions'
+  | 'reconciliations'
+  | 'quickPrintJobs'
+  | 'employees'
+  | 'payrollRuns'
+  | 'printingContracts'
+  | 'examPapers';
+
+export const FINANCIAL_DATA_DOMAINS: readonly FinancialDataDomain[] = [
+  'accounts',
+  'customers',
+  'vendors',
+  'inventoryItems',
+  'invoices',
+  'bills',
+  'journalEntries',
+  'bankTransactions',
+  'reconciliations',
+  'quickPrintJobs',
+  'employees',
+  'payrollRuns',
+  'printingContracts',
+  'examPapers',
+];
+
+export type FinancialDataStatus = 'loading' | 'ready' | 'error';
+
+export interface FinancialDataState {
+  /** Outcome of the last completed load. `ready` means the rows came from the server. */
+  status: FinancialDataStatus;
+  /** A refresh is currently in flight. */
+  refreshing: boolean;
+  /** The visible rows are real server data from an earlier load and a later refresh failed. */
+  stale: boolean;
+  /** ISO timestamp of the last successful load, or null when nothing was ever loaded. */
+  loadedAt: string | null;
+  /** Message from the last failed load, or null. */
+  error: string | null;
+}
+
 interface AccountingContextType {
   companyProfile: CompanyProfile;
   setCompanyProfile: React.Dispatch<React.SetStateAction<CompanyProfile>>;
@@ -411,7 +467,7 @@ interface AccountingContextType {
       | 'sellingPriceTotal'
       | 'extraCost'
     > & { extraCost?: number; sellingPriceTotal?: number },
-    options?: { createInvoice?: boolean }
+    options?: { createInvoice?: boolean; idempotencyKey?: string }
   ) => Promise<QuickPrintJob>;
 
   examPapers: ExamPaper[];
@@ -691,6 +747,20 @@ interface AccountingContextType {
   activeShortcutNotice: ToastNotice | null;
   triggerShortcutNotice: (text: string, tone?: ToastTone) => void;
   dismissShortcutNotice: () => void;
+
+  // Financial data trust state
+  /**
+   * Per-domain load state for every backend-owned financial collection. Read
+   * this before presenting a financial figure as current: `status: 'error'`
+   * with `loadedAt: null` means nothing is loaded, and `stale: true` means the
+   * visible rows are real but predate a failed refresh.
+   */
+  financialData: Record<FinancialDataDomain, FinancialDataState>;
+  /**
+   * Re-run the backend load for one domain, or for every domain when omitted.
+   * Only successful loads update the data; failures keep the truthful state.
+   */
+  refreshFinancialData: (domain?: FinancialDataDomain) => Promise<void>;
 }
 
 const AccountingContext = createContext<AccountingContextType | undefined>(undefined);
@@ -821,10 +891,104 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     };
   });
 
-  const [accounts, setAccounts] = useState<Account[]>(() => DEFAULT_CHART_OF_ACCOUNTS);
+  /**
+   * The chart of accounts is server-owned. It starts empty and is filled only by
+   * a successful `/api/accounts` load; a failed load leaves it empty and is
+   * reported through `financialData.accounts` rather than substituting the
+   * bundled demo chart.
+   */
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
-  const refreshAccountsFromBackend = async () => {
-    try {
+  /**
+   * Load state for every backend-owned financial collection.
+   *
+   * `INITIAL_*` demo seeds are deliberately NOT used as the initial value of
+   * these collections. The provider only mounts for an authenticated session,
+   * so any demo row shown here would be indistinguishable from live company
+   * data. A failed request therefore leaves the collection empty and the
+   * domain in `status: 'error'` instead of silently showing demo figures.
+   */
+  const [financialData, setFinancialData] = useState<Record<FinancialDataDomain, FinancialDataState>>(
+    () =>
+      FINANCIAL_DATA_DOMAINS.reduce((acc, domain) => {
+        acc[domain] = { status: 'loading', refreshing: true, stale: false, loadedAt: null, error: null };
+        return acc;
+      }, {} as Record<FinancialDataDomain, FinancialDataState>)
+  );
+
+  /** Domains with a load already in flight, so overlapping refreshes collapse. */
+  const inFlightFinancialLoads = React.useRef<Set<FinancialDataDomain>>(new Set());
+
+  /**
+   * Domains whose refresh was requested while a load was already in flight.
+   *
+   * Without this the overlapping request would be dropped and the older
+   * snapshot would be published as `current`, which is exactly the "a refresh
+   * was requested but silently skipped" case the trust model must not allow.
+   */
+  const pendingFinancialRerun = React.useRef<Set<FinancialDataDomain>>(new Set());
+
+  /**
+   * Single funnel for every backend financial load.
+   *
+   * - Success (including a genuinely empty list) marks the domain `ready`.
+   * - Failure with no previous success marks it `error` with no data.
+   * - Failure after a previous success keeps the real rows but flags them
+   *   `stale` and records the error, so a refresh failure can never be
+   *   mistaken for a successful refresh.
+   */
+  const runFinancialLoad = React.useCallback(
+    async (domain: FinancialDataDomain, loader: () => Promise<void>) => {
+      if (inFlightFinancialLoads.current.has(domain)) {
+        pendingFinancialRerun.current.add(domain);
+        return;
+      }
+      inFlightFinancialLoads.current.add(domain);
+      try {
+        // Keep serving the newest request: if another refresh arrives while one
+        // is running, run once more so the older result is never the final one.
+        do {
+          pendingFinancialRerun.current.delete(domain);
+          setFinancialData(prev => ({
+            ...prev,
+            [domain]: { ...prev[domain], refreshing: true, error: null },
+          }));
+          try {
+            await loader();
+            setFinancialData(prev => ({
+              ...prev,
+              [domain]: {
+                status: 'ready',
+                refreshing: false,
+                stale: false,
+                loadedAt: new Date().toISOString(),
+                error: null,
+              },
+            }));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err || 'Request failed');
+            console.warn(`[financial data] ${domain} load failed:`, err);
+            setFinancialData(prev => {
+              const prior = prev[domain];
+              const hasLoadedRows = prior.loadedAt !== null;
+              return {
+                ...prev,
+                [domain]: hasLoadedRows
+                  ? { ...prior, status: 'ready', refreshing: false, stale: true, error: message }
+                  : { status: 'error', refreshing: false, stale: false, loadedAt: null, error: message },
+              };
+            });
+          }
+        } while (pendingFinancialRerun.current.has(domain));
+      } finally {
+        inFlightFinancialLoads.current.delete(domain);
+      }
+    },
+    []
+  );
+
+  const refreshAccountsFromBackend = () =>
+    runFinancialLoad('accounts', async () => {
       const list = await accountingApi.listAccounts(true);
       const mapped: Account[] = list.map((a: ApiAccount) => ({
         id: String(a.id),
@@ -836,11 +1000,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         balance: a.balanceNum,
         isSystem: a.is_system,
       }));
-      if (mapped.length > 0) setAccounts(mapped);
-    } catch {
-      // Keep fallback COA if backend unavailable.
-    }
-  };
+      // An empty list is a real answer from the server, not a failure: publish
+      // it so a genuine zero is never confused with unavailable data.
+      setAccounts(mapped);
+    });
 
   useEffect(() => {
     refreshAccountsFromBackend();
@@ -850,25 +1013,10 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   }, []);
 
 
-  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
-  const [vendors, setVendors] = useState<Vendor[]>(INITIAL_VENDORS);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
 
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>(() => {
-    const hydrated: InventoryItem[] = INITIAL_INVENTORY_ITEMS.map((it: any) => {
-      const migratedType = migrateItemType(it.type);
-      const isRaw = migratedType === 'raw_material';
-      return {
-        ...it,
-        type: migratedType,
-        purchaseUnit: isRaw ? it.purchaseUnit || 'Unit' : it.purchaseUnit,
-        usageUnit: isRaw ? it.usageUnit || 'Unit' : it.usageUnit,
-        conversionFactor: isRaw ? it.conversionFactor || 1 : it.conversionFactor,
-        onHand: migratedType === 'printed_product' || migratedType === 'printing_service' ? 0 : (it.onHand || 0),
-        reorderPoint: migratedType === 'printed_product' || migratedType === 'printing_service' ? 0 : (it.reorderPoint || 0),
-      };
-    });
-    return recalculateDependentItemCosts(hydrated);
-  });
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
 
   /**
    * Replace the demo inventory with the server's catalog.
@@ -880,10 +1028,9 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
    * Monetary columns arrive as exact fixed-point strings from the API, so they
    * are parsed with parseFloat here and never recomputed from a float source.
    */
-  const refreshInventoryFromBackend = async () => {
-    try {
+  const refreshInventoryFromBackend = () =>
+    runFinancialLoad('inventoryItems', async () => {
       const list = await commercialApi.listInventory();
-      if (!list || list.length === 0) return;
       const mapped: InventoryItem[] = (list as any[]).map((row) => {
         const migratedType = migrateItemType(row.item_type);
         const isRaw = migratedType === 'raw_material';
@@ -908,10 +1055,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         } as InventoryItem;
       });
       setInventoryItems(recalculateDependentItemCosts(mapped));
-    } catch {
-      // Keep the fallback catalog when the backend is unreachable.
-    }
-  };
+    });
 
   useEffect(() => {
     refreshInventoryFromBackend();
@@ -922,56 +1066,11 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, handler);
   }, []);
 
-  const [quickPrintJobs, setQuickPrintJobs] = useState<QuickPrintJob[]>(INITIAL_QUICK_PRINT_JOBS);
+  const [quickPrintJobs, setQuickPrintJobs] = useState<QuickPrintJob[]>([]);
 
-  const [examPapers, setExamPapers] = useState<ExamPaper[]>(() =>
-    INITIAL_EXAM_PAPERS.map((p: any) => {
-      const copies = p.copies || 1;
-      const pages = p.pages || 1;
-      const sheetsUsed =
-        p.sheetsUsed ?? (p.printSide === 'Duplex' ? Math.ceil(pages / 2) * copies : pages * copies);
-      const impressionsUsed = p.impressionsUsed ?? pages * copies;
-      const learnersCount = p.learnersCount ?? copies;
-      const pricePerLearner = p.pricePerLearner ?? 12;
-      const paperCost = p.paperCost ?? round2(sheetsUsed * 0.09);
-      const tonerCost = p.tonerCost ?? round2(impressionsUsed * 0.01);
-      const materialCost = p.materialCost ?? round2(paperCost + tonerCost);
-      const totalAmount = p.learnersCount ? p.totalAmount : round2(learnersCount * pricePerLearner);
-      return {
-        ...p,
-        learnersCount,
-        pricePerLearner,
-        sheetsUsed,
-        impressionsUsed,
-        paperCost,
-        tonerCost,
-        materialCost,
-        totalAmount,
-      };
-    })
-  );
+  const [examPapers, setExamPapers] = useState<ExamPaper[]>([]);
 
-  const [printingContracts, setPrintingContracts] = useState<PrintingContract[]>(() =>
-    INITIAL_PRINTING_CONTRACTS.map((c: any) => ({
-      ...c,
-      assessments: (c.assessments || []).map((a: any, idx: number) => {
-        const paperCost = a.paperCost ?? 0;
-        const tonerCost = a.tonerCost ?? 0;
-        const totalCost = a.totalCost ?? round2(paperCost + tonerCost);
-        const profit = a.profit ?? round2((a.agreedAmount || 0) - totalCost);
-        return {
-          ...a,
-          scheduledDate: a.scheduledDate || a.completedDate || c.startDate || `2026-0${Math.min(9, idx + 3)}-15`,
-          estimatedSheets: a.estimatedSheets ?? 0,
-          estimatedImpressions: a.estimatedImpressions ?? 0,
-          paperCost,
-          tonerCost,
-          totalCost,
-          profit,
-        };
-      }),
-    }))
-  );
+  const [printingContracts, setPrintingContracts] = useState<PrintingContract[]>([]);
 
   // ---------------------------------------------------------------------------
   // Backend loaders — customers, printing contracts and examination papers.
@@ -1096,55 +1195,25 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     notes: p.notes ?? undefined,
   });
 
-  const refreshCustomersFromBackend = async () => {
-    try {
+  const refreshCustomersFromBackend = () =>
+    runFinancialLoad('customers', async () => {
       const list = await commercialApi.listCustomers();
-      if (!list || list.length === 0) return;
-      const backendCustomers = list.map(mapApiCustomer);
-      // Merge with the bundled demo customers (which back the legacy demo
-      // invoices) so existing customer-name lookups keep resolving, while the
-      // real backend customers are added for contracts/exams to reference.
-      setCustomers(prev => {
-        const byId = new Map<string, Customer>();
-        for (const c of prev) byId.set(c.id, c);
-        for (const c of backendCustomers) byId.set(c.id, c);
-        return Array.from(byId.values());
-      });
-    } catch (err) {
-      // P1-06: Surface backend failures so demo data is never silently
-      // presented as live.
-      console.warn('Failed to refresh customers from backend:', err);
-    }
-  };
+      // The backend list is authoritative. Demo customers are never merged in:
+      // a demo row would be indistinguishable from a live customer balance.
+      setCustomers(list.map(mapApiCustomer));
+    });
 
-  const refreshPrintingContractsFromBackend = async () => {
-    try {
+  const refreshPrintingContractsFromBackend = () =>
+    runFinancialLoad('printingContracts', async () => {
       const list = await printingApi.listContracts();
-      if (!list || list.length === 0) return;
       setPrintingContracts(list.map(mapApiContract));
-    } catch (err) {
-      // P1-06: Surface backend failures so demo data is never silently
-      // presented as live.
-      console.warn('Failed to refresh printing contracts from backend:', err);
-    }
-  };
+    });
 
-  const refreshExamPapersFromBackend = async () => {
-    try {
+  const refreshExamPapersFromBackend = () =>
+    runFinancialLoad('examPapers', async () => {
       const list = await printingApi.listExamPapers();
-      if (!list || list.length === 0) return;
       setExamPapers(list.map(mapApiExamPaper));
-    } catch (err) {
-      // P1-06: Surface backend failures so stale/demo data is never silently
-      // presented as live. Demo papers are kept for offline UX but the user is
-      // warned that the displayed data may not reflect the server.
-      console.warn('Failed to refresh examination papers from backend:', err);
-      triggerShortcutNotice(
-        'Could not refresh examination papers from the server. Displayed data may be stale or demo-only.',
-        'error'
-      );
-    }
-  };
+    });
 
   useEffect(() => {
     refreshCustomersFromBackend();
@@ -1160,31 +1229,32 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
-  const [estimates, setEstimates] = useState<Estimate[]>(INITIAL_ESTIMATES);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  // Estimates are server-owned (`commercialApi.listEstimates`) but no view
+  // reads the context copy — InvoicesView loads its own. It starts empty so the
+  // bundled demo estimates are never exported or presented as company records.
+  const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [paymentsReceived, setPaymentsReceived] = useState<PaymentReceived[]>([]);
-  const [bills, setBills] = useState<Bill[]>(INITIAL_BILLS);
+  const [bills, setBills] = useState<Bill[]>([]);
   const [billPayments, setBillPayments] = useState<BillPayment[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
-  const [payrollRuns, setPayrollRuns] = useState<PayrollRun[]>(INITIAL_PAYROLL_RUNS);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [payrollRuns, setPayrollRuns] = useState<PayrollRun[]>([]);
 
   /**
    * The employee directory and payroll history are server-owned. The demo seeds
    * are only a pre-auth fallback; once a session exists these hydrate from
    * `/api/employees` and `/api/payroll/runs` so the payroll centre never runs
-   * against a fictional roster.
+   * against a fictional roster. A failed load leaves the roster empty and the
+   * domain in `status: 'error'` rather than showing demo employees.
    */
-  const refreshEmployeesFromBackend = async () => {
-    try {
+  const refreshEmployeesFromBackend = () =>
+    runFinancialLoad('employees', async () => {
       const list = await payrollApi.listEmployees();
-      if (list.length > 0) setEmployees(list.map(mapApiEmployeeToEmployee));
-    } catch {
-      // Keep the fallback directory when the backend is unreachable.
-    }
-  };
+      setEmployees(list.map(mapApiEmployeeToEmployee));
+    });
 
-  const refreshPayrollRunsFromBackend = async () => {
-    try {
+  const refreshPayrollRunsFromBackend = () =>
+    runFinancialLoad('payrollRuns', async () => {
       const runs = await payrollApi.listRuns();
       const mapped: PayrollRun[] = (runs as any[]).map((r) => ({
         id: String(r.id),
@@ -1201,10 +1271,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         status: 'processed' as const,
       }));
       setPayrollRuns(mapped);
-    } catch {
-      // Keep the fallback runs when the backend is unreachable.
-    }
-  };
+    });
 
   useEffect(() => {
     refreshEmployeesFromBackend();
@@ -1217,60 +1284,48 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     return () => window.removeEventListener(ACCOUNTING_UPDATED_EVENT, handler);
   }, []);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
-  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(INITIAL_BANK_TRANSACTIONS);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [reconciliations, setReconciliations] = useState<BankReconciliation[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_AUDIT_LOGS
-  );
+  // Local import/export cache for the audit trail (`accountingApi.getAuditLogs`
+  // is loaded directly by the views that display it). It starts empty so a
+  // bundled demo trail is never exported as though it were the company's.
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   /**
-   * Financial entities are server-owned. The demo seeds below are a pre-auth
-   * fallback only; once a session exists these hydrate from the API so the
-   * browser working copy mirrors the ledger (and the sidebar badges read real
-   * counts). Every mutation path emits ACCOUNTING_UPDATED_EVENT, so the lists
-   * refresh after a write rather than drifting from the server.
+   * Financial entities are server-owned. Every collection starts empty and is
+   * published only after a successful API load, so the browser working copy
+   * mirrors the ledger (and the sidebar badges read real counts). A failed load
+   * records the error on the domain instead of substituting demo rows, and
+   * every mutation path emits ACCOUNTING_UPDATED_EVENT so the lists refresh
+   * after a write rather than drifting from the server.
    */
-  const refreshVendorsFromBackend = async () => {
-    try {
+  const refreshVendorsFromBackend = () =>
+    runFinancialLoad('vendors', async () => {
       const list = await commercialApi.listVendors();
-      if (list.length > 0) setVendors(list.map(mapApiVendorToVendor));
-    } catch {
-      // Keep the fallback vendors when the backend is unreachable.
-    }
-  };
-  const refreshInvoicesFromBackend = async () => {
-    try {
+      setVendors(list.map(mapApiVendorToVendor));
+    });
+  const refreshInvoicesFromBackend = () =>
+    runFinancialLoad('invoices', async () => {
       const list = await commercialApi.listInvoices();
       setInvoices(list.map(mapApiInvoiceToInvoice));
-    } catch {
-      // Keep the fallback invoices when the backend is unreachable.
-    }
-  };
-  const refreshBillsFromBackend = async () => {
-    try {
+    });
+  const refreshBillsFromBackend = () =>
+    runFinancialLoad('bills', async () => {
       const list = await commercialApi.listBills();
       setBills(list.map(mapApiBillToBill));
-    } catch {
-      // Keep the fallback bills when the backend is unreachable.
-    }
-  };
-  const refreshJournalEntriesFromBackend = async () => {
-    try {
+    });
+  const refreshJournalEntriesFromBackend = () =>
+    runFinancialLoad('journalEntries', async () => {
       const list = await accountingApi.listJournals();
       setJournalEntries(list.map(mapApiJournalEntry));
-    } catch {
-      // Keep the current journal entries when the backend is unreachable.
-    }
-  };
-  const refreshBankTransactionsFromBackend = async () => {
-    try {
+    });
+  const refreshBankTransactionsFromBackend = () =>
+    runFinancialLoad('bankTransactions', async () => {
       const list = await commercialApi.listBankTransactions();
       setBankTransactions(list.map(mapApiBankTransaction));
-    } catch {
-      // Keep the current bank transactions when the backend is unreachable.
-    }
-  };
-  const refreshReconciliationsFromBackend = async () => {
-    try {
+    });
+  const refreshReconciliationsFromBackend = () =>
+    runFinancialLoad('reconciliations', async () => {
       const list = await commercialApi.listReconciliations();
       setReconciliations(
         (list as any[]).map((r) => ({
@@ -1284,28 +1339,44 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           reconciledAt: r.completedAt ? String(r.completedAt) : '',
         }))
       );
-    } catch {
-      // Keep the current reconciliations when the backend is unreachable.
-    }
-  };
-  const refreshQuickPrintJobsFromBackend = async () => {
-    try {
+    });
+  const refreshQuickPrintJobsFromBackend = () =>
+    runFinancialLoad('quickPrintJobs', async () => {
       const rows = await printingApi.listQuickPrintJobs();
       setQuickPrintJobs(rows.map(mapApiQuickPrintJob));
-    } catch {
-      // Keep the current quick-print jobs when the backend is unreachable.
-    }
+    });
+
+  /**
+   * Registry used by `refreshFinancialData` so a retry always re-runs the real
+   * backend request for the requested domain.
+   */
+  const financialLoaders: Record<FinancialDataDomain, () => Promise<void>> = {
+    accounts: refreshAccountsFromBackend,
+    customers: refreshCustomersFromBackend,
+    vendors: refreshVendorsFromBackend,
+    inventoryItems: refreshInventoryFromBackend,
+    invoices: refreshInvoicesFromBackend,
+    bills: refreshBillsFromBackend,
+    journalEntries: refreshJournalEntriesFromBackend,
+    bankTransactions: refreshBankTransactionsFromBackend,
+    reconciliations: refreshReconciliationsFromBackend,
+    quickPrintJobs: refreshQuickPrintJobsFromBackend,
+    employees: refreshEmployeesFromBackend,
+    payrollRuns: refreshPayrollRunsFromBackend,
+    printingContracts: refreshPrintingContractsFromBackend,
+    examPapers: refreshExamPapersFromBackend,
   };
+  const financialLoadersRef = React.useRef(financialLoaders);
+  financialLoadersRef.current = financialLoaders;
+
+  const refreshFinancialData = React.useCallback(async (domain?: FinancialDataDomain) => {
+    const targets = domain ? [domain] : FINANCIAL_DATA_DOMAINS;
+    await Promise.all(targets.map(d => financialLoadersRef.current[d]()));
+  }, []);
 
   useEffect(() => {
     const refreshAll = () => {
-      refreshVendorsFromBackend();
-      refreshInvoicesFromBackend();
-      refreshBillsFromBackend();
-      refreshJournalEntriesFromBackend();
-      refreshBankTransactionsFromBackend();
-      refreshReconciliationsFromBackend();
-      refreshQuickPrintJobsFromBackend();
+      refreshFinancialData();
     };
     refreshAll();
     window.addEventListener(ACCOUNTING_UPDATED_EVENT, refreshAll);
@@ -1962,280 +2033,62 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       | 'sellingPriceTotal'
       | 'extraCost'
     > & { extraCost?: number; sellingPriceTotal?: number },
-    options?: { createInvoice?: boolean }
+    options?: { createInvoice?: boolean; idempotencyKey?: string }
   ): Promise<QuickPrintJob> => {
-    const paperItem = inventoryItems.find(i => i.id === jobData.rawPaperItemId && i.type === 'raw_material');
-    const tonerItem = inventoryItems.find(i => i.id === jobData.rawTonerItemId && i.type === 'raw_material');
+    // Authoritative server-side quick-print sale. The browser no longer
+    // manufactures production, stock, invoice, payment or journal records; it
+    // posts the desk inputs to the server (one atomic transaction) and renders
+    // the authoritative result. The idempotency key is owned by the caller so a
+    // retry of the same logical operation replays the original committed sale.
+    const idempotencyKey =
+      options?.idempotencyKey || `qp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const mode: 'on_account' | 'cash' = options?.createInvoice ? 'on_account' : 'cash';
 
-    const safePages = Math.max(1, jobData.pages);
-    const safeCopies = Math.max(1, jobData.copies);
-    const placementMode = jobData.printSide === 'Duplex' ? 'duplex' : 'simplex';
+    const result = await printingApi.postQuickSale({
+      mode,
+      jobType: jobData.jobType,
+      customerId: jobData.customerId != null && jobData.customerId !== '' ? Number(jobData.customerId) : null,
+      customerName: jobData.customerName,
+      rawPaperItemId: Number(jobData.rawPaperItemId),
+      rawTonerItemId: Number(jobData.rawTonerItemId),
+      title: jobData.title,
+      pages: Math.max(1, jobData.pages),
+      copies: Math.max(1, jobData.copies),
+      printSide: jobData.printSide as 'Single-Sided' | 'Duplex',
+      typingFeeMode: jobData.jobType === 'type_and_printing' ? 'per_page' : undefined,
+      typingFeeRate: jobData.extraCostPerPage,
+      finishingCost: jobData.jobType === 'type_and_printing' ? undefined : jobData.extraCost,
+      manualSellingPrice: jobData.sellingPriceTotal,
+      manualSellingPricePerSheet: jobData.sellingPricePerSheet,
+      jobDate: jobData.date,
+      notes: jobData.notes,
+      idempotencyKey,
+    });
 
-    const resolvedExtraPerPage =
-      jobData.extraCostPerPage !== undefined
-        ? Math.max(0, round4(jobData.extraCostPerPage))
-        : round4(((jobData.typingFee || 0) + (jobData.extraCost || 0)) / safePages);
-    const combinedExtraCost =
-      jobData.extraCostPerPage !== undefined
-        ? round2(resolvedExtraPerPage * safePages)
-        : round2((jobData.typingFee || 0) + (jobData.extraCost || 0));
-    const typingFeeStored = jobData.jobType === 'type_and_printing' ? combinedExtraCost : 0;
-    const extraCostStored = jobData.jobType === 'type_and_printing' ? 0 : combinedExtraCost;
-
-    let sheetsUsed = 0;
-    let impressionsUsed = 0;
-    let paperCost = 0;
-    let tonerCost = 0;
-
-    if (paperItem && tonerItem) {
-      const commonInput = {
-        paperStock: buildPaperStockFromInventoryItem(paperItem),
-        tonerChannels: { K: buildTonerSpecFromInventoryItem(tonerItem, 'K') },
-        machine: WORKSPACE_PRESS_CAPABILITY,
-        colorMode: 'mono' as const,
-        copies: safeCopies,
-        mode: placementMode as 'simplex' | 'duplex',
-        pages: safePages,
-        allowInsufficientStockPreview: true,
-      };
-      const wfResult =
-        jobData.jobType === 'type_and_printing'
-          ? calculateTypeAndPrintingWorkflow({
-              ...commonInput,
-              typingFee: {
-                mode: 'per_page',
-                rate: resolvedExtraPerPage,
-                typedPages: safePages,
-              },
-            })
-          : jobData.jobType === 'general_print'
-          ? calculatePrintingServiceWorkflow(commonInput)
-          : calculatePhotocopyWorkflow(commonInput);
-
-      sheetsUsed = wfResult.paper.quantities.totalSheets;
-      impressionsUsed = wfResult.paper.quantities.printedSideImpressions;
-      paperCost = wfResult.paper.quantities.totalPaperCost;
-      const fallbackTonerUnit = getRawUsageUnitCost(jobData.rawTonerItemId);
-      tonerCost =
-        wfResult.toner.totalCost !== null
-          ? wfResult.toner.totalCost
-          : round2(impressionsUsed * fallbackTonerUnit);
-    } else {
-      const paperUnitCost = getRawUsageUnitCost(jobData.rawPaperItemId);
-      const tonerUnitCost = getRawUsageUnitCost(jobData.rawTonerItemId);
-      sheetsUsed =
-        (jobData.printSide === 'Duplex' ? Math.ceil(safePages / 2) : safePages) * safeCopies;
-      impressionsUsed = safePages * safeCopies;
-      paperCost = round2(sheetsUsed * paperUnitCost);
-      tonerCost = round2(impressionsUsed * tonerUnitCost);
-    }
-
-    const resolvedSellingPerSheet =
-      jobData.sellingPricePerSheet !== undefined
-        ? Math.max(0, round4(jobData.sellingPricePerSheet))
-        : sheetsUsed > 0
-        ? round4((jobData.sellingPriceTotal ?? 0) / sheetsUsed)
-        : 0;
-    // The typing & printing charge is customer-facing service revenue, not a
-    // material cost. Physical finishing stays in production cost. This mirrors
-    // the server printing_jobs semantics so the desk preview equals persisted
-    // profitability.
-    const typingRevenue =
-      jobData.jobType === 'type_and_printing' ? round2(combinedExtraCost) : 0;
-    const finishingCost =
-      jobData.jobType === 'type_and_printing' ? 0 : round2(combinedExtraCost);
-    const photocopyRevenue = round2(resolvedSellingPerSheet * sheetsUsed);
-    const resolvedSellingPriceTotal =
-      jobData.sellingPricePerSheet !== undefined
-        ? round2(photocopyRevenue + typingRevenue)
-        : Math.max(0, round2(jobData.sellingPriceTotal ?? 0));
-
-    const totalCost = round2(paperCost + tonerCost + finishingCost);
-    const profit = round2(resolvedSellingPriceTotal - totalCost);
-    const materialCogs = round2(paperCost + tonerCost);
-
-    const jobNum = `QPR-${new Date().getFullYear()}-${String(quickPrintJobs.length + 1).padStart(2, '0')}`;
-
-    if (paperItem || tonerItem) {
-      setInventoryItems(prev =>
-        prev.map(item => {
-          if (paperItem && item.id === paperItem.id) {
-            const factor = item.conversionFactor && item.conversionFactor > 0 ? item.conversionFactor : 1;
-            return { ...item, onHand: Math.max(0, round4(item.onHand - sheetsUsed / factor)) };
-          }
-          if (tonerItem && item.id === tonerItem.id) {
-            const factor = item.conversionFactor && item.conversionFactor > 0 ? item.conversionFactor : 1;
-            return { ...item, onHand: Math.max(0, round4(item.onHand - impressionsUsed / factor)) };
-          }
-          return item;
-        })
-      );
-    }
-
-    let linkedInvoiceId: string | undefined = undefined;
-    let backendInvoiceId: number | undefined = undefined;
-    let linkedInvoiceNumber: string | undefined = undefined;
-
-    if (options?.createInvoice && jobData.customerId) {
-      const cust = customers.find(c => c.id === jobData.customerId);
-      const dueDate = new Date(jobData.date);
-      dueDate.setDate(dueDate.getDate() + 15);
-      const dueStr = dueDate.toISOString().split('T')[0];
-      const lineDesc = `${jobNum}: ${jobData.title} (${safePages} pp × ${safeCopies} copies, ${jobData.printSide} · ${sheetsUsed} sheets)`;
-      const rate2 = round2(resolvedSellingPerSheet);
-      const useSheetLine =
-        sheetsUsed > 0 && round2(rate2 * sheetsUsed) === resolvedSellingPriceTotal;
-      const lineQty = useSheetLine ? sheetsUsed : 1;
-      const lineRate = useSheetLine ? rate2 : resolvedSellingPriceTotal;
-      const lineUnitCost = useSheetLine ? round4(totalCost / sheetsUsed) : totalCost;
-
-      try {
-        const gen = await documentsApi.generateWorkflowInvoice({
-          sourceKind: 'quick_print',
-          sourceRef: jobNum,
-          customerName: cust?.companyName || jobData.customerName || 'Walk-In Customer',
-          customerEmail: cust?.email,
-          customerPhone: cust?.phone,
-          customerAddress: cust?.billingAddress,
-          customerType: cust?.customerType || 'corporate',
-          invoiceDate: jobData.date,
-          dueDate: dueStr,
-          terms: cust?.terms || 'Due on Receipt',
-          taxRate: 0,
-          notes: jobData.notes || `Quick print desk order ${jobNum}.`,
-          idempotencyKey: `quick-print-create-${jobNum}-${jobData.date}`,
-          lines: [
-            {
-              description: lineDesc,
-              quantity: lineQty,
-              rate: lineRate,
-              unitCost: lineUnitCost,
-              taxable: false,
-            },
-          ],
-        });
-        backendInvoiceId = gen.invoice.id;
-        linkedInvoiceNumber = gen.invoice.invoiceNumber;
-      } catch {
-        // Offline / non-PG fallback
-      }
-
-      // Pass custom line (no itemId) so addInvoice posts A/R, Sales & COGS without double-deducting raw materials
-      const inv = await addInvoice({
-        customerId: jobData.customerId,
-        date: jobData.date,
-        dueDate: dueStr,
-        terms: cust?.terms || 'Due on Receipt',
-        invoiceNumber: linkedInvoiceNumber,
-        backendInvoiceId,
-        lines: [
-          {
-            id: `qpl-${Date.now()}`,
-            description: lineDesc,
-            quantity: lineQty,
-            rate: lineRate,
-            amount: resolvedSellingPriceTotal,
-            unitCost: lineUnitCost,
-            totalCost,
-            taxable: false,
-          },
-        ],
-        subtotal: resolvedSellingPriceTotal,
-        taxRate: 0,
-        taxAmount: 0,
-        total: resolvedSellingPriceTotal,
-        totalCost,
-        grossProfit: profit,
-        notes: jobData.notes || `Quick print desk order ${jobNum}.`,
-      });
-      linkedInvoiceId = inv.id;
-      linkedInvoiceNumber = inv.invoiceNumber;
-    } else {
-      // Cash / Counter Sale: Debit Default Bank Account (+resolvedSellingPriceTotal), Credit Sales 4010 (+resolvedSellingPriceTotal)
-      // Debit COGS 5010 (+materialCogs), Credit Inventory Asset 1300 (-materialCogs)
-      setAccounts(prev =>
-        prev.map(acc => {
-          if (acc.id === companyProfile.defaultBankAccountId) {
-            return { ...acc, balance: round2(acc.balance + resolvedSellingPriceTotal) };
-          }
-          if (acc.code === '4010') {
-            return { ...acc, balance: round2(acc.balance + resolvedSellingPriceTotal) };
-          }
-          if (acc.code === '5010' && materialCogs > 0) {
-            return { ...acc, balance: round2(acc.balance + materialCogs) };
-          }
-          if (acc.code === '1300' && materialCogs > 0) {
-            return { ...acc, balance: round2(acc.balance - materialCogs) };
-          }
-          return acc;
-        })
-      );
-
-      const bankTx: BankTransaction = {
-        id: `tx-${Date.now()}`,
-        accountId: companyProfile.defaultBankAccountId,
-        date: jobData.date,
-        payee: jobData.customerName || 'Walk-In Counter Customer',
-        type: 'Deposit',
-        refNumber: jobNum,
-        memo: `${jobData.jobType === 'quick_photocopy' ? 'Quick Photocopy' : jobData.jobType === 'type_and_printing' ? 'Type & Printing' : 'Quick Print'}: ${jobData.title}`,
-        amount: resolvedSellingPriceTotal,
-        balance: 0,
-        isCleared: true,
-        category: 'Printing Service Revenue',
-      };
-      setBankTransactions(prev => [bankTx, ...prev]);
-
-      const bankAcc = accounts.find(a => a.id === companyProfile.defaultBankAccountId);
-      const salesAcc = accounts.find(a => a.code === '4010');
-      if (bankAcc && salesAcc) {
-        const je: JournalEntry = {
-          id: `je-${Date.now()}`,
-          entryNumber: `JE-${5000 + journalEntries.length + 1}`,
-          date: jobData.date,
-          memo: `Counter print job ${jobNum} (${jobData.title})`,
-          source: 'quick_print',
-          lines: [
-            {
-              id: `jl-${Date.now()}-1`,
-              accountId: bankAcc.id,
-              description: `Cash receipt for ${jobNum}`,
-              debit: resolvedSellingPriceTotal,
-              credit: 0,
-            },
-            {
-              id: `jl-${Date.now()}-2`,
-              accountId: salesAcc.id,
-              description: `Print service revenue for ${jobNum}`,
-              debit: 0,
-              credit: resolvedSellingPriceTotal,
-            },
-          ],
-        };
-        setJournalEntries(prev => [je, ...prev]);
-      }
-    }
-
+    const j = result.job;
     const created: QuickPrintJob = {
       ...jobData,
-      id: `qp-${Date.now()}`,
-      jobNumber: jobNum,
-      pages: safePages,
-      copies: safeCopies,
-      sheetsUsed,
-      impressionsUsed,
-      paperCost,
-      tonerCost,
-      extraCostPerPage: resolvedExtraPerPage,
-      typingFee: typingFeeStored,
-      extraCost: extraCostStored,
-      totalCost,
-      sellingPricePerSheet: resolvedSellingPerSheet,
-      sellingPriceTotal: resolvedSellingPriceTotal,
-      profit,
-      invoiceId: linkedInvoiceId,
-      backendInvoiceId,
-      linkedInvoiceNumber,
+      id: `qp-${j.id}`,
+      backendJobId: j.id,
+      jobNumber: j.jobNumber,
+      pages: j.pages,
+      copies: j.copies,
+      printSide: j.printSide as 'Single-Sided' | 'Duplex',
+      sheetsUsed: j.sheetsUsed,
+      impressionsUsed: j.impressionsUsed,
+      paperCost: j.paperCost,
+      tonerCost: j.tonerCost,
+      extraCostPerPage: jobData.extraCostPerPage,
+      typingFee: jobData.typingFee,
+      extraCost: jobData.extraCost ?? 0,
+      totalCost: j.totalCost,
+      sellingPricePerSheet:
+        j.sheetsUsed > 0 ? round4(j.manualSellingPrice / j.sheetsUsed) : jobData.sellingPricePerSheet,
+      sellingPriceTotal: j.manualSellingPrice,
+      profit: j.profit,
+      invoiceId: result.invoice.invoiceNumber,
+      backendInvoiceId: result.invoice.id,
+      linkedInvoiceNumber: result.invoice.invoiceNumber,
     };
 
     setQuickPrintJobs(prev => [created, ...prev]);
@@ -2243,7 +2096,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       'CREATE_QUICK_PRINT_JOB',
       'QuickPrintJob',
       created.id,
-      `Recorded ${jobNum} (${created.jobType}) — Cost: ${getCurrencySymbol(companyProfile.currency)}${totalCost.toFixed(2)}, Sale: ${getCurrencySymbol(companyProfile.currency)}${created.sellingPriceTotal.toFixed(2)}, Profit: ${getCurrencySymbol(companyProfile.currency)}${profit.toFixed(2)}`
+      `Recorded ${j.jobNumber} (${created.jobType}) — Cost: ${getCurrencySymbol(companyProfile.currency)}${j.totalCost.toFixed(2)}, Sale: ${getCurrencySymbol(companyProfile.currency)}${j.manualSellingPrice.toFixed(2)}, Profit: ${getCurrencySymbol(companyProfile.currency)}${j.profit.toFixed(2)}`
     );
 
     return created;
@@ -4330,6 +4183,23 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   };
 
   // Reset & Clear
+  /**
+   * Mark every financial domain as no longer server-verified.
+   *
+   * Used by the explicit demo-reset and clear actions: the rows they install
+   * are a local working copy, so the domains must not keep reporting
+   * `stale: false` (which the status bar reads as "current").
+   */
+  const markFinancialDataUnverified = (reason: string) => {
+    setFinancialData(prev => {
+      const next = { ...prev };
+      for (const domain of FINANCIAL_DATA_DOMAINS) {
+        next[domain] = { ...prev[domain], refreshing: false, stale: true, error: reason };
+      }
+      return next;
+    });
+  };
+
   const resetToDemoData = () => {
     setCompanyProfile(INITIAL_COMPANY_PROFILE);
     setAccounts(DEFAULT_CHART_OF_ACCOUNTS);
@@ -4351,6 +4221,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     setReconciliations([]);
     setAuditLogs(INITIAL_AUDIT_LOGS);
     localStorage.removeItem(PREFS_STORAGE_KEY);
+    markFinancialDataUnverified('Sample data loaded in this browser — not verified against the server ledger.');
     triggerShortcutNotice('Reloaded the sample lists in this browser. The server ledger is unchanged.', 'info');
   };
 
@@ -4371,6 +4242,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     setBankTransactions([]);
     setReconciliations([]);
     setAccounts(DEFAULT_CHART_OF_ACCOUNTS.map(a => ({ ...a, balance: 0 })));
+    markFinancialDataUnverified('Local lists cleared in this browser — not verified against the server ledger.');
     triggerShortcutNotice('Cleared the cached lists in this browser. The server ledger is unchanged.', 'info');
   };
 
@@ -4595,6 +4467,8 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
         activeShortcutNotice,
         triggerShortcutNotice,
         dismissShortcutNotice,
+        financialData,
+        refreshFinancialData,
       }}
     >
       {children}

@@ -51,6 +51,46 @@ const makeLine = (accountId = '', amount = 0): SplitLine => ({
   amount,
 });
 
+/**
+ * Composite amount control.
+ *
+ * FormField clones its child to inject `id`/`aria-describedby`, so this typed
+ * wrapper forwards both to the real number input. The currency symbol stays a
+ * decorative, pointer-transparent overlay and never names the input.
+ */
+interface AmountControlProps {
+  id?: string;
+  'aria-describedby'?: string;
+  amount: number;
+  onAmountChange: (value: number) => void;
+  currencySymbol: string;
+}
+
+export const AmountControl: React.FC<AmountControlProps> = ({
+  id,
+  'aria-describedby': ariaDescribedBy,
+  amount,
+  onAmountChange,
+  currencySymbol,
+}) => (
+  <div className="relative">
+    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+      {currencySymbol}
+    </span>
+    <input
+      id={id}
+      aria-describedby={ariaDescribedBy}
+      type="number"
+      step="0.01"
+      min="0.01"
+      value={amount}
+      onChange={e => onAmountChange(parseFloat(e.target.value) || 0)}
+      className="app-input pl-7 text-lg font-semibold tabular-nums"
+      required
+    />
+  </div>
+);
+
 export const WriteCheckModal: React.FC = () => {
   const { isWriteCheckOpen, setIsWriteCheckOpen, companyProfile, vendors, triggerShortcutNotice } = useAccounting();
   const { activeCompany } = useAuth();
@@ -140,6 +180,7 @@ export const WriteCheckModal: React.FC = () => {
   return (
     <ModalShell open={isWriteCheckOpen} onClose={close} size="3xl" titleId="write-check-title">
       <ModalHeader
+          titleId="write-check-title"
         title="Write Check"
         subtitle="Record a check and post the expense split to the General Ledger."
         icon={<CreditCard className="h-4 w-4" />}
@@ -215,20 +256,11 @@ export const WriteCheckModal: React.FC = () => {
             </FormField>
 
             <FormField label="Amount" required hint={`Recorded in ${currency}`}>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
-                  {currencySymbol}
-                </span>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={amount}
-                  onChange={e => setAmount(parseFloat(e.target.value) || 0)}
-                  className="app-input pl-7 text-lg font-semibold tabular-nums"
-                  required
-                />
-              </div>
+              <AmountControl
+                amount={amount}
+                onAmountChange={setAmount}
+                currencySymbol={currencySymbol}
+              />
             </FormField>
 
             <FormField label="Memo">

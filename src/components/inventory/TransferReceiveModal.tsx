@@ -71,7 +71,8 @@ export const TransferReceiveModal: React.FC<TransferReceiveModalProps> = ({ open
 
   return (
     <ModalShell open={open} onClose={onClose} titleId="transfer-receive-modal-title" size="4xl">
-      <ModalHeader title="Receive Transfers" subtitle="Receive in-transit or partially received transfers (full or partial by line)" tone="brand" icon={<PackageCheck className="h-4 w-4" />} onClose={onClose} />
+      <ModalHeader
+          titleId="transfer-receive-modal-title" title="Receive Transfers" subtitle="Receive in-transit or partially received transfers (full or partial by line)" tone="brand" icon={<PackageCheck className="h-4 w-4" />} onClose={onClose} />
       <ModalBody columns={1}>
         <div className="flex items-center justify-between">
           <p className="text-xs text-slate-500">Showing <span className="font-semibold">in_transit</span> and <span className="font-semibold">partially_received</span> transfers.</p>

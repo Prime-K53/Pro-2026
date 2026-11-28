@@ -895,7 +895,13 @@ async function main() {
     '',
   ];
 
-  const reportPath = path.resolve(process.cwd(), 'docs', 'accounting', 'test-execution-report.md');
+  // Test-only report destination override. When PMS_TEST_REPORT_DIR is set the
+  // report is written there instead of the repository, so a run can be kept
+  // isolated without changing the default behaviour.
+  const reportDir = process.env.PMS_TEST_REPORT_DIR
+    ? path.resolve(process.env.PMS_TEST_REPORT_DIR)
+    : path.resolve(process.cwd(), 'docs', 'accounting');
+  const reportPath = path.join(reportDir, 'test-execution-report.md');
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, reportLines.join('\n'), 'utf8');
   console.log(`\nAccounting test report written to ${reportPath}`);

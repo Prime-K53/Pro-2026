@@ -12,14 +12,20 @@ import { AlertTriangle, CheckCircle2, Loader2, Rows3, ShieldCheck, WifiOff } fro
 type VerifyState = 'loading' | 'ready' | 'error' | 'restricted';
 
 export const StatusBar: React.FC = () => {
-  const { companyProfile, tableDensity, setTableDensity, triggerShortcutNotice } = useAccounting();
+  const {
+    companyProfile,
+    tableDensity,
+    setTableDensity,
+    triggerShortcutNotice,
+    financialData,
+    refreshFinancialData,
+  } = useAccounting();
   const { activeCompany, hasPermission } = useAuth();
   const currency = companyProfile.currency || 'K';
   const canVerify = hasPermission('reports:read');
 
   const [state, setState] = useState<VerifyState>(canVerify ? 'loading' : 'restricted');
   const [trialBalance, setTrialBalance] = useState<ApiTrialBalanceReport | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const loadVerification = useCallback(async () => {
     if (!canVerify) {
@@ -34,7 +40,6 @@ export const StatusBar: React.FC = () => {
       const report = await accountingApi.getTrialBalance({ startDate, endDate: today });
       setTrialBalance(report);
       setState('ready');
-      setLastSyncedAt(new Date().toLocaleTimeString());
     } catch {
       setState('error');
       setTrialBalance(null);
@@ -62,6 +67,34 @@ export const StatusBar: React.FC = () => {
   const cash = (trialBalance?.rows || [])
     .filter(r => r.accountType === 'Bank')
     .reduce((sum, r) => sum + r.netBalanceNum, 0);
+
+  /**
+   * Truthful freshness of the backend-owned financial collections.
+   *
+   * A failed load must never look like current data: `unavailable` means the
+   * request failed and nothing was ever loaded, `stale` means the visible rows
+   * are real but predate a failed refresh, and `current` means the last load
+   * succeeded.
+   */
+  const financialStates = Object.values(financialData);
+  const hasUnavailable = financialStates.some(d => d.status === 'error');
+  const hasStale = financialStates.some(d => d.stale);
+  const isInitialLoading = financialStates.some(d => d.status === 'loading');
+  const lastLoadedAt = financialStates.reduce<string | null>((acc, d) => {
+    if (!d.loadedAt) return acc;
+    return !acc || d.loadedAt > acc ? d.loadedAt : acc;
+  }, null);
+  const financialFreshness: 'loading' | 'unavailable' | 'stale' | 'current' = hasUnavailable
+    ? 'unavailable'
+    : hasStale
+      ? 'stale'
+      : isInitialLoading
+        ? 'loading'
+        : 'current';
+  const retryFinancialData = () => {
+    refreshFinancialData();
+    triggerShortcutNotice('Retrying the server financial load…', 'info');
+  };
 
   return (
     <footer className="statusbar no-print">
@@ -162,8 +195,58 @@ export const StatusBar: React.FC = () => {
 
         <span aria-hidden="true" className="hidden h-3.5 w-px bg-slate-200 md:inline dark:bg-white/10">|</span>
 
-        <div className="hidden md:block whitespace-nowrap tabular-nums">
-          {lastSyncedAt ? `GL sync ${lastSyncedAt}` : 'Server-backed ledger'}
+        <div
+          aria-live="polite"
+          className="flex items-center gap-1.5 whitespace-nowrap"
+          title={
+            lastLoadedAt
+              ? `Last successful financial load at ${new Date(lastLoadedAt).toLocaleTimeString()}`
+              : 'No successful financial load yet'
+          }
+        >
+          {financialFreshness === 'loading' && (
+            <>
+              <Loader2 className="w-3 h-3 animate-spin text-slate-400 shrink-0" />
+              <span className="hidden sm:inline">Loading financial data…</span>
+              <span className="sm:hidden">Loading…</span>
+            </>
+          )}
+          {financialFreshness === 'unavailable' && (
+            <>
+              <WifiOff className="w-3 h-3 text-rose-500 shrink-0" />
+              <button
+                type="button"
+                onClick={retryFinancialData}
+                className="text-rose-600 dark:text-rose-400 font-semibold hover:underline"
+                title="Retry loading financial data from the server"
+              >
+                <span className="hidden sm:inline">Financial data unavailable — retry</span>
+                <span className="sm:hidden">Retry</span>
+              </button>
+            </>
+          )}
+          {financialFreshness === 'stale' && (
+            <>
+              <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+              <span className="hidden sm:inline text-amber-600 dark:text-amber-400 font-semibold">
+                Some financial data stale — refresh failed
+              </span>
+              <button
+                type="button"
+                onClick={retryFinancialData}
+                className="text-amber-700 dark:text-amber-300 font-semibold hover:underline"
+                title="Retry loading financial data from the server"
+              >
+                Retry
+              </button>
+            </>
+          )}
+          {financialFreshness === 'current' && (
+            <>
+              <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="hidden sm:inline">Financial data current</span>
+            </>
+          )}
         </div>
       </div>
     </footer>

@@ -619,6 +619,18 @@ const buildFooterContactLine = (_config?: CompanyConfig | null) => {
   return "Prime Printing Service, Along M5 Road, Mtakataka, Phone +265 992 528 222,";
 };
 
+/**
+ * Narrow an untyped payload field to the status types the cancellation check
+ * accepts. Only `string`, `boolean` and `undefined` are passed through; every
+ * other runtime shape is treated as "no status" rather than coerced.
+ */
+const readStatus = (value: unknown): string | boolean | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value;
+  return undefined;
+};
+
 const isCancelledStatus = (status?: string | boolean, data?: any): boolean => {
   if (data?.isCancelled === true || data?.cancelled === true) return true;
   const str = String(
@@ -1161,7 +1173,7 @@ const CleanInvoiceTemplate = ({
     );
   };
 
-  const isCancelled = isCancelledStatus(dataAny.status, dataAny);
+  const isCancelled = isCancelledStatus(readStatus(dataAny.status), dataAny);
 
   return (
     <Document title={docTitleForMeta} author={companyName}>
@@ -1585,7 +1597,7 @@ const CleanInvoiceTemplate = ({
                   </Text>
                 </View>
               ) : null}
-              {type !== "QUOTATION" && type !== "SUBSCRIPTION" && (
+              {(
                 <View
                   style={{
                     flexDirection: "row",
@@ -1621,7 +1633,7 @@ const CleanInvoiceTemplate = ({
                   </Text>
                 </View>
               )}
-              {type !== "QUOTATION" && type !== "SUBSCRIPTION" && (
+              {(
                 <View
                   style={{
                     flexDirection: "row",
@@ -1844,7 +1856,7 @@ const CleanInvoiceTemplate = ({
                   </View>
                 )}
 
-              {type !== "QUOTATION" && type !== "SUBSCRIPTION" && (
+              {(
                 <View
                   style={{
                     flexDirection: "row",
@@ -1882,7 +1894,7 @@ const CleanInvoiceTemplate = ({
                 </View>
               )}
 
-              {type !== "QUOTATION" && type !== "SUBSCRIPTION" && (
+              {(
                 <View
                   style={{
                     flexDirection: "row",
@@ -2334,7 +2346,7 @@ const ModernInvoiceTemplate = ({
   };
 
   const isCancelled = isCancelledStatus(
-    dataAny.paymentStatus || dataAny.status,
+    readStatus(dataAny.paymentStatus) || readStatus(dataAny.status),
     dataAny,
   );
 
@@ -3342,7 +3354,7 @@ const ProfessionalInvoiceTemplate = ({
     );
   };
 
-  const isCancelled = isCancelledStatus(dataAny.status, dataAny);
+  const isCancelled = isCancelledStatus(readStatus(dataAny.status), dataAny);
 
   return (
     <Document title={docTitleForMeta} author={companyName}>
@@ -4204,10 +4216,10 @@ export const PrimeDocument = ({
       />
     ) : (
       <Text
-        style={[
-          brandTextStyle,
-          alignment === "left" ? { marginBottom: 5 } : null,
-        ]}
+        style={{
+          ...brandTextStyle,
+          ...(alignment === "left" ? { marginBottom: 5 } : {}),
+        }}
       >
         {companyName}
       </Text>
@@ -4314,7 +4326,7 @@ export const PrimeDocument = ({
     const items = (d.items || []) as Array<Record<string, unknown>>;
     const cd = d.conversionDetails as Record<string, unknown> | undefined;
 
-    const isCancelled = isCancelledStatus(d.status, d);
+    const isCancelled = isCancelledStatus(readStatus(d.status), d);
 
     return (
       <Document
@@ -4530,7 +4542,7 @@ export const PrimeDocument = ({
     const isOverpaid = rc.paymentStatus === "OVERPAID";
     const overpaymentAmount = rc.overpaymentAmount || rc.walletDeposit || 0;
 
-    const isCancelled = isCancelledStatus(rc.paymentStatus || rc.status, rc);
+    const isCancelled = isCancelledStatus(rc.paymentStatus, rc);
     // Payment-record semantics: the badge names the payment that was
     // received (PAYMENT RECEIVED), never the invoice settlement state.
     // The invoice balance remains separately visible in the
@@ -4878,7 +4890,7 @@ export const PrimeDocument = ({
               {!!receiptAccount && receiptMetaRow("Account", receiptAccount)}
               {receiptMetaRow("Status", receiptBadge.label, {
                 fontWeight: "bold",
-                color: monoText(mode, receiptBadge.color),
+                color: monoText(mode, receiptBadge.tone),
               })}
             </View>
           </View>
@@ -5044,7 +5056,7 @@ export const PrimeDocument = ({
                     textAlign: "right",
                   }}
                 >
-                  {currency} {formatAmount(rc.balanceDue)}
+                  {currency} {formatAmount(rc.balanceDue ?? 0)}
                 </Text>
               </View>
             )}
@@ -6643,7 +6655,7 @@ export const PrimeDocument = ({
       currencyService.getBaseCurrency(),
     );
     const currencyUnitNote = baseCurrency?.code
-      ? `All amounts in ${baseCurrency.code}${baseCurrency.name ? ` (${baseCurrency.name})` : ""}, stated to two decimal places.`
+      ? `All amounts in ${baseCurrency.code}, stated to two decimal places.`
       : `All amounts in ${scheduleCurrency}, stated to two decimal places.`;
 
     return (
@@ -8531,7 +8543,7 @@ export const PrimeDocument = ({
   }
   if (type === "POS_RECEIPT") {
     const r = data as PosReceiptDoc;
-    const isCancelled = isCancelledStatus(r.status, r);
+    const isCancelled = isCancelledStatus(undefined, r);
 
     // POS sizing follows the invoice template settings (bodyFontSize, like every
     // other document via fontScale) plus a 30% uplift for receipt readability.
@@ -9029,7 +9041,7 @@ export const PrimeDocument = ({
     }
   }
 
-  const isCancelled = isCancelledStatus(dataAny.status, dataAny);
+  const isCancelled = isCancelledStatus(readStatus(dataAny.status), dataAny);
 
   // Global pagination framing (shared document-layout capability; for
   // INVOICE it reproduces the proven reference strings byte-identically).
@@ -9048,11 +9060,11 @@ export const PrimeDocument = ({
     >
       <Page
         size="A4"
-        style={[
-          s.page,
-          pageStyle,
-          type === "INVOICE" ? { paddingBottom: 64 } : null,
-        ]}
+        style={{
+          ...s.page,
+          ...pageStyle,
+          ...(type === "INVOICE" ? { paddingBottom: 64 } : {}),
+        }}
       >
         {channel === "portal" && <PortalCopyWatermark colorMode={mode} />}
         {isCancelled && <CancelledWatermark colorMode={mode} />}
@@ -9070,13 +9082,13 @@ export const PrimeDocument = ({
             <>
               <View style={s.headerLeft}>
                 <Text
-                  style={[
-                    s.title,
-                    titleStyle,
-                    type === "INVOICE"
+                  style={{
+                    ...s.title,
+                    ...titleStyle,
+                    ...(type === "INVOICE"
                       ? { fontSize: 22 * fontScale, height: "auto" }
-                      : null,
-                  ]}
+                      : {}),
+                  }}
                 >
                   {title}
                 </Text>
@@ -9404,10 +9416,10 @@ export const PrimeDocument = ({
                       return (
                         <View
                           key={i}
-                          style={[
-                            s.row,
-                            paginated ? { paddingVertical: 4 } : null,
-                          ]}
+                          style={{
+                            ...s.row,
+                            ...(paginated ? { paddingVertical: 4 } : {}),
+                            }}
                           wrap={paginated ? false : undefined}
                         >
                           <Text style={s.colSn}>{i + 1}</Text>
@@ -9475,10 +9487,10 @@ export const PrimeDocument = ({
                     return (
                       <View
                         key={i}
-                        style={[
-                          s.row,
-                          paginated ? { paddingVertical: 4 } : null,
-                        ]}
+                        style={{
+                          ...s.row,
+                          ...(paginated ? { paddingVertical: 4 } : {}),
+                          }}
                         wrap={paginated ? false : undefined}
                       >
                         <Text style={s.colSn}>{i + 1}</Text>
@@ -9496,13 +9508,13 @@ export const PrimeDocument = ({
 
                   {/* 3. The Masterpiece Summary Box (Restoring Source 1 Layout) */}
                   <View
-                    style={[
-                      s.summaryContainer,
-                      type === "QUOTATION"
+                    style={{
+                      ...s.summaryContainer,
+                      ...(type === "QUOTATION"
                         ? { justifyContent: "flex-end" }
-                        : null,
-                      type === "PO" ? { justifyContent: "flex-end" } : null,
-                    ]}
+                        : {}),
+                      ...(type === "PO" ? { justifyContent: "flex-end" } : {}),
+                    }}
                   >
                     {/* Left Side: Invoice Status for INVOICE/ORDER types */}
                     {(type === "INVOICE" ||
@@ -9841,7 +9853,7 @@ export const PrimeDocument = ({
                     <View key={i} style={s.row}>
                       <Text style={s.colSn}>{i + 1}</Text>
                       <Text style={s.colDesc}>{item.desc}</Text>
-                      <Text style={s.colQty}>{item.qty}</Text>
+                      <Text style={s.colQty}>{("qty" in item) ? item.qty : item.qtyReturned}</Text>
                     </View>
                   ))}
                 </>
@@ -11343,7 +11355,7 @@ export const PrimeDocument = ({
               <View
                 wrap={false}
                 style={{
-                  marginTop: type === "INVOICE" ? 10 : 14,
+                  marginTop: 14,
                   padding: 10,
                   backgroundColor: monoFill(mode, "#f8fafc"),
                   borderRadius: 6,

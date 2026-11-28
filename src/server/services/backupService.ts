@@ -15,6 +15,12 @@ export async function createDatabaseBackup(db: ServerDatabase, backupDir: string
   const fileName = `pms-backup-${stamp}.tar`;
   const filePath = path.join(backupDir, fileName);
 
+  // A PostgreSQL driver has no PGlite data directory to dump. Refuse the
+  // backup explicitly rather than producing a file that is not a backup.
+  if (!db.pg.dumpDataDir) {
+    throw new Error('Database backups are only supported for the PGlite backend.');
+  }
+
   const blob = await db.pg.dumpDataDir();
   const buf = Buffer.from(await blob.arrayBuffer());
   fs.writeFileSync(filePath, buf);

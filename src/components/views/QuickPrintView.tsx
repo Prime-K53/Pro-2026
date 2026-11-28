@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useAccounting } from '../../context/AccountingContext';
 import { useAuth } from '../../context/AuthContext';
 import { QuickPrintJob, QuickPrintJobType } from '../../types/accounting';
@@ -81,6 +81,7 @@ export const QuickPrintView: React.FC = () => {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | QuickPrintJobType>('all');
 
   const selectedPaperMat = rawMaterials.find(r => r.id === rawPaperItemId);
@@ -167,6 +168,13 @@ export const QuickPrintView: React.FC = () => {
     const resolvedName = selectedCust ? selectedCust.companyName : walkInName.trim() || 'Walk-In Customer';
     const wantsInvoice = Boolean(createInvoice && customerId);
 
+    // A stable key per logical submission. On an uncertain network outcome the
+    // key is preserved so a retry replays the original committed sale instead of
+    // posting a second one; it is cleared only after confirmed success.
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = `qp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
     setSubmitting(true);
     try {
       const created = await addQuickPrintJob(
@@ -188,14 +196,16 @@ export const QuickPrintView: React.FC = () => {
           date,
           notes: notes.trim() || undefined,
         },
-        { createInvoice: wantsInvoice }
+        { createInvoice: wantsInvoice, idempotencyKey: idempotencyKeyRef.current }
       );
 
+      idempotencyKeyRef.current = null;
       triggerShortcutNotice(
         `Posted ${created.jobNumber} to WIP · Real Profit: ${formatCurrency(created.profit, currency)}`
       );
       setNotes('');
     } catch (err: any) {
+      // Keep the idempotency key so a retry of the same logical operation is safe.
       triggerShortcutNotice(err?.message || 'Could not post the print job', 'error');
     } finally {
       setSubmitting(false);

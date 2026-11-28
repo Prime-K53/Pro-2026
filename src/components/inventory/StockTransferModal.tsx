@@ -134,6 +134,7 @@ export const StockTransferModal: React.FC<StockTransferModalProps> = ({
   return (
     <ModalShell open={open} onClose={onClose} titleId="stock-transfer-modal-title" size="3xl">
       <ModalHeader
+          titleId="stock-transfer-modal-title"
         title="Transfer Stock"
         subtitle="Move stock between storage locations"
         tone="brand"

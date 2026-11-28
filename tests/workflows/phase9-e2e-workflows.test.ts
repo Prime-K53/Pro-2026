@@ -902,7 +902,7 @@ async function main() {
   const passed = results.filter(r => r.passed).length;
   const failed = results.filter(r => !r.passed).length;
 
-  const docsDir = path.resolve(process.cwd(), 'docs', 'workflows');
+  const docsDir = path.resolve(process.env.PMS_TEST_REPORT_DIR || path.join(process.cwd(), 'docs'), 'workflows');
   fs.mkdirSync(docsDir, { recursive: true });
   const reportPath = path.join(docsDir, 'phase9-dependency-and-test-report.md');
 

@@ -5,7 +5,14 @@ import { commercialApi, ApiCustomer } from '../../services/commercialApi';
 import { quoteApi } from '../../services/quoteApi';
 import { Loader2, Sparkles, Upload, X, AlertTriangle, Plus, Trash2, FileText, CheckCircle2, Camera } from 'lucide-react';
 
-type Kind = 'quote' | 'invoice';
+type Kind = 'quote' | 'invoice' | 'receipt' | 'supplier_bill';
+
+const KIND_LABELS: Record<Kind, string> = {
+  quote: 'Quote',
+  invoice: 'Invoice',
+  receipt: 'Receipt',
+  supplier_bill: 'Supplier Bill',
+};
 
 interface CatalogItem {
   id: number;
@@ -54,6 +61,8 @@ export const AiDocumentOcrModal: React.FC = () => {
   const [result, setResult] = useState<OcrExtraction | null>(null);
   const [model, setModel] = useState('');
   const [duplicate, setDuplicate] = useState(false);
+  const [needsReview, setNeedsReview] = useState(false);
+  const [businessDuplicate, setBusinessDuplicate] = useState(false);
 
   // Editable review state
   const [customerId, setCustomerId] = useState('');
@@ -73,6 +82,8 @@ export const AiDocumentOcrModal: React.FC = () => {
     setResult(null);
     setModel('');
     setDuplicate(false);
+    setNeedsReview(false);
+    setBusinessDuplicate(false);
     setError(null);
     setLines([]);
     setCounterpartyName('');
@@ -137,6 +148,8 @@ export const AiDocumentOcrModal: React.FC = () => {
       applyExtraction(res.extraction);
       setModel(res.model);
       setDuplicate(res.duplicate);
+      setNeedsReview(res.needsReview);
+      setBusinessDuplicate(res.businessDuplicate);
     } catch (err: any) {
       setError(err?.message || 'AI extraction failed. Please try again.');
     } finally {
@@ -163,6 +176,8 @@ export const AiDocumentOcrModal: React.FC = () => {
       applyExtraction(res.extraction);
       setModel(res.model);
       setDuplicate(res.duplicate);
+      setNeedsReview(res.needsReview);
+      setBusinessDuplicate(res.businessDuplicate);
       if (res.duplicate) triggerShortcutNotice('This document was already scanned — showing the saved extraction');
     } catch (err: any) {
       setError(err?.message || 'AI extraction failed. Please try a clearer image.');
@@ -200,6 +215,12 @@ export const AiDocumentOcrModal: React.FC = () => {
 
   const handleConfirm = async () => {
     if (!result) return;
+    if (kind === 'receipt' || kind === 'supplier_bill') {
+      // Receipts/supplier bills are captured for review only — never posted here.
+      triggerShortcutNotice(`${KIND_LABELS[kind]} saved for review`);
+      close();
+      return;
+    }
     if (!customerId) {
       setError('Select a customer to create the document.');
       return;
@@ -271,7 +292,7 @@ export const AiDocumentOcrModal: React.FC = () => {
         <div className="flex items-center justify-between gap-3 px-5 py-3 bg-slate-900 text-white">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-amber-300" />
-            <span className="font-bold text-sm">AI Document OCR — Quote / Invoice Generator</span>
+            <span className="font-bold text-sm">AI Document OCR — {KIND_LABELS[kind]} Capture</span>
           </div>
           <button onClick={close} className="text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
@@ -285,9 +306,9 @@ export const AiDocumentOcrModal: React.FC = () => {
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1 rounded-lg border border-slate-300 dark:border-slate-700 p-0.5">
-              {(['invoice', 'quote'] as Kind[]).map(k => (
+              {(['invoice', 'quote', 'receipt', 'supplier_bill'] as Kind[]).map(k => (
                 <button key={k} onClick={() => setKind(k)} className={`px-3 py-1 rounded font-semibold ${kind === k ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>
-                  {k === 'invoice' ? 'Invoice' : 'Quote'}
+                  {KIND_LABELS[k]}
                 </button>
               ))}
             </div>
@@ -322,6 +343,19 @@ export const AiDocumentOcrModal: React.FC = () => {
               <div className="flex items-center gap-2 text-emerald-600 font-semibold">
                 <CheckCircle2 className="w-4 h-4" /> Extracted {result.lines.length} line(s) · confidence {Math.round((result.confidence || 0) * 100)}%
               </div>
+
+              {needsReview && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  Low confidence — please review every field before creating the document.
+                </div>
+              )}
+              {businessDuplicate && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-orange-50 dark:bg-orange-950/40 border border-orange-300 dark:border-orange-800 text-orange-800 dark:text-orange-200">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  A similar document (same counterparty, date and total) already exists — check for a duplicate.
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <label className="space-y-1 sm:col-span-2">
@@ -377,7 +411,7 @@ export const AiDocumentOcrModal: React.FC = () => {
                 <button onClick={close} className="btn btn-secondary">Cancel</button>
                 <button onClick={handleConfirm} disabled={posting} className="btn btn-primary disabled:opacity-50">
                   {posting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                  {posting ? 'Creating…' : `Create ${kind === 'quote' ? 'Quote' : 'Invoice'}`}
+                  {posting ? 'Creating…' : kind === 'receipt' || kind === 'supplier_bill' ? 'Done' : `Create ${KIND_LABELS[kind]}`}
                 </button>
               </div>
             </>

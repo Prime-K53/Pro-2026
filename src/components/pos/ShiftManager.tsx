@@ -276,6 +276,7 @@ export const ShiftManager: React.FC<ShiftManagerProps> = ({ onShiftChange }) => 
         {showCloseModal && (
           <ModalShell open onClose={() => setShowCloseModal(false)} size="md" titleId="close-shift-title">
             <ModalHeader
+              titleId="close-shift-title"
               title="Close shift"
               subtitle="Count the drawer and reconcile against the expected cash."
               icon={<Wallet className="h-4 w-4" />}

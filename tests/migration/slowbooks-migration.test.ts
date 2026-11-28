@@ -871,7 +871,10 @@ async function main() {
       rollbackVerified: true,
       dryRunVerified: true,
     });
-    const reportOutPath = path.resolve(process.cwd(), 'docs/migration/phase10-migration-reconciliation-report.md');
+    const reportOutPath = path.resolve(
+      process.env.PMS_TEST_REPORT_DIR || path.join(process.cwd(), 'docs'),
+      'migration/phase10-migration-reconciliation-report.md'
+    );
     fs.mkdirSync(path.dirname(reportOutPath), { recursive: true });
     fs.writeFileSync(reportOutPath, md, 'utf8');
 

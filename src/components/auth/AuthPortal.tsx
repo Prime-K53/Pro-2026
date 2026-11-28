@@ -149,7 +149,7 @@ export const AuthPortal: React.FC = () => {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f6f7fb] p-4 text-slate-900 md:p-8 dark:bg-[#070b14] dark:text-slate-100">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f8fafc] p-4 text-slate-900 md:p-8 dark:bg-[#070b14] dark:text-slate-100">
       {/* Ambient brand glow */}
       <div
         aria-hidden="true"

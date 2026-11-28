@@ -95,7 +95,7 @@ export function useFxRates(): UseFxRatesResult {
   const baseCurrency = useMemo(() => {
     if (companyBase) return companyBase;
     const toBase = rates.find(r => r.toCurrency && r.toCurrency !== r.fromCurrency);
-    return toBase?.toCurrency || 'ZMW';
+    return toBase?.toCurrency || '';
   }, [companyBase, rates]);
 
   const options = useMemo<CurrencyOption[]>(() => {
@@ -105,20 +105,21 @@ export function useFxRates(): UseFxRatesResult {
       if (r.fromCurrency && r.fromCurrency !== baseCurrency) codes.add(r.fromCurrency);
       if (r.toCurrency && r.toCurrency !== baseCurrency) codes.add(r.toCurrency);
     });
-    codes.add(baseCurrency);
+    if (baseCurrency) codes.add(baseCurrency);
 
     return Array.from(codes)
+      .filter(Boolean)
       .sort((a, b) => (a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)))
       .map(code => ({
         code,
-        label: code === baseCurrency ? `${code} (Base)` : code,
-        isBase: code === baseCurrency,
-        rateToBase: latestRateToBase(code, baseCurrency, rates),
+        label: baseCurrency && code === baseCurrency ? `${code} (Base)` : code,
+        isBase: Boolean(baseCurrency && code === baseCurrency),
+        rateToBase: baseCurrency ? latestRateToBase(code, baseCurrency, rates) : null,
       }));
   }, [rates, baseCurrency]);
 
   const rateFor = useCallback(
-    (code: string) => latestRateToBase(code.toUpperCase(), baseCurrency, rates),
+    (code: string) => (baseCurrency ? latestRateToBase(code.toUpperCase(), baseCurrency, rates) : null),
     [rates, baseCurrency]
   );
 

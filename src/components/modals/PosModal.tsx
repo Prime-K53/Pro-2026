@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { AiAssistPanel } from '../ai/AiAssistPanel';
 import {
   Banknote,
   CheckCircle2,
@@ -573,10 +574,17 @@ export const PosModal: React.FC = () => {
       open={isPosModalOpen}
       onClose={() => setIsPosModalOpen(false)}
       size="4xl"
+      titleId="pos-modal-title"
       className="!max-w-6xl"
     >
+      <div className="px-4 pt-3">
+        <AiAssistPanel
+          context={`Customer: ${customerId ? 'selected' : walkInName} · Total due: ${formatCurrency(totalDue, currency)}`}
+          suggestions={['What is our cash position today?', 'Which items are low on stock?', 'Summarise today’s sales']}
+        />
+      </div>
       <ModalHeader
-        title="Full Point-of-Sale (POS) Terminal"
+        titleId="pos-modal-title"        title="Full Point-of-Sale (POS) Terminal"
         subtitle="Live inventory deduction, promos & referrals, multi-tender settlement, and instant double-entry GL posting"
         icon={<ShoppingCart className="h-5 w-5" />}
         tone="emerald"

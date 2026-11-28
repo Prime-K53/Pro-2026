@@ -14,6 +14,7 @@ import {
   SummaryRow,
   InlineAlert,
 } from '../common/ui';
+import { AiAssistPanel } from '../ai/AiAssistPanel';
 
 type Line = {
   id: string;
@@ -141,7 +142,14 @@ export const EnterBillModal: React.FC = () => {
 
   return (
     <ModalShell open={isEnterBillOpen} onClose={close} size="4xl" titleId="bill-modal-title">
+      <div className="px-4 pt-3">
+        <AiAssistPanel
+          context={`Vendor: ${selectedVendor?.companyName || '—'} · Bill total: ${formatCurrency(total, currency)}`}
+          suggestions={['Which supplier bills are overdue?', 'What is our cash flow this month?', 'Is this vendor within terms?']}
+        />
+      </div>
       <ModalHeader
+          titleId="bill-modal-title"
         title="Enter Vendor Bill"
         subtitle="Record a supplier bill split across expense accounts"
         icon={<Receipt className="h-4 w-4" />}

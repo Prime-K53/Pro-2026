@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Transaction } from '@electric-sql/pglite';
 import { writeAuditLog } from '../audit.ts';
+import { detectIdentitySignals, flagReferralHold } from './referralFraudService.ts';
 import { formatDecimal4, parseDecimal4, toMoneyNumber } from '../lib/decimal.ts';
 import {
   AccountingError,
@@ -1356,6 +1357,26 @@ export async function accrueReferralEventAndJournal(
     ]
   );
   const eventId = Number(ins.rows[0].id);
+
+  // Non-destructive self-referral screen: flag (never auto-confirm) when the
+  // referee and referrer share identity signals. Best-effort; never blocks accrual.
+  if (params.refereeCustomerId != null && referrerCustomerId != null) {
+    try {
+      const signals = await detectIdentitySignals(tx, companyId, {
+        customerId: params.refereeCustomerId,
+        referrerCustomerId,
+      });
+      if (signals.matched) {
+        await flagReferralHold(tx, companyId, actor, {
+          eventId,
+          reason: 'self_referral_identity_signal',
+          evidence: { signals, refereeCustomerId: params.refereeCustomerId, referrerCustomerId },
+        });
+      }
+    } catch {
+      /* flagging is best-effort */
+    }
+  }
 
   // Reserve estimated reward exposure against the campaign budget (U3-B).
   let reservationId: number | null = null;

@@ -15,13 +15,16 @@ export const OcrLineSchema = z.object({
 export type OcrLine = z.infer<typeof OcrLineSchema>;
 
 export const OcrExtractionSchema = z.object({
-  kind: z.enum(['quote', 'invoice']),
+  kind: z.enum(['quote', 'invoice', 'receipt', 'supplier_bill']),
   counterpartyName: z.string().min(1),
   counterpartyPhone: z.string().optional().nullable(),
   counterpartyEmail: z.string().optional().nullable(),
   date: z.string().min(1),
   currency: z.string().min(1),
   taxRate: z.number().min(0).max(100).optional().nullable(),
+  paymentMethod: z.string().optional().nullable(),
+  reference: z.string().optional().nullable(),
+  discount: z.number().nonnegative().optional().nullable(),
   lines: z.array(OcrLineSchema).min(1),
   subtotal: z.number().nonnegative(),
   tax: z.number().nonnegative().optional().nullable(),
@@ -30,6 +33,8 @@ export const OcrExtractionSchema = z.object({
   rawText: z.string().optional().nullable(),
 });
 export type OcrExtraction = z.infer<typeof OcrExtractionSchema>;
+
+export type OcrKind = OcrExtraction['kind'];
 
 /** Parse + validate model output; throws a friendly error on malformed JSON. */
 export function parseOcrExtraction(raw: string): OcrExtraction {

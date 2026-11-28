@@ -593,7 +593,16 @@ export const ReportsView: React.FC = () => {
           className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2"
         >
           <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-          <span>{errorMsg}</span>
+          <span>
+            {errorMsg}
+            {/* A retained statement is real server data from an earlier load, so
+                it stays visible for continuity but must not read as current. */}
+            {(pnlReport || bsReport || tbReport || glReport) && (
+              <span className="ml-1 font-semibold">
+                Showing the previously loaded statement — it may be out of date.
+              </span>
+            )}
+          </span>
         </div>
       )}
 

@@ -641,7 +641,10 @@ async function main() {
 
   console.log(`\nSummary: ${passed}/${results.length} PASSED in ${totalMs}ms.`);
 
-  const reportPath = path.resolve(process.cwd(), 'docs/database/inventory-ops-test-execution-report.md');
+  const reportPath = path.resolve(
+    process.env.PMS_TEST_REPORT_DIR || path.join(process.cwd(), 'docs'),
+    'database/inventory-ops-test-execution-report.md'
+  );
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   const lines = [
     '# Advanced Inventory Operations — Test Execution Report',

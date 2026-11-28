@@ -126,6 +126,7 @@ export type Permission =
   // V2 gap-closure modules
   | 'ai:read'
   | 'ai:write'
+  | 'ai:memory:reindex'
   | 'delivery:read'
   | 'delivery:write'
   | 'bi:read'
@@ -272,6 +273,7 @@ export const ROLE_DEFINITIONS: Record<CompanyRole, RoleDefinition> = {
       'referral:view_reports',
       'ai:read',
       'ai:write',
+      'ai:memory:reindex',
       'delivery:read',
       'delivery:write',
       'bi:read',

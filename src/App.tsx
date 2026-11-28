@@ -103,7 +103,7 @@ class AppErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[#f6f7fb] p-6 dark:bg-[#070b14]">
+        <div className="flex min-h-screen items-center justify-center bg-[#f8fafc] p-6 dark:bg-[#070b14]">
           <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-pop dark:border-white/10 dark:bg-slate-900">
             <div className="h-1.5 w-full bg-gradient-to-r from-rose-500 via-rose-400 to-amber-400" />
             <div className="space-y-4 p-7">
@@ -325,7 +325,7 @@ const AppContent: React.FC = () => {
           ? 'bg-[#eef3f8]'
           : isMidnight
           ? 'bg-[#070b14]'
-          : 'bg-[#f6f7fb]'
+          : 'bg-[#f8fafc]'
       }`}
     >
       {/* Primary application header and quick-action toolbar */}
@@ -427,7 +427,7 @@ const AuthenticatedWorkspace: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-[#f6f7fb] text-slate-500 dark:bg-[#070b14] dark:text-slate-400">
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-[#f8fafc] text-slate-500 dark:bg-[#070b14] dark:text-slate-400">
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-card dark:bg-slate-900">
           <Loader2 className="h-5 w-5 animate-spin text-brand-600 dark:text-brand-400" />
         </span>

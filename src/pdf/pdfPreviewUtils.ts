@@ -96,8 +96,10 @@ const resolveFilePath = (value?: string | null): string | null => {
   return null;
 };
 
-const getPreviewUrl = (file: FilePreviewDescriptor): string | null =>
-  file.sourceUrl || file.downloadUrl || file.publicUrl || null;
+const getPreviewUrl = (file: FilePreviewDescriptor): string | null => {
+  const candidate = file.sourceUrl || file.downloadUrl || file.publicUrl;
+  return candidate ? String(candidate) : null;
+};
 
 export const resolvePdfFilePreviewSource = async (
   file: FilePreviewDescriptor,
@@ -124,7 +126,7 @@ export const resolvePdfFilePreviewSource = async (
     if (!result?.success || !result.data) {
       throw new Error(`Failed to read PDF file: ${result?.error || 'unknown error'}`);
     }
-    return Uint8Array.from(result.data);
+    return new Uint8Array(result.data);
   }
 
   if (!previewUrl) {

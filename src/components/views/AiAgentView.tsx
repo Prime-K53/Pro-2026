@@ -26,9 +26,18 @@ import {
   AiConfig,
   AiConversation,
   AiMessage,
+  AiVerifiedClaim,
   AiProposedAction,
 } from '../../services/v2Api';
 import { useAccounting } from '../../context/AccountingContext';
+
+type ChatMessage = AiMessage & {
+  claims?: AiVerifiedClaim[];
+  abstained?: boolean;
+  explanation?: string | null;
+  asOf?: string;
+  domain?: string;
+};
 import { InlineAlert, Panel, StatCard, StatusBadge } from '../common/ui';
 
 type Tab = 'chat' | 'anomalies' | 'actions' | 'settings';
@@ -120,7 +129,7 @@ const ChatTab: React.FC<{
   const [configLoading, setConfigLoading] = useState(true);
   const [conversations, setConversations] = useState<AiConversation[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<AiMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -249,7 +258,8 @@ const ChatTab: React.FC<{
             {config.provider} · {config.modelName}
           </StatusBadge>
           <span className="text-slate-500 dark:text-slate-400">
-            Answers are grounded only in records this role may read, and include citations.
+            Financial figures are verified against authoritative records and shown with claim-level
+            citations; anything unverified is labelled as such.
           </span>
         </div>
       )}
@@ -322,8 +332,8 @@ const ChatTab: React.FC<{
           >
             {messages.length === 0 && !sending && (
               <p className="py-10 text-center text-xs text-slate-500">
-                Ask about revenue, receivables, stock, payroll or anomalies. Answers cite the
-                records they used.
+                Ask about profit, cash flow, receivables, payables, stock, wastage,
+                delayed jobs or anomalies. Answers cite the records they used.
               </p>
             )}
             {messages.map(m => (
@@ -372,9 +382,9 @@ const ChatTab: React.FC<{
   );
 };
 
-const ChatBubble: React.FC<{ message: AiMessage }> = ({ message }) => {
+const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   const isUser = message.role === 'user';
-  const citations: AiCitation[] = message.sourceCitations?.citations || [];
+  const claims = message.claims || [];
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -388,18 +398,39 @@ const ChatBubble: React.FC<{ message: AiMessage }> = ({ message }) => {
         <pre className="whitespace-pre-wrap break-words font-sans leading-relaxed">
           {message.content}
         </pre>
-        {citations.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-200 pt-2 dark:border-white/[0.07]">
-            {citations.map((c, i) => (
-              <span
-                key={`${c.kind}-${c.id}-${i}`}
-                className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-white/10"
-                title={`${c.kind} #${c.id}`}
+        {claims.length > 0 && (
+          <div className="mt-2 space-y-1.5 border-t border-slate-200 pt-2 dark:border-white/[0.07]">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">
+              Verified from authoritative records
+            </div>
+            {claims.map((c, i) => (
+              <div
+                key={`claim-${i}`}
+                className="rounded bg-emerald-50 px-2 py-1 text-[11px] text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
               >
-                {c.kind} #{c.id} · {c.label}
-              </span>
+                <div>{c.explanation || `${c.metric} = ${c.amount}`}</div>
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {c.citations.map((ct, j) => (
+                    <span
+                      key={`cit-${i}-${j}`}
+                      className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-white/10"
+                      title={`${ct.kind} #${ct.id}`}
+                    >
+                      {ct.kind} #{ct.id} · {ct.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
+            {message.explanation && (
+              <div className="text-[10px] text-slate-400">
+                AI explanation (not independently verified).
+              </div>
+            )}
           </div>
+        )}
+        {!isUser && message.abstained && claims.length === 0 && (
+          <div className="mt-1 text-[11px] text-amber-600">Not verified from records.</div>
         )}
         {message.tokenCount != null && (
           <div
@@ -451,12 +482,29 @@ const AnomaliesTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ on
     }
   };
 
-  const open = useMemo(() => alerts.filter(a => a.status === 'open'), [alerts]);
+  const active = useMemo(
+    () => alerts.filter(a => a.status === 'open' || a.status === 'acknowledged'),
+    [alerts]
+  );
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const setStatus = async (id: number, status: 'acknowledged' | 'resolved') => {
+    setBusyId(id);
+    try {
+      await aiApi.setAnomalyStatus(id, status);
+      onNotice(status === 'resolved' ? 'Anomaly resolved' : 'Anomaly acknowledged');
+      await load();
+    } catch (err: any) {
+      onNotice(err?.message || 'Failed to update anomaly', 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const tone = (severity: string) =>
     severity === 'critical' || severity === 'high'
       ? 'danger'
-      : severity === 'medium'
+      : severity === 'warning' || severity === 'medium'
       ? 'warning'
       : 'info';
 
@@ -480,14 +528,14 @@ const AnomaliesTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ on
     >
       {loading ? (
         <p className="text-sm text-slate-500">Loading…</p>
-      ) : open.length === 0 ? (
+      ) : active.length === 0 ? (
         <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
           <CheckCircle2 className="h-4 w-4" />
           No open anomalies. Run detection to re-check your records.
         </div>
       ) : (
         <div className="space-y-3">
-          {open.map(a => (
+          {active.map(a => (
             <div
               key={a.id}
               className="rounded-xl border border-slate-200 p-4 dark:border-white/[0.07]"
@@ -512,8 +560,31 @@ const AnomaliesTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ on
                   {a.evidence}
                 </pre>
               )}
-              <div className="mt-1.5 text-[11px] text-slate-400">
-                {new Date(a.createdAt).toLocaleString()}
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] text-slate-400">
+                  {new Date(a.createdAt).toLocaleString()}
+                </div>
+                <div className="flex gap-2">
+                  {a.status === 'open' && (
+                    <button
+                      type="button"
+                      onClick={() => setStatus(a.id, 'acknowledged')}
+                      disabled={busyId === a.id}
+                      className="btn btn-secondary py-1.5 text-xs"
+                    >
+                      Acknowledge
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setStatus(a.id, 'resolved')}
+                    disabled={busyId === a.id}
+                    className="btn btn-primary py-1.5 text-xs"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Resolve
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -643,7 +714,7 @@ const ActionsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onNo
                     className="btn btn-primary py-1.5 text-xs"
                   >
                     <ZapIcon />
-                    Execute &amp; post to GL
+                    Execute approved action
                   </button>
                 </div>
               )}
@@ -686,6 +757,7 @@ const SettingsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onN
   const [tokenLimit, setTokenLimit] = useState('');
   const [costLimit, setCostLimit] = useState('');
   const [purgeDays, setPurgeDays] = useState('90');
+  const [reindexing, setReindexing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -773,6 +845,18 @@ const SettingsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onN
       await load();
     } catch (err: any) {
       onNotice(err?.message || 'Purge failed', 'error');
+    }
+  };
+
+  const reindex = async () => {
+    setReindexing(true);
+    try {
+      const res = await aiApi.reindexMemory();
+      onNotice(`Memory reindexed · ${res.upserted} chunks, ${res.pruned} pruned`);
+    } catch (err: any) {
+      onNotice(err?.message || 'Memory reindex failed', 'error');
+    } finally {
+      setReindexing(false);
     }
   };
 
@@ -988,6 +1072,22 @@ const SettingsTab: React.FC<{ onNotice: (m: string, t?: any) => void }> = ({ onN
           </div>
         </Panel>
       </div>
+
+      <Panel
+        title="Semantic memory"
+        description="Business context (products, customers, pricing content) indexed for semantic recall. Current balances/prices are always read live from authoritative records, never from memory."
+        icon={<Cpu className="h-4 w-4 text-brand-600" />}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-500">
+            Reindex after bulk changes to products, customers or price cards.
+          </span>
+          <button type="button" onClick={reindex} disabled={reindexing} className="btn btn-secondary">
+            <RefreshCw className={`h-3.5 w-3.5 ${reindexing ? 'animate-spin' : ''}`} />
+            {reindexing ? 'Reindexing…' : 'Reindex memory'}
+          </button>
+        </div>
+      </Panel>
 
       <Panel
         title="AI audit trail"

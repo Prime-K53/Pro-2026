@@ -3,6 +3,7 @@ import { ServerDatabase } from '../db.ts';
 import { createAuthMiddleware } from '../middleware/auth.ts';
 import { csrfProtection } from '../middleware/csrf.ts';
 import { AccountingError, ActorContext } from '../services/accountingEngine.ts';
+import { parseDecimal4 } from '../../shared/decimal.ts';
 import { rateLimit } from '../rateLimiter.ts';
 import { hasPermission, type Permission } from '../permissions.ts';
 import {
@@ -80,6 +81,10 @@ import {
   listExamGroups,
   getExamGroupForBatch,
 } from '../services/printingRecordsService.ts';
+import { generateInvoiceFromWorkflow } from '../services/documentsService.ts';
+import { recordCustomerPayment } from '../services/salesService.ts';
+import { evaluateApprovalGate } from '../services/approvalService.ts';
+import { checkRouteIdempotency, saveRouteIdempotency } from '../services/commercialHelpers.ts';
 
 function toActor(req: Request): ActorContext {
   const auth = req.auth!;
@@ -215,6 +220,229 @@ export function createPrintingRouter(db: ServerDatabase): Router {
       return handlePrintingError(res, err);
     }
   });
+
+  /**
+   * Atomic quick-print sale (on-account or cash).
+   *
+   * Composes the existing production, invoicing and payment services inside a
+   * SINGLE company-scoped transaction so a quick-print desk sale is all-or-
+   * nothing: the production job, material issue, WIP, invoice (linked to the
+   * job) and — for cash mode — the fully allocated payment commit together or
+   * not at all. No financial calculation is duplicated here; the authoritative
+   * invoice total from the invoice service drives the payment.
+   */
+  router.post(
+    '/printing/quick-sales',
+    requirePermission('printing:write'),
+    requirePermission('invoices:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const body = req.body || {};
+        const mode = body.mode === 'cash' ? 'cash' : body.mode === 'on_account' ? 'on_account' : null;
+        if (!mode) {
+          throw new AccountingError(400, "mode must be 'on_account' or 'cash'", 'INVALID_MODE');
+        }
+        const idempotencyKey =
+          (req.headers['idempotency-key'] as string | undefined) || body.idempotencyKey || null;
+        if (!idempotencyKey || !String(idempotencyKey).trim()) {
+          throw new AccountingError(400, 'An idempotency-key header is required', 'IDEMPOTENCY_KEY_REQUIRED');
+        }
+
+        // The payload hash covers every financially meaningful input. The outer
+        // request-key is the authoritative duplicate guard for the whole sale.
+        const payloadHashInput = {
+          mode,
+          jobType: body.jobType ?? null,
+          customerId: body.customerId ?? null,
+          customerName: body.customerName ?? null,
+          rawPaperItemId: body.rawPaperItemId ?? null,
+          rawTonerItemId: body.rawTonerItemId ?? null,
+          title: body.title ?? null,
+          pages: body.pages ?? null,
+          copies: body.copies ?? null,
+          printSide: body.printSide ?? null,
+          manualSellingPrice: body.manualSellingPrice ?? null,
+          manualSellingPricePerSheet: body.manualSellingPricePerSheet ?? null,
+          finishingCost: body.finishingCost ?? null,
+          finishingCostPerPage: body.finishingCostPerPage ?? null,
+          typingFeeMode: body.typingFeeMode ?? null,
+          typingFeeRate: body.typingFeeRate ?? null,
+          jobDate: body.jobDate ?? null,
+          notes: body.notes ?? null,
+          paymentMethod: mode === 'cash' ? body.paymentMethod ?? null : null,
+          depositToAccountId: mode === 'cash' ? body.depositToAccountId ?? null : null,
+          approvalRequestId: mode === 'cash' ? body.approvalRequestId ?? null : null,
+        };
+
+        const result = await db.withCompanyDb(req.auth!.companyId, async tx => {
+          const actor = toActor(req);
+          const companyId = req.auth!.companyId;
+
+          // 1. Outer idempotency check BEFORE any financial mutation.
+          const idem = await checkRouteIdempotency<{ response: any }>(
+            tx,
+            companyId,
+            'printing_quick_sale',
+            idempotencyKey,
+            payloadHashInput
+          );
+          if (idem.hit) {
+            return { idempotentReplay: true, status: idem.statusCode, body: idem.response.response };
+          }
+
+          // 2. Production job + material issue + WIP (authoritative).
+          const jobResult = await postQuickPrintJob(tx, companyId, actor, {
+            jobType: body.jobType,
+            customerId: body.customerId != null ? Number(body.customerId) : null,
+            customerName: body.customerName,
+            rawPaperItemId: Number(body.rawPaperItemId),
+            rawTonerItemId: Number(body.rawTonerItemId),
+            title: String(body.title ?? '').trim(),
+            pages: Number(body.pages),
+            copies: Number(body.copies),
+            printSide: body.printSide,
+            finishingCost: body.finishingCost,
+            finishingCostPerPage: body.finishingCostPerPage,
+            typingFeeMode: body.typingFeeMode,
+            typingFeeRate: body.typingFeeRate,
+            manualSellingPrice: body.manualSellingPrice,
+            manualSellingPricePerSheet: body.manualSellingPricePerSheet,
+            jobDate: body.jobDate,
+            notes: body.notes,
+            idempotencyKey,
+          });
+          const job = jobResult.job;
+          const jobId = Number(job.id);
+          const wipJournalTxnId = jobResult.wipJournalTxnId ?? null;
+
+          // 3. Invoice linked to the production job. Line values come from the
+          //    authoritative job; the invoice service computes the exact total.
+          const jobDate = job.jobDate || new Date().toISOString().slice(0, 10);
+          const due = new Date(jobDate);
+          due.setDate(due.getDate() + 15);
+          const dueStr = due.toISOString().split('T')[0];
+          const sheets = Number(job.sheetsUsed) || 0;
+          const sellingTotal = Number(job.manualSellingPrice) || 0;
+          const totalCost = Number(job.totalCost) || 0;
+          const lineDesc = `${job.jobNumber}: ${job.title} (${job.pages} pp × ${job.copies} copies, ${job.printSide} · ${sheets} sheets)`;
+
+          const invoiceResult = await generateInvoiceFromWorkflow(tx, companyId, actor, {
+            sourceKind: 'quick_print',
+            sourceRef: job.jobNumber,
+            customerId: job.customerId ?? undefined,
+            customerName: job.customerName ?? undefined,
+            invoiceDate: jobDate,
+            dueDate: dueStr,
+            terms: 'Due on Receipt',
+            taxRate: 0,
+            notes: job.notes || `Quick print desk order ${job.jobNumber}.`,
+            idempotencyKey,
+            postgresPrintingJobId: jobId,
+            lines: [
+              {
+                description: lineDesc,
+                quantity: 1,
+                rate: sellingTotal,
+                unitCost: totalCost,
+                taxable: false,
+              },
+            ],
+          });
+          const invoice = invoiceResult.invoice;
+
+          // 4. Cash mode: maker-checker gate + fully allocated payment.
+          let payment: any = null;
+          if (mode === 'cash') {
+            const amount4 = parseDecimal4(invoice.total);
+            const gate = await evaluateApprovalGate(tx, companyId, actor, {
+              actionType: 'customer_payment',
+              entityType: 'customer_payment',
+              amount: amount4,
+              businessDate: jobDate,
+              payload: payloadHashInput,
+              approvalRequestId: body.approvalRequestId != null ? Number(body.approvalRequestId) : null,
+              idempotencyKey,
+            });
+            if (gate.requiresApproval) {
+              // Abort the whole cash sale — never commit a job/invoice without a
+              // recorded payment, and never bypass maker-checker.
+              throw new AccountingError(
+                409,
+                'Cash sale requires maker-checker approval before it can be posted. Nothing was recorded.',
+                'PAYMENT_APPROVAL_REQUIRED'
+              );
+            }
+            const payResult = await recordCustomerPayment(tx, companyId, actor, {
+              customerId: Number(job.customerId),
+              paymentDate: jobDate,
+              amount: invoice.total,
+              paymentMethod: body.paymentMethod || 'Cash',
+              depositToAccountId: body.depositToAccountId != null ? Number(body.depositToAccountId) : null,
+              memo: `Quick print cash sale ${job.jobNumber}`,
+              idempotencyKey,
+              allocations: [{ invoiceId: Number(invoice.id), amount: invoice.total }],
+            });
+            payment = payResult.payment;
+            if (!payment || payment.id == null) {
+              throw new AccountingError(500, 'Payment was not recorded; cash sale aborted.', 'PAYMENT_NOT_RECORDED');
+            }
+          }
+
+          const responseBody = {
+            mode,
+            job: {
+              id: jobId,
+              jobNumber: job.jobNumber,
+              jobType: job.jobType,
+              title: job.title,
+              pages: job.pages,
+              copies: job.copies,
+              printSide: job.printSide,
+              customerId: job.customerId ?? null,
+              customerName: job.customerName ?? null,
+              jobDate: job.jobDate ?? jobDate,
+              sheetsUsed: job.sheetsUsed,
+              impressionsUsed: job.impressionsUsed,
+              paperCost: job.paperCost,
+              tonerCost: job.tonerCost,
+              totalCost: job.totalCost,
+              manualSellingPrice: job.manualSellingPrice,
+              profit: job.profit,
+            },
+            invoice: { id: Number(invoice.id), invoiceNumber: invoice.invoiceNumber, total: invoice.total },
+            wipJournalTxnId,
+            ...(mode === 'cash'
+              ? {
+                  payment: {
+                    id: Number(payment.id),
+                    amount: invoice.total,
+                    allocations: [{ invoiceId: Number(invoice.id), amount: invoice.total, status: 'allocated' }],
+                  },
+                }
+              : {}),
+          };
+
+          // 5. Persist the outer idempotency record inside the same transaction.
+          await saveRouteIdempotency(
+            tx,
+            companyId,
+            'printing_quick_sale',
+            idempotencyKey,
+            idem.payloadHash,
+            201,
+            { response: responseBody },
+            actor.userId
+          );
+
+          return { idempotentReplay: false, status: 201, body: responseBody };
+        });
+
+        return res.status(result.status).json({ ...result.body, idempotentReplay: result.idempotentReplay });
+      } catch (err) {
+        return handlePrintingError(res, err);
+      }
+    }
+  );
 
   /**
    * Attach an already-raised invoice to a quick-print job and relieve its WIP to

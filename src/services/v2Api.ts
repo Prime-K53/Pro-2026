@@ -790,10 +790,31 @@ export interface AiBudget {
   costPer1kTokens: number;
 }
 
+export interface AiClaimCitation { evidenceId: string; kind: string; id: number; label: string; }
+export interface AiVerifiedClaim {
+  claimType: string;
+  metric: string;
+  amount?: string;
+  entity?: string;
+  currency?: string | null;
+  unit?: string | null;
+  date?: string | null;
+  status?: string | null;
+  evidenceIds: string[];
+  explanation?: string;
+  citations: AiClaimCitation[];
+}
 export interface AiChatResult {
   conversationId: number;
   message: AiMessage;
-  response: AiMessage;
+  response: AiMessage & {
+    claims?: AiVerifiedClaim[];
+    explanation?: string | null;
+    abstained?: boolean;
+    abstainReason?: string | null;
+    asOf?: string;
+    domain?: string;
+  };
 }
 
 export const aiApi = {
@@ -837,6 +858,25 @@ export const aiApi = {
   anomalies: () => requestJson<{ alerts: AiAnomaly[] }>('/api/ai/anomalies'),
   detectAnomalies: () =>
     requestJson<{ alerts: AiAnomaly[] }>('/api/ai/anomalies/detect', { method: 'POST' }),
+  setAnomalyStatus: (id: number, status: 'open' | 'acknowledged' | 'resolved' | 'dismissed') =>
+    requestJson<{ alert: AiAnomaly }>(`/api/ai/anomalies/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+
+  reindexMemory: () =>
+    requestJson<{ ok: boolean; upserted: number; pruned: number }>('/api/ai/memory/reindex', {
+      method: 'POST',
+    }),
+
+  proposeInvoice: (payload: { customerId: number; request: string }) =>
+    requestJson<{
+      action: AiProposedAction;
+      preview: Array<{ description: string; quantity: number; rate: number; taxable: boolean }>;
+    }>('/api/ai/invoice/propose', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   actions: (status?: string) =>
     requestJson<{ actions: AiProposedAction[] }>(

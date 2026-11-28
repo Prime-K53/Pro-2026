@@ -272,8 +272,8 @@ function normalizeInvoice(raw: any): ApiInvoice {
     terms: raw.terms || 'Net 30',
     status: raw.status || 'open',
     isSalesReceipt: Boolean(raw.isSalesReceipt),
-    currencyCode: raw.currencyCode || 'ZMW',
-    exchangeRate: Number(raw.exchangeRate ?? 1),
+    currencyCode: raw.currencyCode || raw.currency_code || '',
+    exchangeRate: Number(raw.exchangeRate ?? raw.exchange_rate ?? 1),
     subtotal: Number(raw.subtotalNum ?? raw.subtotal ?? 0),
     taxRate: Number(raw.taxRate ?? 0),
     taxAmount: Number(raw.taxAmountNum ?? raw.tax_amount ?? 0),
@@ -310,10 +310,12 @@ export const commercialApi = {
       openingBalanceExchangeRate?: string | number | null;
       customerType?: string;
       referredByCustomerId?: number | null;
-    }
+    },
+    idempotencyKey?: string | null
   ): Promise<ApiCustomer> {
     const d = await requestJson<{ customer: ApiCustomer }>('/api/customers', {
       method: 'POST',
+      headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
       body: JSON.stringify(payload),
     });
     emitAccountingUpdated();
